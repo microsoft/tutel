@@ -59,7 +59,7 @@ class MOELayer(Base):
             expert network
     """
 
-    def __init__(self, gate_type, experts: Union[Module, ModuleList], group: Optional[Any] = None) -> None:
+    def __init__(self, gate_type, experts: Union[Module, ModuleList], model_dim: int, group: Optional[Any] = None) -> None:
         super().__init__()
         self.world_size = get_world_size()
 
@@ -67,7 +67,10 @@ class MOELayer(Base):
             from .top1gate import Top1Gate as gating
         elif gate_type == 'Top2Gate':
             from .top2gate import Top2Gate as gating
-        self.gate = gating(model_dim=experts[0].in_features, num_experts=self.world_size * len(experts), use_fp32=True)
+        else:
+            raise Exception(f"Unrecognized gate_type: {gate_type}")
+
+        self.gate = gating(model_dim=model_dim, num_experts=self.world_size * len(experts), use_fp32=True)
 
         if type(experts) == ModuleList:
             self.experts = cast(ModuleList, experts)

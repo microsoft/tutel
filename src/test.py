@@ -15,8 +15,8 @@ model_dim = 2048
 device = 'cuda'
 torch.manual_seed(1)
 
-
-moe_layer = MOELayer('Top1Gate', nn.ModuleList([nn.Linear(model_dim, model_dim), nn.Linear(model_dim, model_dim)])).to(device)
+experts = nn.ModuleList([nn.Linear(model_dim, model_dim), nn.Linear(model_dim, model_dim)])
+moe_layer = MOELayer('Top1Gate', experts, model_dim).to(device)
 
 x = torch.ones([batch_size, num_tokens, model_dim], dtype=torch.float32, device=device, requires_grad=True)
 y = torch.ones([batch_size], dtype=torch.int64, device=device)
