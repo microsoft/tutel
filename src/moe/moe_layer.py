@@ -13,6 +13,7 @@ from torch import Tensor
 import torch.distributed as dist
 from torch.nn import Module, ModuleList
 
+import my_custom_kernel_3
 
 if TYPE_CHECKING:
     Base = Module[Tensor]
@@ -47,6 +48,153 @@ class _AllToAll(torch.autograd.Function):
         return (None, *grad_output) # FIXME: no implementation
 
         return (None, _AllToAll.apply(ctx.group, *grad_output))
+
+
+
+class _CustomKernel(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, gates1_s: Tensor, reshaped_input: Tensor) -> Tensor:
+        [indices1_s, capacity, locations1_s, tmp] = _CustomKernel._cache
+
+        # data type cast
+        gates1_s_dtype = gates1_s.dtype
+        indices1_s_dtype = indices1_s.dtype
+        locations1_s_dtype = locations1_s.dtype
+        reshaped_input_dtype = reshaped_input.dtype
+        if gates1_s_dtype is not torch.float32:
+            gates1_s = gates1_s.to(torch.float32)
+        if indices1_s_dtype is not torch.int32:
+            indices1_s = indices1_s.to(torch.int32)
+        if locations1_s_dtype is not torch.int32:
+            locations1_s = locations1_s.to(torch.int32)
+        if reshaped_input_dtype is not torch.float32:
+            reshaped_input = reshaped_input.to(torch.float32)
+        
+        ctx.reshaped_input = reshaped_input
+        ctx.gates1_s = gates1_s
+
+        dispatched_input = my_custom_kernel_3.forward(
+            indices1_s,
+            locations1_s,
+            gates1_s,
+            reshaped_input
+        )
+        
+        if reshaped_input_dtype is not torch.float32:
+            dispatched_input = dispatched_input.to(reshaped_input_dtype)
+        
+        return dispatched_input
+
+    @staticmethod
+    def backward(ctx: Any, dispatched_input: Tensor) -> Tuple[Tensor, Tensor]:
+        [indices1_s, capacity, locations1_s, tmp] = _CustomKernel._cache
+        
+        # data type cast
+        dispatched_input_dtype = dispatched_input.dtype
+        indices1_s_dtype = indices1_s.dtype
+        locations1_s_dtype = locations1_s.dtype
+        if dispatched_input_dtype is not torch.float32:
+            dispatched_input = dispatched_input.to(torch.float32)
+        if indices1_s_dtype is not torch.int32:
+            indices1_s = indices1_s.to(torch.int32)
+        if locations1_s_dtype is not torch.int32:
+            locations1_s = locations1_s.to(torch.int32)
+
+        grad_gates1_s = my_custom_kernel_3.backward_gates1_s(
+            dispatched_input,
+            indices1_s,
+            locations1_s,
+            ctx.reshaped_input
+        )
+        grad_reshaped_input = my_custom_kernel_3.backward_reshaped_input(
+            dispatched_input,
+            ctx.gates1_s,
+            indices1_s,
+            locations1_s
+        )
+
+        if dispatched_input_dtype is not torch.float32:
+            grad_reshaped_input = grad_reshaped_input.to(dispatched_input_dtype)
+
+        return (grad_gates1_s, grad_reshaped_input)
+
+class _CustomDecoder(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, gates1_s: Tensor, expert_output: Tensor) -> Tensor:
+        [indices1_s, capacity, locations1_s, tmp] = _CustomKernel._cache
+        
+        # data type cast
+        gates1_s_dtype = gates1_s.dtype
+        indices1_s_dtype = indices1_s.dtype
+        locations1_s_dtype = locations1_s.dtype
+        expert_output_dtype = expert_output.dtype
+        
+        if gates1_s_dtype is not torch.float32:
+            gates1_s = gates1_s.to(torch.float32)
+        if indices1_s_dtype is not torch.int32:
+            indices1_s = indices1_s.to(torch.int32)
+        if locations1_s_dtype is not torch.int32:     
+            locations1_s = locations1_s.to(torch.int32)
+        if expert_output_dtype is not torch.float32:    
+            expert_output = expert_output.to(torch.float32)
+            
+        ctx.expert_output = expert_output
+        ctx.gates1_s = gates1_s
+
+        combined_output = my_custom_kernel_3.backward_reshaped_input(
+            expert_output,
+            gates1_s,
+            indices1_s,
+            locations1_s
+        )
+        if expert_output_dtype is not torch.float32:
+            combined_output = combined_output.to(expert_output_dtype)
+        return combined_output
+        
+
+    @staticmethod
+    def backward(ctx: Any, combined_output: Tensor) -> Tuple[Tensor, Tensor]:
+        [indices1_s, capacity, locations1_s, tmp] = _CustomKernel._cache
+        
+        # data type cast
+        combined_output_dtype = combined_output.dtype
+        indices1_s_dtype = indices1_s.dtype
+        locations1_s_dtype = locations1_s.dtype
+        
+        if combined_output_dtype is not torch.float32:
+            combined_output = combined_output.to(torch.float32)
+        if indices1_s_dtype is not torch.int32:
+            indices1_s = indices1_s.to(torch.int32)
+        if locations1_s_dtype is not torch.int32:
+            locations1_s = locations1_s.to(torch.int32)
+        
+        grad_gates1_s = my_custom_kernel_3.backward_gates1_s(
+            ctx.expert_output,
+            indices1_s,
+            locations1_s,
+            combined_output
+        )
+        grad_expert_output = my_custom_kernel_3.forward(
+            indices1_s,
+            locations1_s,
+            ctx.gates1_s,
+            combined_output
+        )
+
+        if combined_output_dtype is not torch.float32:
+            grad_expert_output = grad_expert_output.to(combined_output_dtype)
+        return (grad_gates1_s, grad_expert_output)
+
+
+class _DebugFunc(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, inputTensor: Tensor) -> Tensor:
+        return inputTensor
+    @staticmethod
+    def backward(ctx: Any, outputTensor: Tensor) -> Tensor:
+        print(outputTensor)
+        return outputTensor
+
 
 
 class MOELayer(Base):
@@ -131,16 +279,18 @@ class MOELayer(Base):
             padded_input[:reshaped_input_shape[0], :] = reshaped_input
             reshaped_input = padded_input
 
-        l_aux, combine_weights, dispatch_mask, self.metadata = self.gate(reshaped_input)
+        l_aux, combine_weights, dispatch_mask, self.metadata, _CustomKernel._cache = self.gate(reshaped_input)
 
         dispatch_mask = dispatch_mask.to(input.dtype).permute(1, 2, 0)  # S,E,C -> E,C,S
         E, C, S = dispatch_mask.size()
         M = reshaped_input.size(1)
         assert reshaped_input.size() == (S, M)
-        # einsum("sec,sm->ecm")
-        dispatched_input = torch.mm(dispatch_mask.view(E*C, S), reshaped_input)  # -> (E*C),M
-
+        
+        # custom calculation of dispatched_input
+        t = torch.ones(_CustomKernel._cache[3].size(), dtype=_CustomKernel._cache[3].dtype, device='cuda')
+        dispatched_input = _CustomKernel.apply(t, reshaped_input)
         dispatched_input = _AllToAll.apply(self.expert_group, dispatched_input)
+        
         # Re-shape after all-to-all: ecm -> gecm
         dispatched_input = dispatched_input.reshape(self.world_size, self.num_local_experts, -1, d_model)
         chunks = dispatched_input.chunk(self.num_local_experts, dim=1)
@@ -153,8 +303,8 @@ class MOELayer(Base):
         expert_output = expert_output.reshape(self.world_size * self.num_local_experts, -1, d_model)
 
         # einsum("sec,ecm->sm")
-        combined_output = combine_weights.view(S, E*C).mm(expert_output.view(E*C, M))
-
+        combined_output = _CustomDecoder.apply(_CustomKernel._cache[3], expert_output.view(E*C, M))
+        
         # Remove padding here when --max-tokens is specified and not --batch-size or --max-sentences
         combined_output = combined_output[:reshaped_input_shape[0], :]
         combined_output = combined_output.reshape(input.shape)

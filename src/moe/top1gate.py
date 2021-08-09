@@ -10,7 +10,7 @@
 # NOTE: This is a mirror of the code in
 # https://github.com/facebookresearch/fairscale/tree/master/fairscale/nn/moe
 
-from typing import Callable, Dict, Tuple
+from typing import Callable, Dict, Tuple, Any
 
 import math
 import torch
@@ -20,6 +20,17 @@ import torch.nn.functional as F
 # maximum capacity of 1 expert as a fraction of number of tokens in the batch
 # Note: setting this to 1.0 causes inference to significantly slow down
 EVAL_CAPACITY_TOKEN_FRACTION = 0.25
+
+class _DebugFunc(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, inputTensor: Tensor) -> Tensor:
+        print('forward')
+        return inputTensor
+    @staticmethod
+    def backward(ctx: Any, outputTensor: Tensor) -> Tensor:
+        print(outputTensor)
+        print('shape: {}'.format(outputTensor.size()))
+        return outputTensor
 
 def top1gating(
     logits: torch.Tensor, 
@@ -45,9 +56,9 @@ def top1gating(
     # Create a mask for 1st's expert per token
     indices1_s = torch.argmax(gates, dim=1)
     mask1 = F.one_hot(indices1_s, num_classes=num_experts)
-
+    mask1_ =  mask1
     gates1_s = (gates * mask1).sum(dim=1)
-    
+    #gates1_s = _DebugFunc.apply(gates1_s)    
     # Compute locations in capacity buffer
     locations1 = torch.cumsum(mask1, dim=0) - 1
     
@@ -61,12 +72,21 @@ def top1gating(
     # Store the capacity location for each token
     locations1_s = torch.sum(locations1 * mask1, dim=1)
     
+    # new 
+    locations1_s_ = torch.sum(locations1 * mask1_, dim=1)
+    
     # Calculate combine_weights and dispatch_mask
     gates1 = torch.einsum("s,se->se", gates1_s, mask1.to(gates1_s.dtype))
     # locations1_sc = num_tokens * capacity
     locations1_sc = F.one_hot(locations1_s, num_classes=capacity)
     combine1_sec = torch.einsum("se,sc->sec", gates1, locations1_sc)
     dispatch_mask = combine1_sec.bool()
+        
+    if use_fp32:
+        return l_aux, combine1_sec.to(orig_dtype), dispatch_mask, dict(), [indices1_s, capacity, locations1_s_, gates1_s]
+    else:
+        return l_aux, combine1_sec, dispatch_mask, dict(), [indices1_s, capacity, locations1_s_, gates1_s]
+
     if use_fp32:
         return l_aux, combine1_sec.to(orig_dtype), dispatch_mask, dict()
     else:

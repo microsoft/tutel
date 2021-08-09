@@ -19,6 +19,7 @@ experts = nn.ModuleList([nn.Linear(model_dim, model_dim), nn.Linear(model_dim, m
 moe_layer = MOELayer('Top1Gate', experts, model_dim).to(device)
 
 x = torch.ones([batch_size, num_tokens, model_dim], dtype=torch.float32, device=device, requires_grad=True)
+#x = torch.randn([batch_size, num_tokens, model_dim], dtype=torch.float32, device=device, requires_grad=True)
 y = torch.ones([batch_size], dtype=torch.int64, device=device)
 
 def model(input):
