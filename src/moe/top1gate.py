@@ -61,19 +61,19 @@ def top1gating(
     #gates1_s = _DebugFunc.apply(gates1_s)    
     # Compute locations in capacity buffer
     locations1 = torch.cumsum(mask1, dim=0) - 1
-    
+    locations1_s_ = torch.sum(locations1 * mask1_, dim=1)
+
     # Compute l_aux
     me = torch.mean(gates, dim=0)
     ce = torch.mean(mask1.to(gates.dtype), dim=0)
     l_aux = torch.mean(me * ce)
     l_aux = l_aux * num_experts * num_experts
+    return l_aux, (indices1_s, capacity, locations1_s_, gates1_s, num_experts)
+    
     # Remove locations outside capacity from mask
     mask1 = mask1 * torch.lt(locations1, capacity)
     # Store the capacity location for each token
     locations1_s = torch.sum(locations1 * mask1, dim=1)
-    
-    # new 
-    locations1_s_ = torch.sum(locations1 * mask1_, dim=1)
     
     # Calculate combine_weights and dispatch_mask
     gates1 = torch.einsum("s,se->se", gates1_s, mask1.to(gates1_s.dtype))

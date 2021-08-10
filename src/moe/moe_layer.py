@@ -54,7 +54,7 @@ class _AllToAll(torch.autograd.Function):
 class _CustomKernel(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, gates1_s: Tensor, reshaped_input: Tensor) -> Tensor:
-        [indices1_s, capacity, locations1_s, tmp] = _CustomKernel._cache
+        [indices1_s, capacity, locations1_s, tmp, num_experts] = _CustomKernel._cache
 
         # data type cast
         gates1_s_dtype = gates1_s.dtype
@@ -87,7 +87,7 @@ class _CustomKernel(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx: Any, dispatched_input: Tensor) -> Tuple[Tensor, Tensor]:
-        [indices1_s, capacity, locations1_s, tmp] = _CustomKernel._cache
+        [indices1_s, capacity, locations1_s, tmp, num_experts] = _CustomKernel._cache
         
         # data type cast
         dispatched_input_dtype = dispatched_input.dtype
@@ -121,7 +121,7 @@ class _CustomKernel(torch.autograd.Function):
 class _CustomDecoder(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, gates1_s: Tensor, expert_output: Tensor) -> Tensor:
-        [indices1_s, capacity, locations1_s, tmp] = _CustomKernel._cache
+        [indices1_s, capacity, locations1_s, tmp, num_experts] = _CustomKernel._cache
         
         # data type cast
         gates1_s_dtype = gates1_s.dtype
@@ -154,7 +154,7 @@ class _CustomDecoder(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx: Any, combined_output: Tensor) -> Tuple[Tensor, Tensor]:
-        [indices1_s, capacity, locations1_s, tmp] = _CustomKernel._cache
+        [indices1_s, capacity, locations1_s, tmp, num_experts] = _CustomKernel._cache
         
         # data type cast
         combined_output_dtype = combined_output.dtype
@@ -279,12 +279,13 @@ class MOELayer(Base):
             padded_input[:reshaped_input_shape[0], :] = reshaped_input
             reshaped_input = padded_input
 
-        l_aux, combine_weights, dispatch_mask, self.metadata, _CustomKernel._cache = self.gate(reshaped_input)
+        l_aux, _CustomKernel._cache = self.gate(reshaped_input)
 
-        dispatch_mask = dispatch_mask.to(input.dtype).permute(1, 2, 0)  # S,E,C -> E,C,S
-        E, C, S = dispatch_mask.size()
-        M = reshaped_input.size(1)
-        assert reshaped_input.size() == (S, M)
+        # dispatch_mask = dispatch_mask.to(input.dtype).permute(1, 2, 0)  # S,E,C -> E,C,S
+        # E, C, S = dispatch_mask.size()
+
+        S, M = reshaped_input.size(0), reshaped_input.size(1) 
+        E, C = _CustomKernel._cache[4], _CustomKernel._cache[1]
         
         # custom calculation of dispatched_input
         t = torch.ones(_CustomKernel._cache[3].size(), dtype=_CustomKernel._cache[3].dtype, device='cuda')
