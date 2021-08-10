@@ -13,7 +13,7 @@ from torch import Tensor
 import torch.distributed as dist
 from torch.nn import Module, ModuleList
 
-import my_custom_kernel_3
+import custom_kernel
 
 if TYPE_CHECKING:
     Base = Module[Tensor]
@@ -51,138 +51,52 @@ class _AllToAll(torch.autograd.Function):
 
 
 
-class _CustomKernel(torch.autograd.Function):
+class _CustomEncoder(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, gates1_s: Tensor, reshaped_input: Tensor) -> Tensor:
-        [indices1_s, capacity, locations1_s, tmp, num_experts] = _CustomKernel._cache
+        [indices1_s, capacity, locations1_s, tmp, num_experts] = _CustomEncoder._cache
 
-        # data type cast
-        gates1_s_dtype = gates1_s.dtype
-        indices1_s_dtype = indices1_s.dtype
-        locations1_s_dtype = locations1_s.dtype
-        reshaped_input_dtype = reshaped_input.dtype
-        if gates1_s_dtype is not torch.float32:
-            gates1_s = gates1_s.to(torch.float32)
-        if indices1_s_dtype is not torch.int32:
-            indices1_s = indices1_s.to(torch.int32)
-        if locations1_s_dtype is not torch.int32:
-            locations1_s = locations1_s.to(torch.int32)
-        if reshaped_input_dtype is not torch.float32:
-            reshaped_input = reshaped_input.to(torch.float32)
-        
         ctx.reshaped_input = reshaped_input
         ctx.gates1_s = gates1_s
 
-        dispatched_input = my_custom_kernel_3.forward(
-            indices1_s,
-            locations1_s,
-            gates1_s,
-            reshaped_input
-        )
-        
-        if reshaped_input_dtype is not torch.float32:
-            dispatched_input = dispatched_input.to(reshaped_input_dtype)
-        
+        dispatched_input = torch.zeros([num_experts * capacity, reshaped_input.size(1)], dtype=reshaped_input.dtype, device=reshaped_input.device)
+        func_fwd(gates1_s, indices1_s, locations1_s, reshaped_input, dispatched_input)
         return dispatched_input
 
     @staticmethod
     def backward(ctx: Any, dispatched_input: Tensor) -> Tuple[Tensor, Tensor]:
-        [indices1_s, capacity, locations1_s, tmp, num_experts] = _CustomKernel._cache
+        [indices1_s, capacity, locations1_s, tmp, num_experts] = _CustomEncoder._cache
         
-        # data type cast
-        dispatched_input_dtype = dispatched_input.dtype
-        indices1_s_dtype = indices1_s.dtype
-        locations1_s_dtype = locations1_s.dtype
-        if dispatched_input_dtype is not torch.float32:
-            dispatched_input = dispatched_input.to(torch.float32)
-        if indices1_s_dtype is not torch.int32:
-            indices1_s = indices1_s.to(torch.int32)
-        if locations1_s_dtype is not torch.int32:
-            locations1_s = locations1_s.to(torch.int32)
+        grad_gates1_s = None
+        # grad_gates1_s = torch.empty([ctx.reshaped_input.size(0)], dtype=dispatched_input.dtype, device=dispatched_input.device)
+        # func_bwd_gate(dispatched_input, indices1_s, locations1_s, ctx.reshaped_input, grad_gates1_s)
 
-        grad_gates1_s = my_custom_kernel_3.backward_gates1_s(
-            dispatched_input,
-            indices1_s,
-            locations1_s,
-            ctx.reshaped_input
-        )
-        grad_reshaped_input = my_custom_kernel_3.backward_reshaped_input(
-            dispatched_input,
-            ctx.gates1_s,
-            indices1_s,
-            locations1_s
-        )
-
-        if dispatched_input_dtype is not torch.float32:
-            grad_reshaped_input = grad_reshaped_input.to(dispatched_input_dtype)
-
+        grad_reshaped_input = torch.empty(ctx.reshaped_input.shape, dtype=dispatched_input.dtype, device=dispatched_input.device)
+        func_bwd_data(dispatched_input, ctx.gates1_s, indices1_s, locations1_s, grad_reshaped_input)
         return (grad_gates1_s, grad_reshaped_input)
 
 class _CustomDecoder(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, gates1_s: Tensor, expert_output: Tensor) -> Tensor:
-        [indices1_s, capacity, locations1_s, tmp, num_experts] = _CustomKernel._cache
+        [indices1_s, capacity, locations1_s, tmp, num_experts] = _CustomEncoder._cache
         
-        # data type cast
-        gates1_s_dtype = gates1_s.dtype
-        indices1_s_dtype = indices1_s.dtype
-        locations1_s_dtype = locations1_s.dtype
-        expert_output_dtype = expert_output.dtype
-        
-        if gates1_s_dtype is not torch.float32:
-            gates1_s = gates1_s.to(torch.float32)
-        if indices1_s_dtype is not torch.int32:
-            indices1_s = indices1_s.to(torch.int32)
-        if locations1_s_dtype is not torch.int32:     
-            locations1_s = locations1_s.to(torch.int32)
-        if expert_output_dtype is not torch.float32:    
-            expert_output = expert_output.to(torch.float32)
-            
         ctx.expert_output = expert_output
         ctx.gates1_s = gates1_s
 
-        combined_output = my_custom_kernel_3.backward_reshaped_input(
-            expert_output,
-            gates1_s,
-            indices1_s,
-            locations1_s
-        )
-        if expert_output_dtype is not torch.float32:
-            combined_output = combined_output.to(expert_output_dtype)
+        combined_output = torch.empty([gates1_s.size(0), expert_output.size(1)], dtype=gates1_s.dtype, device=gates1_s.device)
+        func_bwd_data(expert_output, ctx.gates1_s, indices1_s, locations1_s, combined_output)
         return combined_output
         
 
     @staticmethod
     def backward(ctx: Any, combined_output: Tensor) -> Tuple[Tensor, Tensor]:
-        [indices1_s, capacity, locations1_s, tmp, num_experts] = _CustomKernel._cache
+        [indices1_s, capacity, locations1_s, tmp, num_experts] = _CustomEncoder._cache
         
-        # data type cast
-        combined_output_dtype = combined_output.dtype
-        indices1_s_dtype = indices1_s.dtype
-        locations1_s_dtype = locations1_s.dtype
-        
-        if combined_output_dtype is not torch.float32:
-            combined_output = combined_output.to(torch.float32)
-        if indices1_s_dtype is not torch.int32:
-            indices1_s = indices1_s.to(torch.int32)
-        if locations1_s_dtype is not torch.int32:
-            locations1_s = locations1_s.to(torch.int32)
-        
-        grad_gates1_s = my_custom_kernel_3.backward_gates1_s(
-            ctx.expert_output,
-            indices1_s,
-            locations1_s,
-            combined_output
-        )
-        grad_expert_output = my_custom_kernel_3.forward(
-            indices1_s,
-            locations1_s,
-            ctx.gates1_s,
-            combined_output
-        )
+        grad_gates1_s = torch.empty(indices1_s.shape, dtype=combined_output.dtype, device=combined_output.device)
+        func_bwd_gate(ctx.expert_output, indices1_s, locations1_s, combined_output, grad_gates1_s)
 
-        if combined_output_dtype is not torch.float32:
-            grad_expert_output = grad_expert_output.to(combined_output_dtype)
+        grad_expert_output = torch.zeros(ctx.expert_output.shape, dtype=combined_output.dtype, device=combined_output.device)
+        func_fwd(ctx.gates1_s, indices1_s, locations1_s, combined_output, grad_expert_output)
         return (grad_gates1_s, grad_expert_output)
 
 
@@ -195,7 +109,98 @@ class _DebugFunc(torch.autograd.Function):
         print(outputTensor)
         return outputTensor
 
+class JitKernel:
+    @staticmethod
+    def create(source):
+        if not hasattr(JitKernel, '__CTX__'):
+            torch.cuda.init()
+            JitKernel.__CTX__ = 0
+        __ctx__ = JitKernel.__CTX__
+        JitKernel.__CTX__ += 1
+        with open(f'/tmp/{__ctx__}.cu', 'w') as fp:
+            fp.write(source)
 
+        def func(*inputs):
+            custom_kernel.invoke(inputs, __ctx__)
+        return func
+
+func_fwd = JitKernel.create('''
+extern "C" __global__ __launch_bounds__(64) void forward_dispatched_input(float* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, float* __restrict__ reshaped_input, float* __restrict__ dispatched_input) {
+  // [thread_extent] blockIdx.x = 64
+  // [thread_extent] threadIdx.x = 1
+  // [thread_extent] blockIdx.y = 8
+  // [thread_extent] threadIdx.y = 64
+  for (int vthread_s = 0; vthread_s < 16; ++vthread_s) {
+    ((locations1_s[(((((int)blockIdx.x) * 32) + vthread_s))] < 1024) ? atomicAdd(&dispatched_input[(((((indices1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)))], (gates1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * reshaped_input[(((((((int)blockIdx.x) * 65536) + (vthread_s * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)))])) : 0.000000e+00f);
+    ((locations1_s[(((((int)blockIdx.x) * 32) + vthread_s))] < 1024) ? atomicAdd(&dispatched_input[((((((indices1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 64))], (gates1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * reshaped_input[((((((((int)blockIdx.x) * 65536) + (vthread_s * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 64))])) : 0.000000e+00f);
+    ((locations1_s[(((((int)blockIdx.x) * 32) + vthread_s))] < 1024) ? atomicAdd(&dispatched_input[((((((indices1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 128))], (gates1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * reshaped_input[((((((((int)blockIdx.x) * 65536) + (vthread_s * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 128))])) : 0.000000e+00f);
+    ((locations1_s[(((((int)blockIdx.x) * 32) + vthread_s))] < 1024) ? atomicAdd(&dispatched_input[((((((indices1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 192))], (gates1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * reshaped_input[((((((((int)blockIdx.x) * 65536) + (vthread_s * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 192))])) : 0.000000e+00f);
+  }
+  for (int vthread_s1 = 0; vthread_s1 < 16; ++vthread_s1) {
+    ((locations1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] < 1024) ? atomicAdd(&dispatched_input[(((((indices1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * 2097152) + (locations1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)))], (gates1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * reshaped_input[((((((((int)blockIdx.x) * 65536) + (vthread_s1 * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 32768))])) : 0.000000e+00f);
+    ((locations1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] < 1024) ? atomicAdd(&dispatched_input[((((((indices1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * 2097152) + (locations1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 64))], (gates1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * reshaped_input[((((((((int)blockIdx.x) * 65536) + (vthread_s1 * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 32832))])) : 0.000000e+00f);
+    ((locations1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] < 1024) ? atomicAdd(&dispatched_input[((((((indices1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * 2097152) + (locations1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 128))], (gates1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * reshaped_input[((((((((int)blockIdx.x) * 65536) + (vthread_s1 * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 32896))])) : 0.000000e+00f);
+    ((locations1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] < 1024) ? atomicAdd(&dispatched_input[((((((indices1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * 2097152) + (locations1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 192))], (gates1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * reshaped_input[((((((((int)blockIdx.x) * 65536) + (vthread_s1 * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 32960))])) : 0.000000e+00f);
+  }
+}
+''')
+
+func_bwd_gate = JitKernel.create('''
+extern "C" __global__ __launch_bounds__(32) void backward_gates1_s(float* __restrict__ dispatched_input, int* __restrict__ indices1_s, int* __restrict__ locations1_s, float* __restrict__ reshaped_input, float* __restrict__ grad_gates1_s) {
+  // [thread_extent] blockIdx.x = 2048
+  // [thread_extent] threadIdx.y = 1
+  // [thread_extent] threadIdx.x = 32
+  float grad_gates1_s_rf[1];
+  grad_gates1_s_rf[(0)] = 0.000000e+00f;
+  for (int HIDDEN_outer = 0; HIDDEN_outer < 64; ++HIDDEN_outer) {
+    grad_gates1_s_rf[(0)] = (grad_gates1_s_rf[(0)] + ((locations1_s[(((int)blockIdx.x))] < 1024) ? (dispatched_input[(((((indices1_s[(((int)blockIdx.x))] * 2097152) + (locations1_s[(((int)blockIdx.x))] * 2048)) + (HIDDEN_outer * 32)) + ((int)threadIdx.x)))] * reshaped_input[((((((int)blockIdx.x) * 2048) + (HIDDEN_outer * 32)) + ((int)threadIdx.x)))]) : 0.000000e+00f));
+  }
+  float red_buf0[1];
+  unsigned mask[1];
+  float t0[1];
+  red_buf0[(0)] = grad_gates1_s_rf[(0)];
+  mask[(0)] = __activemask();
+  t0[(0)] = __shfl_down_sync(mask[(0)], red_buf0[(0)], 16, 32);
+  red_buf0[(0)] = (red_buf0[(0)] + t0[(0)]);
+  t0[(0)] = __shfl_down_sync(mask[(0)], red_buf0[(0)], 8, 32);
+  red_buf0[(0)] = (red_buf0[(0)] + t0[(0)]);
+  t0[(0)] = __shfl_down_sync(mask[(0)], red_buf0[(0)], 4, 32);
+  red_buf0[(0)] = (red_buf0[(0)] + t0[(0)]);
+  t0[(0)] = __shfl_down_sync(mask[(0)], red_buf0[(0)], 2, 32);
+  red_buf0[(0)] = (red_buf0[(0)] + t0[(0)]);
+  t0[(0)] = __shfl_down_sync(mask[(0)], red_buf0[(0)], 1, 32);
+  red_buf0[(0)] = (red_buf0[(0)] + t0[(0)]);
+  red_buf0[(0)] = __shfl_sync(mask[(0)], red_buf0[(0)], 0, 32);
+  if (((int)threadIdx.x) == 0) {
+    grad_gates1_s[(((int)blockIdx.x))] = red_buf0[(0)];
+  }
+}
+''')
+
+func_bwd_data = JitKernel.create('''
+extern "C" __global__ __launch_bounds__(32) void backward_reshaped_input(float* __restrict__ dispatched_input, float* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, float* __restrict__ grad_reshaped_input) {
+  // [thread_extent] blockIdx.x = 256
+  // [thread_extent] threadIdx.x = 1
+  // [thread_extent] blockIdx.y = 32
+  // [thread_extent] threadIdx.y = 32
+  grad_reshaped_input[((((((int)blockIdx.x) * 16384) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)))] = ((locations1_s[((((int)blockIdx.x) * 8))] < 1024) ? (gates1_s[((((int)blockIdx.x) * 8))] * dispatched_input[(((((indices1_s[((((int)blockIdx.x) * 8))] * 2097152) + (locations1_s[((((int)blockIdx.x) * 8))] * 2048)) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)))]) : 0.000000e+00f);
+  grad_reshaped_input[(((((((int)blockIdx.x) * 16384) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 32))] = ((locations1_s[((((int)blockIdx.x) * 8))] < 1024) ? (gates1_s[((((int)blockIdx.x) * 8))] * dispatched_input[((((((indices1_s[((((int)blockIdx.x) * 8))] * 2097152) + (locations1_s[((((int)blockIdx.x) * 8))] * 2048)) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 32))]) : 0.000000e+00f);
+  grad_reshaped_input[(((((((int)blockIdx.x) * 16384) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 2048))] = ((locations1_s[(((((int)blockIdx.x) * 8) + 1))] < 1024) ? (gates1_s[(((((int)blockIdx.x) * 8) + 1))] * dispatched_input[(((((indices1_s[(((((int)blockIdx.x) * 8) + 1))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 8) + 1))] * 2048)) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)))]) : 0.000000e+00f);
+  grad_reshaped_input[(((((((int)blockIdx.x) * 16384) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 2080))] = ((locations1_s[(((((int)blockIdx.x) * 8) + 1))] < 1024) ? (gates1_s[(((((int)blockIdx.x) * 8) + 1))] * dispatched_input[((((((indices1_s[(((((int)blockIdx.x) * 8) + 1))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 8) + 1))] * 2048)) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 32))]) : 0.000000e+00f);
+  grad_reshaped_input[(((((((int)blockIdx.x) * 16384) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 4096))] = ((locations1_s[(((((int)blockIdx.x) * 8) + 2))] < 1024) ? (gates1_s[(((((int)blockIdx.x) * 8) + 2))] * dispatched_input[(((((indices1_s[(((((int)blockIdx.x) * 8) + 2))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 8) + 2))] * 2048)) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)))]) : 0.000000e+00f);
+  grad_reshaped_input[(((((((int)blockIdx.x) * 16384) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 4128))] = ((locations1_s[(((((int)blockIdx.x) * 8) + 2))] < 1024) ? (gates1_s[(((((int)blockIdx.x) * 8) + 2))] * dispatched_input[((((((indices1_s[(((((int)blockIdx.x) * 8) + 2))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 8) + 2))] * 2048)) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 32))]) : 0.000000e+00f);
+  grad_reshaped_input[(((((((int)blockIdx.x) * 16384) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 6144))] = ((locations1_s[(((((int)blockIdx.x) * 8) + 3))] < 1024) ? (gates1_s[(((((int)blockIdx.x) * 8) + 3))] * dispatched_input[(((((indices1_s[(((((int)blockIdx.x) * 8) + 3))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 8) + 3))] * 2048)) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)))]) : 0.000000e+00f);
+  grad_reshaped_input[(((((((int)blockIdx.x) * 16384) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 6176))] = ((locations1_s[(((((int)blockIdx.x) * 8) + 3))] < 1024) ? (gates1_s[(((((int)blockIdx.x) * 8) + 3))] * dispatched_input[((((((indices1_s[(((((int)blockIdx.x) * 8) + 3))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 8) + 3))] * 2048)) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 32))]) : 0.000000e+00f);
+  grad_reshaped_input[(((((((int)blockIdx.x) * 16384) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 8192))] = ((locations1_s[(((((int)blockIdx.x) * 8) + 4))] < 1024) ? (gates1_s[(((((int)blockIdx.x) * 8) + 4))] * dispatched_input[(((((indices1_s[(((((int)blockIdx.x) * 8) + 4))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 8) + 4))] * 2048)) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)))]) : 0.000000e+00f);
+  grad_reshaped_input[(((((((int)blockIdx.x) * 16384) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 8224))] = ((locations1_s[(((((int)blockIdx.x) * 8) + 4))] < 1024) ? (gates1_s[(((((int)blockIdx.x) * 8) + 4))] * dispatched_input[((((((indices1_s[(((((int)blockIdx.x) * 8) + 4))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 8) + 4))] * 2048)) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 32))]) : 0.000000e+00f);
+  grad_reshaped_input[(((((((int)blockIdx.x) * 16384) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 10240))] = ((locations1_s[(((((int)blockIdx.x) * 8) + 5))] < 1024) ? (gates1_s[(((((int)blockIdx.x) * 8) + 5))] * dispatched_input[(((((indices1_s[(((((int)blockIdx.x) * 8) + 5))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 8) + 5))] * 2048)) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)))]) : 0.000000e+00f);
+  grad_reshaped_input[(((((((int)blockIdx.x) * 16384) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 10272))] = ((locations1_s[(((((int)blockIdx.x) * 8) + 5))] < 1024) ? (gates1_s[(((((int)blockIdx.x) * 8) + 5))] * dispatched_input[((((((indices1_s[(((((int)blockIdx.x) * 8) + 5))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 8) + 5))] * 2048)) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 32))]) : 0.000000e+00f);
+  grad_reshaped_input[(((((((int)blockIdx.x) * 16384) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 12288))] = ((locations1_s[(((((int)blockIdx.x) * 8) + 6))] < 1024) ? (gates1_s[(((((int)blockIdx.x) * 8) + 6))] * dispatched_input[(((((indices1_s[(((((int)blockIdx.x) * 8) + 6))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 8) + 6))] * 2048)) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)))]) : 0.000000e+00f);
+  grad_reshaped_input[(((((((int)blockIdx.x) * 16384) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 12320))] = ((locations1_s[(((((int)blockIdx.x) * 8) + 6))] < 1024) ? (gates1_s[(((((int)blockIdx.x) * 8) + 6))] * dispatched_input[((((((indices1_s[(((((int)blockIdx.x) * 8) + 6))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 8) + 6))] * 2048)) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 32))]) : 0.000000e+00f);
+  grad_reshaped_input[(((((((int)blockIdx.x) * 16384) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 14336))] = ((locations1_s[(((((int)blockIdx.x) * 8) + 7))] < 1024) ? (gates1_s[(((((int)blockIdx.x) * 8) + 7))] * dispatched_input[(((((indices1_s[(((((int)blockIdx.x) * 8) + 7))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 8) + 7))] * 2048)) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)))]) : 0.000000e+00f);
+  grad_reshaped_input[(((((((int)blockIdx.x) * 16384) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 14368))] = ((locations1_s[(((((int)blockIdx.x) * 8) + 7))] < 1024) ? (gates1_s[(((((int)blockIdx.x) * 8) + 7))] * dispatched_input[((((((indices1_s[(((((int)blockIdx.x) * 8) + 7))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 8) + 7))] * 2048)) + (((int)blockIdx.y) * 64)) + ((int)threadIdx.y)) + 32))]) : 0.000000e+00f);
+}
+''')
 
 class MOELayer(Base):
     """MOELayer module which implements MixtureOfExperts as described in Gshard_.
@@ -218,7 +223,7 @@ class MOELayer(Base):
         else:
             raise Exception(f"Unrecognized gate_type: {gate_type}")
 
-        self.gate = gating(model_dim=model_dim, num_experts=self.world_size * len(experts), use_fp32=True)
+        self.gate = gating(model_dim=model_dim, num_experts=self.world_size * len(experts))
 
         if type(experts) == ModuleList:
             self.experts = cast(ModuleList, experts)
@@ -279,22 +284,25 @@ class MOELayer(Base):
             padded_input[:reshaped_input_shape[0], :] = reshaped_input
             reshaped_input = padded_input
 
-        l_aux, _CustomKernel._cache = self.gate(reshaped_input)
+        l_aux, _CustomEncoder._cache = self.gate(reshaped_input)
 
         # dispatch_mask = dispatch_mask.to(input.dtype).permute(1, 2, 0)  # S,E,C -> E,C,S
         # E, C, S = dispatch_mask.size()
 
         S, M = reshaped_input.size(0), reshaped_input.size(1) 
-        E, C = _CustomKernel._cache[4], _CustomKernel._cache[1]
+        E, C = _CustomEncoder._cache[4], _CustomEncoder._cache[1]
         
         # custom calculation of dispatched_input
-        t = torch.ones(_CustomKernel._cache[3].size(), dtype=_CustomKernel._cache[3].dtype, device='cuda')
-        dispatched_input = _CustomKernel.apply(t, reshaped_input)
+        if not hasattr(self, 'ones_helper'):
+            self.ones_helper = torch.ones(_CustomEncoder._cache[3].size(), dtype=_CustomEncoder._cache[3].dtype, device=_CustomEncoder._cache[3].device)
+
+        dispatched_input = _CustomEncoder.apply(self.ones_helper, reshaped_input)
         dispatched_input = _AllToAll.apply(self.expert_group, dispatched_input)
         
         # Re-shape after all-to-all: ecm -> gecm
         dispatched_input = dispatched_input.reshape(self.world_size, self.num_local_experts, -1, d_model)
         chunks = dispatched_input.chunk(self.num_local_experts, dim=1)
+
         expert_outputs = []
         for chunk, expert in zip(chunks, self.experts):
             expert_outputs += [expert(chunk)]
@@ -304,7 +312,7 @@ class MOELayer(Base):
         expert_output = expert_output.reshape(self.world_size * self.num_local_experts, -1, d_model)
 
         # einsum("sec,ecm->sm")
-        combined_output = _CustomDecoder.apply(_CustomKernel._cache[3], expert_output.view(E*C, M))
+        combined_output = _CustomDecoder.apply(_CustomEncoder._cache[3], expert_output.view(E*C, M))
         
         # Remove padding here when --max-tokens is specified and not --batch-size or --max-sentences
         combined_output = combined_output[:reshaped_input_shape[0], :]

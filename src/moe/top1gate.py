@@ -34,42 +34,34 @@ class _DebugFunc(torch.autograd.Function):
 
 def top1gating(
     logits: torch.Tensor, 
-    use_fp32=False, 
     capacity_factor=1.0,
     eval_mode=False,
 ) -> Tuple[Tensor, Tensor, Tensor]:
-    """Implements Top2Gating on logits."""
-    if use_fp32:
-        orig_dtype = logits.dtype
-        logits = logits.float()
+    logits = logits.to(torch.float32)
+    num_tokens, num_experts = logits.shape[0], logits.shape[1]
+    capacity = int(EVAL_CAPACITY_TOKEN_FRACTION * num_tokens) if eval_mode else int(capacity_factor * math.ceil(num_tokens / num_experts))
+
+    indices1_s = torch.argmax(logits, dim=1)
 
     gates = F.softmax(logits, dim=1)
-    # gates has shape of SE
-    num_tokens = gates.shape[0]
-    num_experts = gates.shape[1]
-    if eval_mode:
-        capacity = int(EVAL_CAPACITY_TOKEN_FRACTION * num_tokens)
-    else:
-        # capacity = capacity_factor * S/E
-        capacity = int(capacity_factor * math.ceil(num_tokens / num_experts))
-
     # Create a mask for 1st's expert per token
-    indices1_s = torch.argmax(gates, dim=1)
     mask1 = F.one_hot(indices1_s, num_classes=num_experts)
-    mask1_ =  mask1
     gates1_s = (gates * mask1).sum(dim=1)
-    #gates1_s = _DebugFunc.apply(gates1_s)    
+    # gates1_s = _DebugFunc.apply(gates1_s)
     # Compute locations in capacity buffer
     locations1 = torch.cumsum(mask1, dim=0) - 1
-    locations1_s_ = torch.sum(locations1 * mask1_, dim=1)
+    locations1_s = torch.sum(locations1 * mask1, dim=1)
+
+    return None, (indices1_s.to(torch.int32), capacity, locations1_s.to(torch.int32), gates1_s, num_experts)
 
     # Compute l_aux
     me = torch.mean(gates, dim=0)
     ce = torch.mean(mask1.to(gates.dtype), dim=0)
     l_aux = torch.mean(me * ce)
     l_aux = l_aux * num_experts * num_experts
-    return l_aux, (indices1_s, capacity, locations1_s_, gates1_s, num_experts)
-    
+    return l_aux, (indices1_s, capacity, locations1_s, gates1_s, num_experts)
+
+    '''
     # Remove locations outside capacity from mask
     mask1 = mask1 * torch.lt(locations1, capacity)
     # Store the capacity location for each token
@@ -91,6 +83,7 @@ def top1gating(
         return l_aux, combine1_sec.to(orig_dtype), dispatch_mask, dict()
     else:
         return l_aux, combine1_sec, dispatch_mask, dict()
+    '''
 
 
 class Top1Gate(torch.nn.Module):
@@ -115,7 +108,6 @@ class Top1Gate(torch.nn.Module):
         self, 
         model_dim: int, 
         num_experts: int, 
-        use_fp32=False, 
         input_noise_type=None,
         capacity_factor=1.0,
     ) -> None:
@@ -123,15 +115,12 @@ class Top1Gate(torch.nn.Module):
         # 
         super().__init__()
         self.wg = torch.nn.Linear(model_dim, num_experts, bias=False)
-        self.use_fp32 = use_fp32
         self.input_noise_type = input_noise_type
         self.capacity_factor = capacity_factor
 
     def forward(self, input: torch.Tensor) -> Tuple[Tensor, Tensor, Tensor]:  # type: ignore
-        logits = self.wg(input)
         return top1gating(
-            logits, 
-            use_fp32=self.use_fp32,
+            logits=self.wg(input),
             capacity_factor=self.capacity_factor,
             eval_mode=not self.training,
         )
