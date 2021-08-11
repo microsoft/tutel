@@ -22,7 +22,7 @@ setup(
         CUDAExtension('custom_kernel', [
             'custom_kernel_cuda.cpp',
         ], extra_compile_args={'cxx': cpp_flags, 'nvcc': cpp_flags},
-        libraries=['cuda', 'nvrtc'])
+        libraries=['cuda',])
     ],
     cmdclass={
         'build_ext': BuildExtension

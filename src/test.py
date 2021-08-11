@@ -15,6 +15,8 @@ model_dim = 2048
 device = 'cuda'
 torch.manual_seed(1)
 
+torch.set_default_dtype(torch.float32)
+
 class ExampleModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -30,7 +32,7 @@ class ExampleModel(torch.nn.Module):
 model = ExampleModel()
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, betas=(0.9, 0.999), eps=1e-08)
 
-x = torch.randn([batch_size, num_tokens, model_dim], dtype=torch.float32, device=device, requires_grad=True)
+x = torch.randn([batch_size, num_tokens, model_dim], device=device, requires_grad=True)
 y = torch.LongTensor(batch_size).random_(1).to(device)
 for i in range(10):
   torch.cuda.synchronize()

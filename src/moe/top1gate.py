@@ -49,17 +49,18 @@ def top1gating(
     gates1_s = (gates * mask1).sum(dim=1)
     # gates1_s = _DebugFunc.apply(gates1_s)
     # Compute locations in capacity buffer
-    locations1 = torch.cumsum(mask1, dim=0) - 1
-    locations1_s = torch.sum(locations1 * mask1, dim=1)
 
-    return None, (indices1_s.to(torch.int32), capacity, locations1_s.to(torch.int32), gates1_s, num_experts)
+    from . import jit_kernel as jit_kernel
+
+    locations1 = torch.empty(mask1.shape, dtype=torch.int32, device=mask1.device)
+    jit_kernel.fwd_cumsum(mask1.to(torch.int32), locations1)  # locations1 = torch.cumsum(mask1, dim=0) - 1
+    locations1_s = torch.sum(locations1.to(torch.int64) * mask1, dim=1)
 
     # Compute l_aux
     me = torch.mean(gates, dim=0)
     ce = torch.mean(mask1.to(gates.dtype), dim=0)
-    l_aux = torch.mean(me * ce)
-    l_aux = l_aux * num_experts * num_experts
-    return l_aux, (indices1_s, capacity, locations1_s, gates1_s, num_experts)
+    l_aux = torch.mean(me * ce) * (num_experts * num_experts)
+    return l_aux, (indices1_s.to(torch.int32), capacity, locations1_s.to(torch.int32), gates1_s, num_experts)
 
     '''
     # Remove locations outside capacity from mask
