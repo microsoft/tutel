@@ -1,6 +1,11 @@
 import torch
 import custom_kernel
 
+try:
+	from torch.utils.cpp_extension import IS_HIP_EXTENSION
+except:
+	IS_HIP_EXTENSION = False
+
 class JitKernel:
     @staticmethod
     def create(source):
@@ -10,6 +15,14 @@ class JitKernel:
         __ctx__ = JitKernel.__CTX__
         JitKernel.__CTX__ += 1
         with open(f'/tmp/{__ctx__}.cu', 'w') as fp:
+            fp.write('''
+#if !defined(__HIPCC__)
+#include <cuda_runtime.h>
+#include <cuda_fp16.h>
+#else
+#include <hip/hip_runtime.h>
+#endif
+''')
             fp.write(source)
 
         def func(*inputs):
@@ -37,7 +50,8 @@ extern "C" __global__ __launch_bounds__(64) void forward_dispatched_input(float*
 }
 ''')
 
-func_bwd_gate = JitKernel.create('''
+if IS_HIP_EXTENSION:
+    func_bwd_gate = JitKernel.create('''
 extern "C" __global__ __launch_bounds__(32) void backward_gates1_s(float* __restrict__ dispatched_input, int* __restrict__ indices1_s, int* __restrict__ locations1_s, float* __restrict__ reshaped_input, float* __restrict__ grad_gates1_s) {
   // [thread_extent] blockIdx.x = 2048
   // [thread_extent] threadIdx.y = 1
@@ -65,6 +79,38 @@ extern "C" __global__ __launch_bounds__(32) void backward_gates1_s(float* __rest
   red_buf0[(0)] = __shfl_sync(mask[(0)], red_buf0[(0)], 0, 32);
   if (((int)threadIdx.x) == 0) {
     grad_gates1_s[(((int)blockIdx.x))] = red_buf0[(0)];
+  }
+}
+''')
+
+func_bwd_gate = JitKernel.create('''
+extern "C" __global__ __launch_bounds__(64) void template_op_kernel0(float* __restrict__ dispatched_input, int* __restrict__ indices1_s, int* __restrict__ locations1_s, float* __restrict__ reshaped_input, float* __restrict__ grad_gates1_s) {
+  // [thread_extent] blockIdx.x = 2048
+  // [thread_extent] threadIdx.y = 1
+  // [thread_extent] threadIdx.x = 64
+  float grad_gates1_s_rf[1];
+  grad_gates1_s_rf[(0)] = 0.000000e+00f;
+  for (int HIDDEN_outer = 0; HIDDEN_outer < 32; ++HIDDEN_outer) {
+    grad_gates1_s_rf[(0)] = (grad_gates1_s_rf[(0)] + ((locations1_s[(((int)blockIdx.x))] < 1024) ? (dispatched_input[(((((indices1_s[(((int)blockIdx.x))] * 2097152) + (locations1_s[(((int)blockIdx.x))] * 2048)) + (HIDDEN_outer * 64)) + ((int)threadIdx.x)))] * reshaped_input[((((((int)blockIdx.x) * 2048) + (HIDDEN_outer * 64)) + ((int)threadIdx.x)))]) : 0.000000e+00f));
+  }
+  __shared__ float red_buf0[64];
+  __syncthreads();
+  ((volatile float*)red_buf0)[(((int)threadIdx.x))] = grad_gates1_s_rf[(0)];
+  __syncthreads();
+  if (((int)threadIdx.x) < 32) {
+    ((volatile float*)red_buf0)[(((int)threadIdx.x))] = (((volatile float*)red_buf0)[(((int)threadIdx.x))] + ((volatile float*)red_buf0)[((((int)threadIdx.x) + 32))]);
+  }
+  __syncthreads();
+  if (((int)threadIdx.x) < 16) {
+    ((volatile float*)red_buf0)[(((int)threadIdx.x))] = (((volatile float*)red_buf0)[(((int)threadIdx.x))] + ((volatile float*)red_buf0)[((((int)threadIdx.x) + 16))]);
+    ((volatile float*)red_buf0)[(((int)threadIdx.x))] = (((volatile float*)red_buf0)[(((int)threadIdx.x))] + ((volatile float*)red_buf0)[((((int)threadIdx.x) + 8))]);
+    ((volatile float*)red_buf0)[(((int)threadIdx.x))] = (((volatile float*)red_buf0)[(((int)threadIdx.x))] + ((volatile float*)red_buf0)[((((int)threadIdx.x) + 4))]);
+    ((volatile float*)red_buf0)[(((int)threadIdx.x))] = (((volatile float*)red_buf0)[(((int)threadIdx.x))] + ((volatile float*)red_buf0)[((((int)threadIdx.x) + 2))]);
+    ((volatile float*)red_buf0)[(((int)threadIdx.x))] = (((volatile float*)red_buf0)[(((int)threadIdx.x))] + ((volatile float*)red_buf0)[((((int)threadIdx.x) + 1))]);
+  }
+  __syncthreads();
+  if (((int)threadIdx.x) == 0) {
+    grad_gates1_s[(((int)blockIdx.x))] = ((volatile float*)red_buf0)[(0)];
   }
 }
 ''')
