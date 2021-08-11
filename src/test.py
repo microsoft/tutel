@@ -25,8 +25,8 @@ class ExampleModel(torch.nn.Module):
 
     def forward(self, input):
         result = self._moe_layer(input)
-        result = torch.einsum('ijk->ij', result)
-        result = F.log_softmax(result, dim=1)
+
+        result = F.log_softmax(torch.sum(result, dim=2), dim=1)
         return result
 
 model = ExampleModel()
@@ -34,6 +34,7 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, betas=(0.9, 0.999), e
 
 x = torch.randn([batch_size, num_tokens, model_dim], device=device, requires_grad=True)
 y = torch.LongTensor(batch_size).random_(1).to(device)
+
 for i in range(10):
   torch.cuda.synchronize()
   t_start = time.time()

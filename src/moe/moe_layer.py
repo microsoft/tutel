@@ -33,7 +33,7 @@ def get_world_size():
 class _AllToAll(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor) -> Tensor:  # type: ignore
-        return input # FIXME: no implementation
+        return input # FIXME: not implemented
 
         ctx.group = group
         input = input.contiguous()
@@ -43,7 +43,7 @@ class _AllToAll(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx: Any, *grad_output: Tensor) -> Tuple[None, Tensor]:
-        return (None, *grad_output) # FIXME: no implementation
+        return (None, *grad_output) # FIXME: not implemented
 
         return (None, _AllToAll.apply(ctx.group, *grad_output))
 
@@ -185,7 +185,7 @@ class MOELayer(Base):
         # Pro of --max-tokens: more flexible for MT variable sequence lengths
         # Con of --max-tokens: extra all-reduce needed to figure out optimal padding without running OOM
         if expected_bsz == 0:
-            expected_dim = int(distributed_utils.all_reduce(  # FIXME: no package for `distributed_utils`
+            expected_dim = int(distributed_utils.all_reduce(  # FIXME: add package for `distributed_utils`
                 reshaped_input_shape[0] * torch.ones((1,), dtype=torch.long, device=input.device),
                 group=dist.group.WORLD,
                 op="max",
