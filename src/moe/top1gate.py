@@ -44,47 +44,22 @@ def top1gating(
     indices1_s = torch.argmax(logits, dim=1)
 
     gates = F.softmax(logits, dim=1)
-    # Create a mask for 1st's expert per token
     mask1 = F.one_hot(indices1_s, num_classes=num_experts)
     gates1_s = (gates * mask1).sum(dim=1)
-    # gates1_s = _DebugFunc.apply(gates1_s)
-    # Compute locations in capacity buffer
+    gates1_s = (gates * mask1).sum(dim=1)
 
     from . import jit_kernel as jit_kernel
 
-    locations1 = torch.empty(mask1.shape, dtype=torch.int32, device=mask1.device)
-    jit_kernel.fwd_cumsum(mask1.to(torch.int32), locations1)  # locations1 = torch.cumsum(mask1, dim=0) - 1
-    locations1_s = torch.sum(locations1.to(torch.int64) * mask1, dim=1)
+    locations1_s = torch.empty([num_tokens,], dtype=torch.int32, device=logits.device)
+    jit_kernel.fwd_cumsum(indices1_s.to(torch.int32), locations1_s)
+    # locations1 = torch.cumsum(mask1, dim=0) - 1
+    # locations1_s = torch.sum(locations1.to(torch.int64) * mask1, dim=1)
 
     # Compute l_aux
     me = torch.mean(gates, dim=0)
     ce = torch.mean(mask1.to(gates.dtype), dim=0)
     l_aux = torch.mean(me * ce) * (num_experts * num_experts)
     return l_aux, (indices1_s.to(torch.int32), capacity, locations1_s.to(torch.int32), gates1_s, num_experts)
-
-    '''
-    # Remove locations outside capacity from mask
-    mask1 = mask1 * torch.lt(locations1, capacity)
-    # Store the capacity location for each token
-    locations1_s = torch.sum(locations1 * mask1, dim=1)
-    
-    # Calculate combine_weights and dispatch_mask
-    gates1 = torch.einsum("s,se->se", gates1_s, mask1.to(gates1_s.dtype))
-    # locations1_sc = num_tokens * capacity
-    locations1_sc = F.one_hot(locations1_s, num_classes=capacity)
-    combine1_sec = torch.einsum("se,sc->sec", gates1, locations1_sc)
-    dispatch_mask = combine1_sec.bool()
-        
-    if use_fp32:
-        return l_aux, combine1_sec.to(orig_dtype), dispatch_mask, dict(), [indices1_s, capacity, locations1_s_, gates1_s]
-    else:
-        return l_aux, combine1_sec, dispatch_mask, dict(), [indices1_s, capacity, locations1_s_, gates1_s]
-
-    if use_fp32:
-        return l_aux, combine1_sec.to(orig_dtype), dispatch_mask, dict()
-    else:
-        return l_aux, combine1_sec, dispatch_mask, dict()
-    '''
 
 
 class Top1Gate(torch.nn.Module):

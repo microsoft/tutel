@@ -100,8 +100,9 @@ fwd_cumsum = JitKernel.create('''
 #define thread_num  (1024)
 #define batch_num   (2)
 #define capacity    (1024)
+#define __out__
 
-extern "C" __global__ __launch_bounds__(thread_num) void cumsum(int* mask1, int* locations1) {
+extern "C" __global__ __launch_bounds__(thread_num) void cumsum(int* __restrict__ indices1_s, __out__ int* __restrict__ locations1_s) {
     // HINT: blockIdx.x, threadIdx.x = batch_num, thread_num
 
     // [thread_extent] blockIdx.x = 2
@@ -111,9 +112,9 @@ extern "C" __global__ __launch_bounds__(thread_num) void cumsum(int* mask1, int*
     int thid = threadIdx.x, bid = blockIdx.x;
     int last_sum = -1;
     constexpr int size_per_batch = tensor_cnt / batch_num, step = size_per_batch / thread_num;
-    for (int S = 0; S < step; ++S, locations1 += thread_num * batch_num, mask1 += thread_num * batch_num) {
+    for (int S = 0; S < step; ++S, locations1_s += thread_num, indices1_s += thread_num) {
         int offset = 1;
-        temp[thid] = (thid < thread_num) ? mask1[thid * batch_num + bid] : 0;
+        temp[thid] = (thid < thread_num) ? (bid == indices1_s[thid]) : 0;
         for (int d = thread_num >> 1; d > 0; d >>= 1) {
                 __syncthreads();
                 if (thid < d)
@@ -134,7 +135,9 @@ extern "C" __global__ __launch_bounds__(thread_num) void cumsum(int* mask1, int*
                 }
         }
         __syncthreads();
-        locations1[thid * batch_num + bid] = temp[thid + 1] + last_sum;
+        if (bid == indices1_s[thid]) {
+          locations1_s[thid] = temp[thid + 1] + last_sum;
+        }
         last_sum += temp[thread_num];
     }
 }
