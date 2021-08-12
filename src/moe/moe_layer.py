@@ -16,6 +16,19 @@ def get_world_size():
     return world_size
 
 
+def load_kernels(dtype):
+    global JitKernels
+    try:
+        return JitKernels
+    except:
+      if dtype == torch.float16:
+          from . import jit_kernel_fp16 as jit_kernel
+      else:
+          from . import jit_kernel as jit_kernel
+      JitKernels = jit_kernel
+      return JitKernels
+
+
 class _AllToAll(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor):
@@ -49,7 +62,7 @@ class Top1Gate(torch.nn.Module):
         self.capacity_factor = capacity_factor
 
     def forward(self, input: torch.Tensor):
-        logits = self.wg(input).to(torch.float32)
+        logits = self.wg(input)
         num_tokens, num_experts = logits.shape[0], logits.shape[1]
 
         EVAL_CAPACITY_TOKEN_FRACTION = 0.25
@@ -61,15 +74,22 @@ class Top1Gate(torch.nn.Module):
         mask1 = F.one_hot(indices1_s, num_classes=num_experts)
         gates1_s = (gates * mask1).sum(dim=1)
 
-        from . import jit_kernel as jit_kernel
+        jit_kernel = load_kernels(input.dtype)
 
         locations1_s = torch.empty([num_tokens,], dtype=torch.int32, device=logits.device)
         jit_kernel.fwd_cumsum(indices1_s.to(torch.int32), locations1_s)
 
         # Compute l_aux
-        me = torch.sum(gates, dim=0)
-        ce = torch.sum(mask1.to(gates.dtype), dim=0)
-        l_aux = torch.sum(me * ce) * (num_experts / (gates.size(0) * gates.size(0)))
+        if gates.dtype == torch.float32:
+            me = torch.sum(gates, dim=0)
+            ce = torch.sum(mask1.to(gates.dtype), dim=0)
+            l_aux = torch.sum(me * ce) * (num_experts / (gates.size(0) * gates.size(0)))
+        else:
+            # Avoid data overflow in float16 mode
+            me = torch.mean(gates, dim=0)
+            ce = torch.mean(mask1.to(gates.dtype), dim=0)
+            l_aux = torch.sum(me * ce) * num_experts
+
         return l_aux, (indices1_s.to(torch.int32), capacity, locations1_s.to(torch.int32), gates1_s, num_experts)
 
 
@@ -152,12 +172,7 @@ class MOELayer(torch.nn.Module):
     def forward(self, input: Tensor, **kwargs: Any):
         assert len(input.shape) == 3, "input Tensor must have dimensions: (s)equence, (t)oken, (m)odel"
 
-        global JitKernels
-        if input.dtype == torch.float16:
-            from . import jit_kernel_fp16 as jit_kernel
-        else:
-            from . import jit_kernel as jit_kernel
-        JitKernels = jit_kernel
+        load_kernels(input.dtype)
 
         model_dim = input.shape[2]
         reshaped_input = input.reshape(-1, model_dim)

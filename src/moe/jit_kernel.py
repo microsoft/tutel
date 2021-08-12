@@ -16,7 +16,7 @@ class JitKernel:
         JitKernel.__CTX__ += 1
         with open(f'/tmp/{__ctx__}.cu', 'w') as fp:
             if IS_HIP_EXTENSION:
-              fp.write('#include <hip/hip_runtime.h>\n')
+              fp.write('#include <hip/hip_runtime.h>\n#include <hip/hip_fp16.h>\n')
             else:
               fp.write('#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n')
             fp.write(source)

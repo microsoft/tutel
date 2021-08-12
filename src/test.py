@@ -30,7 +30,7 @@ class ExampleModel(torch.nn.Module):
         return result
 
 model = ExampleModel()
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, betas=(0.9, 0.999), eps=1e-08)
+optimizer = torch.optim.SGD(model.parameters(), lr=1e-5)
 
 x = torch.randn([batch_size, num_tokens, model_dim], device=device, requires_grad=True)
 y = torch.LongTensor(batch_size).random_(1).to(device)
