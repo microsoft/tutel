@@ -46,7 +46,7 @@ extern "C" __global__ __launch_bounds__(64) void forward_dispatched_input(float*
 }
 ''')
 
-if IS_HIP_EXTENSION:
+if not IS_HIP_EXTENSION:
     func_bwd_gate = JitKernel.create('''
 extern "C" __global__ __launch_bounds__(32) void backward_gates1_s(float* __restrict__ dispatched_input, int* __restrict__ indices1_s, int* __restrict__ locations1_s, float* __restrict__ reshaped_input, float* __restrict__ grad_gates1_s) {
   // [thread_extent] blockIdx.x = 2048
@@ -78,8 +78,8 @@ extern "C" __global__ __launch_bounds__(32) void backward_gates1_s(float* __rest
   }
 }
 ''')
-
-func_bwd_gate = JitKernel.create('''
+else:
+    func_bwd_gate = JitKernel.create('''
 extern "C" __global__ __launch_bounds__(64) void template_op_kernel0(float* __restrict__ dispatched_input, int* __restrict__ indices1_s, int* __restrict__ locations1_s, float* __restrict__ reshaped_input, float* __restrict__ grad_gates1_s) {
   // [thread_extent] blockIdx.x = 2048
   // [thread_extent] threadIdx.y = 1
