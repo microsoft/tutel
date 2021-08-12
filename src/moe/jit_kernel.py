@@ -15,14 +15,10 @@ class JitKernel:
         __ctx__ = JitKernel.__CTX__
         JitKernel.__CTX__ += 1
         with open(f'/tmp/{__ctx__}.cu', 'w') as fp:
-            fp.write('''
-#if !defined(__HIPCC__)
-#include <cuda_runtime.h>
-#include <cuda_fp16.h>
-#else
-#include <hip/hip_runtime.h>
-#endif
-''')
+            if IS_HIP_EXTENSION:
+              fp.write('#include <hip/hip_runtime.h>\n')
+            else:
+              fp.write('#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n')
             fp.write(source)
 
         def func(*inputs):

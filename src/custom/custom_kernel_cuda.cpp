@@ -11,7 +11,7 @@
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 
 
-std::vector<torch::Tensor> invoke(const std::vector<torch::Tensor> &ts, int ctx) {
+static void invoke(const std::vector<torch::Tensor> &ts, int ctx) {
   struct ModuleConfig {
     CUmodule hMod = nullptr;
     CUfunction hFunc = nullptr;
@@ -73,7 +73,6 @@ std::vector<torch::Tensor> invoke(const std::vector<torch::Tensor> &ts, int ctx)
   }
 
   CHECK_EQ(0, cuLaunchKernel(gm.hFunc, gm.blocks.x, gm.blocks.y, gm.blocks.z, gm.threads.x, gm.threads.y, gm.threads.z, 0, nullptr, ppargs.data(), nullptr));
-  return {};
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
