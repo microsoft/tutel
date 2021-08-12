@@ -25,7 +25,7 @@ class JitKernel:
             custom_kernel.invoke(inputs, __ctx__)
         return func
 
-def func_fwd(*inputs):
+if IS_HIP_EXTENSION:
   func_fwd_stage = JitKernel.create('''
 extern "C" __global__ __launch_bounds__(32) void template_op_kernel0(half* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, half* __restrict__ reshaped_input, float* __restrict__ dispatched_input) {
   // [thread_extent] blockIdx.x = 2
@@ -54,16 +54,45 @@ extern "C" __global__ __launch_bounds__(32) void template_op_kernel0(half* __res
   }
 }
 ''')
-  inputs = list(inputs)
+  def func_fwd(*inputs):
+    inputs = list(inputs)
+    output = inputs[-1]
+    inputs[-1] = torch.zeros(output.shape, dtype=torch.float32, device=output.device)
+    func_fwd_stage(*inputs)
+    output.copy_(inputs[-1].to(output.dtype))
+else:
+  func_fwd_stage = JitKernel.create('''
+extern "C" __global__ __launch_bounds__(1024) void template_op_kernel0(__half2* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, __half2* __restrict__ reshaped_input, __half2* __restrict__ dispatched_input) {
+  // [thread_extent] blockIdx.x = 128
+  // [thread_extent] threadIdx.x = 1
+  // [thread_extent] blockIdx.y = 1
+  // [thread_extent] threadIdx.y = 1024
+  ((locations1_s[((((int)blockIdx.x) * 16))] < 1024) ? atomicAdd(&dispatched_input[((((indices1_s[((((int)blockIdx.x) * 16))] * 1048576) + (locations1_s[((((int)blockIdx.x) * 16))] * 1024)) + ((int)threadIdx.y)))], __hmul2(gates1_s[((((int)blockIdx.x) * 16))], reshaped_input[(((((int)blockIdx.x) * 16384) + ((int)threadIdx.y)))])) : __half2(0, 0));
+  ((locations1_s[(((((int)blockIdx.x) * 16) + 1))] < 1024) ? atomicAdd(&dispatched_input[((((indices1_s[(((((int)blockIdx.x) * 16) + 1))] * 1048576) + (locations1_s[(((((int)blockIdx.x) * 16) + 1))] * 1024)) + ((int)threadIdx.y)))], __hmul2(gates1_s[(((((int)blockIdx.x) * 16) + 1))], reshaped_input[((((((int)blockIdx.x) * 16384) + ((int)threadIdx.y)) + 1024))])) : __half2(0, 0));
+  ((locations1_s[(((((int)blockIdx.x) * 16) + 2))] < 1024) ? atomicAdd(&dispatched_input[((((indices1_s[(((((int)blockIdx.x) * 16) + 2))] * 1048576) + (locations1_s[(((((int)blockIdx.x) * 16) + 2))] * 1024)) + ((int)threadIdx.y)))], __hmul2(gates1_s[(((((int)blockIdx.x) * 16) + 2))], reshaped_input[((((((int)blockIdx.x) * 16384) + ((int)threadIdx.y)) + 2048))])) : __half2(0, 0));
+  ((locations1_s[(((((int)blockIdx.x) * 16) + 3))] < 1024) ? atomicAdd(&dispatched_input[((((indices1_s[(((((int)blockIdx.x) * 16) + 3))] * 1048576) + (locations1_s[(((((int)blockIdx.x) * 16) + 3))] * 1024)) + ((int)threadIdx.y)))], __hmul2(gates1_s[(((((int)blockIdx.x) * 16) + 3))], reshaped_input[((((((int)blockIdx.x) * 16384) + ((int)threadIdx.y)) + 3072))])) : __half2(0, 0));
+  ((locations1_s[(((((int)blockIdx.x) * 16) + 4))] < 1024) ? atomicAdd(&dispatched_input[((((indices1_s[(((((int)blockIdx.x) * 16) + 4))] * 1048576) + (locations1_s[(((((int)blockIdx.x) * 16) + 4))] * 1024)) + ((int)threadIdx.y)))], __hmul2(gates1_s[(((((int)blockIdx.x) * 16) + 4))], reshaped_input[((((((int)blockIdx.x) * 16384) + ((int)threadIdx.y)) + 4096))])) : __half2(0, 0));
+  ((locations1_s[(((((int)blockIdx.x) * 16) + 5))] < 1024) ? atomicAdd(&dispatched_input[((((indices1_s[(((((int)blockIdx.x) * 16) + 5))] * 1048576) + (locations1_s[(((((int)blockIdx.x) * 16) + 5))] * 1024)) + ((int)threadIdx.y)))], __hmul2(gates1_s[(((((int)blockIdx.x) * 16) + 5))], reshaped_input[((((((int)blockIdx.x) * 16384) + ((int)threadIdx.y)) + 5120))])) : __half2(0, 0));
+  ((locations1_s[(((((int)blockIdx.x) * 16) + 6))] < 1024) ? atomicAdd(&dispatched_input[((((indices1_s[(((((int)blockIdx.x) * 16) + 6))] * 1048576) + (locations1_s[(((((int)blockIdx.x) * 16) + 6))] * 1024)) + ((int)threadIdx.y)))], __hmul2(gates1_s[(((((int)blockIdx.x) * 16) + 6))], reshaped_input[((((((int)blockIdx.x) * 16384) + ((int)threadIdx.y)) + 6144))])) : __half2(0, 0));
+  ((locations1_s[(((((int)blockIdx.x) * 16) + 7))] < 1024) ? atomicAdd(&dispatched_input[((((indices1_s[(((((int)blockIdx.x) * 16) + 7))] * 1048576) + (locations1_s[(((((int)blockIdx.x) * 16) + 7))] * 1024)) + ((int)threadIdx.y)))], __hmul2(gates1_s[(((((int)blockIdx.x) * 16) + 7))], reshaped_input[((((((int)blockIdx.x) * 16384) + ((int)threadIdx.y)) + 7168))])) : __half2(0, 0));
+  ((locations1_s[(((((int)blockIdx.x) * 16) + 8))] < 1024) ? atomicAdd(&dispatched_input[((((indices1_s[(((((int)blockIdx.x) * 16) + 8))] * 1048576) + (locations1_s[(((((int)blockIdx.x) * 16) + 8))] * 1024)) + ((int)threadIdx.y)))], __hmul2(gates1_s[(((((int)blockIdx.x) * 16) + 8))], reshaped_input[((((((int)blockIdx.x) * 16384) + ((int)threadIdx.y)) + 8192))])) : __half2(0, 0));
+  ((locations1_s[(((((int)blockIdx.x) * 16) + 9))] < 1024) ? atomicAdd(&dispatched_input[((((indices1_s[(((((int)blockIdx.x) * 16) + 9))] * 1048576) + (locations1_s[(((((int)blockIdx.x) * 16) + 9))] * 1024)) + ((int)threadIdx.y)))], __hmul2(gates1_s[(((((int)blockIdx.x) * 16) + 9))], reshaped_input[((((((int)blockIdx.x) * 16384) + ((int)threadIdx.y)) + 9216))])) : __half2(0, 0));
+  ((locations1_s[(((((int)blockIdx.x) * 16) + 10))] < 1024) ? atomicAdd(&dispatched_input[((((indices1_s[(((((int)blockIdx.x) * 16) + 10))] * 1048576) + (locations1_s[(((((int)blockIdx.x) * 16) + 10))] * 1024)) + ((int)threadIdx.y)))], __hmul2(gates1_s[(((((int)blockIdx.x) * 16) + 10))], reshaped_input[((((((int)blockIdx.x) * 16384) + ((int)threadIdx.y)) + 10240))])) : __half2(0, 0));
+  ((locations1_s[(((((int)blockIdx.x) * 16) + 11))] < 1024) ? atomicAdd(&dispatched_input[((((indices1_s[(((((int)blockIdx.x) * 16) + 11))] * 1048576) + (locations1_s[(((((int)blockIdx.x) * 16) + 11))] * 1024)) + ((int)threadIdx.y)))], __hmul2(gates1_s[(((((int)blockIdx.x) * 16) + 11))], reshaped_input[((((((int)blockIdx.x) * 16384) + ((int)threadIdx.y)) + 11264))])) : __half2(0, 0));
+  ((locations1_s[(((((int)blockIdx.x) * 16) + 12))] < 1024) ? atomicAdd(&dispatched_input[((((indices1_s[(((((int)blockIdx.x) * 16) + 12))] * 1048576) + (locations1_s[(((((int)blockIdx.x) * 16) + 12))] * 1024)) + ((int)threadIdx.y)))], __hmul2(gates1_s[(((((int)blockIdx.x) * 16) + 12))], reshaped_input[((((((int)blockIdx.x) * 16384) + ((int)threadIdx.y)) + 12288))])) : __half2(0, 0));
+  ((locations1_s[(((((int)blockIdx.x) * 16) + 13))] < 1024) ? atomicAdd(&dispatched_input[((((indices1_s[(((((int)blockIdx.x) * 16) + 13))] * 1048576) + (locations1_s[(((((int)blockIdx.x) * 16) + 13))] * 1024)) + ((int)threadIdx.y)))], __hmul2(gates1_s[(((((int)blockIdx.x) * 16) + 13))], reshaped_input[((((((int)blockIdx.x) * 16384) + ((int)threadIdx.y)) + 13312))])) : __half2(0, 0));
+  ((locations1_s[(((((int)blockIdx.x) * 16) + 14))] < 1024) ? atomicAdd(&dispatched_input[((((indices1_s[(((((int)blockIdx.x) * 16) + 14))] * 1048576) + (locations1_s[(((((int)blockIdx.x) * 16) + 14))] * 1024)) + ((int)threadIdx.y)))], __hmul2(gates1_s[(((((int)blockIdx.x) * 16) + 14))], reshaped_input[((((((int)blockIdx.x) * 16384) + ((int)threadIdx.y)) + 14336))])) : __half2(0, 0));
+  ((locations1_s[(((((int)blockIdx.x) * 16) + 15))] < 1024) ? atomicAdd(&dispatched_input[((((indices1_s[(((((int)blockIdx.x) * 16) + 15))] * 1048576) + (locations1_s[(((((int)blockIdx.x) * 16) + 15))] * 1024)) + ((int)threadIdx.y)))], __hmul2(gates1_s[(((((int)blockIdx.x) * 16) + 15))], reshaped_input[((((((int)blockIdx.x) * 16384) + ((int)threadIdx.y)) + 15360))])) : __half2(0, 0));
+}
+''')
 
-  output = inputs[-1]
-  inputs[-1] = torch.zeros(output.shape, dtype=torch.float32, device=output.device)
-
-  func_fwd_stage(*inputs)
-  output.copy_(inputs[-1].to(output.dtype))
+  def func_fwd(gates, *inputs):
+    gates_hf2 = gates.view(-1, 1).repeat((1, 2))
+    func_fwd_stage(*([gates_hf2] + list(inputs)))
 
 
-func_bwd_gate = JitKernel.create('''
+if IS_HIP_EXTENSION:
+  func_bwd_gate = JitKernel.create('''
 extern "C" __global__ __launch_bounds__(32) void template_op_kernel0(half* __restrict__ dispatched_input, int* __restrict__ indices1_s, int* __restrict__ locations1_s, half* __restrict__ reshaped_input, half* __restrict__ grad_gates1_s) {
   // [thread_extent] blockIdx.x = 1024
   // [thread_extent] threadIdx.y = 2
@@ -89,18 +118,48 @@ extern "C" __global__ __launch_bounds__(32) void template_op_kernel0(half* __res
   }
 }
 ''')
+else:
+  func_bwd_gate = JitKernel.create('''
+extern "C" __global__ __launch_bounds__(32) void template_op_kernel0(half* __restrict__ dispatched_input, int* __restrict__ indices1_s, int* __restrict__ locations1_s, half* __restrict__ reshaped_input, half* __restrict__ grad_gates1_s) {
+  // [thread_extent] blockIdx.x = 2048
+  // [thread_extent] threadIdx.y = 1
+  // [thread_extent] threadIdx.x = 32
+  half grad_gates1_s_rf[1];
+  grad_gates1_s_rf[(0)] = __float2half_rn(0.000000e+00f);
+  for (int HIDDEN_outer = 0; HIDDEN_outer < 64; ++HIDDEN_outer) {
+    grad_gates1_s_rf[(0)] = (grad_gates1_s_rf[(0)] + ((locations1_s[(((int)blockIdx.x))] < 1024) ? (dispatched_input[(((((indices1_s[(((int)blockIdx.x))] * 2097152) + (locations1_s[(((int)blockIdx.x))] * 2048)) + (HIDDEN_outer * 32)) + ((int)threadIdx.x)))] * reshaped_input[((((((int)blockIdx.x) * 2048) + (HIDDEN_outer * 32)) + ((int)threadIdx.x)))]) : __float2half_rn(0.000000e+00f)));
+  }
+  half red_buf0[1];
+  uint mask[1];
+  half t0[1];
+  red_buf0[(0)] = grad_gates1_s_rf[(0)];
+  mask[(0)] = __activemask();
+  t0[(0)] = __shfl_down_sync(mask[(0)], red_buf0[(0)], 16, 32);
+  red_buf0[(0)] = (red_buf0[(0)] + t0[(0)]);
+  t0[(0)] = __shfl_down_sync(mask[(0)], red_buf0[(0)], 8, 32);
+  red_buf0[(0)] = (red_buf0[(0)] + t0[(0)]);
+  t0[(0)] = __shfl_down_sync(mask[(0)], red_buf0[(0)], 4, 32);
+  red_buf0[(0)] = (red_buf0[(0)] + t0[(0)]);
+  t0[(0)] = __shfl_down_sync(mask[(0)], red_buf0[(0)], 2, 32);
+  red_buf0[(0)] = (red_buf0[(0)] + t0[(0)]);
+  t0[(0)] = __shfl_down_sync(mask[(0)], red_buf0[(0)], 1, 32);
+  red_buf0[(0)] = (red_buf0[(0)] + t0[(0)]);
+  red_buf0[(0)] = __shfl_sync(mask[(0)], red_buf0[(0)], 0, 32);
+  if (((int)threadIdx.x) == 0) {
+    grad_gates1_s[(((int)blockIdx.x))] = red_buf0[(0)];
+  }
+}
+''')
+
 
 func_bwd_data = JitKernel.create('''
 extern "C" __global__ __launch_bounds__(32) void template_op_kernel0(half* __restrict__ dispatched_input, half* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, half* __restrict__ grad_reshaped_input) {
-  // [thread_extent] blockIdx.x = 16
-  // [thread_extent] threadIdx.x = 8
-  // [thread_extent] blockIdx.y = 256
-  // [thread_extent] threadIdx.y = 4
-  for (int vthread_s = 0; vthread_s < 16; ++vthread_s) {
-    grad_reshaped_input[((((((((int)blockIdx.x) * 262144) + (vthread_s * 16384)) + (((int)threadIdx.x) * 2048)) + (((int)blockIdx.y) * 8)) + (((int)threadIdx.y) * 2)))] = ((locations1_s[((((((int)blockIdx.x) * 128) + (vthread_s * 8)) + ((int)threadIdx.x)))] < 1024) ? (gates1_s[((((((int)blockIdx.x) * 128) + (vthread_s * 8)) + ((int)threadIdx.x)))] * dispatched_input[(((((indices1_s[((((((int)blockIdx.x) * 128) + (vthread_s * 8)) + ((int)threadIdx.x)))] * 2097152) + (locations1_s[((((((int)blockIdx.x) * 128) + (vthread_s * 8)) + ((int)threadIdx.x)))] * 2048)) + (((int)blockIdx.y) * 8)) + (((int)threadIdx.y) * 2)))]) : __float2half_rn(0.000000e+00f));
-  }
-  for (int vthread_s1 = 0; vthread_s1 < 16; ++vthread_s1) {
-    grad_reshaped_input[(((((((((int)blockIdx.x) * 262144) + (vthread_s1 * 16384)) + (((int)threadIdx.x) * 2048)) + (((int)blockIdx.y) * 8)) + (((int)threadIdx.y) * 2)) + 1))] = ((locations1_s[((((((int)blockIdx.x) * 128) + (vthread_s1 * 8)) + ((int)threadIdx.x)))] < 1024) ? (gates1_s[((((((int)blockIdx.x) * 128) + (vthread_s1 * 8)) + ((int)threadIdx.x)))] * dispatched_input[((((((indices1_s[((((((int)blockIdx.x) * 128) + (vthread_s1 * 8)) + ((int)threadIdx.x)))] * 2097152) + (locations1_s[((((((int)blockIdx.x) * 128) + (vthread_s1 * 8)) + ((int)threadIdx.x)))] * 2048)) + (((int)blockIdx.y) * 8)) + (((int)threadIdx.y) * 2)) + 1))]) : __float2half_rn(0.000000e+00f));
+  // [thread_extent] blockIdx.x = 1024
+  // [thread_extent] threadIdx.x = 2
+  // [thread_extent] blockIdx.y = 2
+  // [thread_extent] threadIdx.y = 16
+  for (int vthread_s = 0; vthread_s < 64; ++vthread_s) {
+    grad_reshaped_input[((((((((int)blockIdx.x) * 4096) + (((int)threadIdx.x) * 2048)) + (((int)blockIdx.y) * 1024)) + (vthread_s * 16)) + ((int)threadIdx.y)))] = ((locations1_s[(((((int)blockIdx.x) * 2) + ((int)threadIdx.x)))] < 1024) ? (gates1_s[(((((int)blockIdx.x) * 2) + ((int)threadIdx.x)))] * dispatched_input[((((((indices1_s[(((((int)blockIdx.x) * 2) + ((int)threadIdx.x)))] * 2097152) + (locations1_s[(((((int)blockIdx.x) * 2) + ((int)threadIdx.x)))] * 2048)) + (((int)blockIdx.y) * 1024)) + (vthread_s * 16)) + ((int)threadIdx.y)))]) : __float2half_rn(0.000000e+00f));
   }
 }
 ''')
