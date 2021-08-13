@@ -23,8 +23,8 @@ def get_gating_kenel(batched_tokens, global_experts):
 extern "C" __global__ __launch_bounds__(thread_num) void cumsum(int* __restrict__ indices1_s, __out__ int* __restrict__ locations1_s) {
     // HINT: blockIdx.x, threadIdx.x = batch_num, thread_num
 
-    // [thread_extent] blockIdx.x = 2
-    // [thread_extent] threadIdx.x = 1024
+    // [thread_extent] blockIdx.x = @batch_num@
+    // [thread_extent] threadIdx.x = @thread_num@
 
     __shared__  int temp[thread_num + 1];
     int thid = threadIdx.x, bid = blockIdx.x;
