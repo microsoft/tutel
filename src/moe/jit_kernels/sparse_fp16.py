@@ -1,6 +1,8 @@
 import torch
 from ..jit import JitKernel, IS_HIP_EXTENSION
 
+from ..moe_layer import shared_data
+
 if IS_HIP_EXTENSION:
   func_fwd_stage = JitKernel.create('''
 extern "C" __global__ __launch_bounds__(32) void template_op_kernel0(half* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, half* __restrict__ reshaped_input, float* __restrict__ dispatched_input) {
