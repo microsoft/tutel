@@ -180,7 +180,7 @@ class MOELayer(torch.nn.Module):
         if not hasattr(self, 'ones_gates1_s'):
             self.ones_gates1_s = torch.ones(shared_data.gates1_s.size(), dtype=shared_data.gates1_s.dtype, device=shared_data.gates1_s.device)
         else:
-            assert self.ones_gates1_s.size() == shared_data.gates1_s.size()
+            assert self.ones_gates1_s.size() == shared_data.gates1_s.size(), f"The batch_size of forwarding step is irregularly changed to {self.ones_gates1_s.shape[0]}. Please keep it constantly to its initialized size: {shared_data.gates1_s.shape[0]}."
 
         dispatched_input = _CustomEncoder.apply(self.ones_gates1_s, reshaped_input)
         dispatched_input = _AllToAll.apply(self.expert_group, dispatched_input)
