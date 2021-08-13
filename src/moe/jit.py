@@ -1,6 +1,10 @@
 import torch
-import custom_kernel
 import os, tempfile
+
+try:
+    import custom_kernel
+except:
+    raise Exception("Cannot import JIT optimized kernels. Did you forget to install Custom Kernel Extension?")
 
 try:
     from torch.utils.cpp_extension import IS_HIP_EXTENSION
