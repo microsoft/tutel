@@ -19,9 +19,9 @@ def load_kernels(dtype):
         return JitKernels
     except:
       if dtype == torch.float16:
-          from . import jit_kernel_fp16 as jit_kernel
+          from .jit_kernels import sparse_fp16 as jit_kernel
       else:
-          from . import jit_kernel as jit_kernel
+          from .jit_kernels import sparse_fp32 as jit_kernel
       JitKernels = jit_kernel
       return JitKernels
 
@@ -64,6 +64,10 @@ class Top1Gate(torch.nn.Module):
         logits = self.wg(input)
         num_tokens, num_experts = logits.shape[0], logits.shape[1]
 
+        if not hasattr(self, 'gating_kernel'):
+            from .jit_kernels.gating import get_gating_kenel
+            self.gating_kernel = get_gating_kenel(num_tokens, num_experts)
+
         EVAL_CAPACITY_TOKEN_FRACTION = 0.25
         capacity = int(EVAL_CAPACITY_TOKEN_FRACTION * num_tokens) if not self.training else int(self.capacity_factor * ((num_tokens + num_experts - 1) // num_experts))
 
@@ -73,10 +77,8 @@ class Top1Gate(torch.nn.Module):
         mask1 = F.one_hot(indices1_s, num_classes=num_experts)
         gates1_s = (gates * mask1).sum(dim=1)
 
-        jit_kernel = load_kernels(input.dtype)
-
         locations1_s = torch.empty([num_tokens,], dtype=torch.int32, device=logits.device)
-        jit_kernel.fwd_cumsum(indices1_s.to(torch.int32), locations1_s)
+        self.gating_kernel(indices1_s.to(torch.int32), locations1_s)
 
         # Compute l_aux
         if gates.dtype == torch.float32:
