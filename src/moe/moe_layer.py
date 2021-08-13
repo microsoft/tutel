@@ -140,7 +140,7 @@ class _CustomDecoder(torch.autograd.Function):
 
 class MOELayer(torch.nn.Module):
 
-    def __init__(self, gate_type, experts: Union[torch.nn.Module, ModuleList], model_dim: int, group: Optional[Any] = None):
+    def __init__(self, gate_type, model_dim: int, builtin_experts = None, external_experts = None, group: Optional[Any] = None):
         super().__init__()
 
         self.expert_group = group if group is not None else dist.group.WORLD
@@ -149,20 +149,64 @@ class MOELayer(torch.nn.Module):
         if gate_type == 'Top1Gate':
             gating = Top1Gate
         elif gate_type == 'Top2Gate':
-            from .top2gate import Top2Gate as gating
+            from .top2gate import Top2Gate as gating  ## FIXME: not implemented
         else:
             raise Exception(f"Unrecognized gate_type: {gate_type}")
 
-        self.gate = gating(model_dim=model_dim, num_experts=self.world_size * len(experts))
+        if external_experts is not None:
+            self.experts = cast(ModuleList, external_experts) if type(external_experts) == ModuleList else ModuleList(external_experts)
+            self.num_local_experts = len(self.experts)
+        elif builtin_experts is not None:
+            network_type = builtin_experts['type']
+            if network_type == 'ffn':
+                ''' << Fused FFN Experts >>
 
-        if type(experts) == ModuleList:
-            self.experts = cast(ModuleList, experts)
+                    hidden[W, E, C, V] +=! input[W, E, C, M] x expert_fc1[0, E, M, V]
+                    hidden[W, E, C, V]  =  hidden[W, E, C, V] + bias_fc1[E, V]
+                    hidden[W, E, C, V]  =  activation_fn(hidden[W, E, C, V])
+                    hidden[W, E, C, M] +=! hidden[W, E, C, V] x expert_fc2[0, E, V, M]
+                    output[W, E, C, M]  =  hidden[W, E, C, M] + bias_fc2[E, M]
+                '''
+
+                self.num_local_experts = builtin_experts.get('count_per_node', 1)
+                activation_fn = builtin_experts.get('activation_fn', lambda x: x)
+
+                class FusedExpertsNetwork(torch.nn.Module):
+                    def __init__(self, model_dim, hidden_size, local_experts):
+                        super().__init__()
+                        fc1 = torch.nn.Linear(model_dim, local_experts * hidden_size)
+                        fc2 = torch.nn.Linear(hidden_size, local_experts * model_dim)
+
+                        self.register_parameter(name='fc1_weight', param=torch.nn.Parameter(fc1.weight.view(1, local_experts, model_dim, hidden_size)))
+                        self.register_parameter(name='fc2_weight', param=torch.nn.Parameter(fc2.weight.view(1, local_experts, hidden_size, model_dim)))
+                        self.register_parameter(name='fc1_bias', param=torch.nn.Parameter(fc1.bias.view(1, local_experts, 1, hidden_size)))
+                        self.register_parameter(name='fc2_bias', param=torch.nn.Parameter(fc2.bias.view(1, local_experts, 1, model_dim)))
+
+                    def forward(self, x):
+                        x = torch.matmul(x, self.fc1_weight) + self.fc1_bias
+                        x = activation_fn(x)
+                        x = torch.matmul(x, self.fc2_weight) + self.fc2_bias
+                        return x
+
+                    def to(self, *args, **kwargs):
+                        self = super().to(*args, **kwargs)
+                        self.fc1_weight = self.fc1_weight.to(*args, **kwargs)
+                        self.fc2_weight = self.fc2_weight.to(*args, **kwargs)
+                        self.fc1_bias = self.fc1_bias.to(*args, **kwargs)
+                        self.fc2_bias = self.fc2_bias.to(*args, **kwargs)
+                        return self
+
+                self.experts = ModuleList([FusedExpertsNetwork(model_dim, builtin_experts['hidden_size_per_expert'], self.num_local_experts)])
+            else:
+                raise Exception(f'Builtin expert type is not recognized: {network_type}')
+
+            for expert in self.experts:
+                for p in expert.parameters():
+                    p.expert = True
         else:
-            self.experts = ModuleList([experts])
-        for expert in self.experts:
-            for p in experts.parameters():
-                p.expert = True  # type: ignore
-        self.num_local_experts = len(self.experts)
+            raise Exception("You must specify either `builtin_experts` or `external_experts` for MoE layer.")
+
+        self.gate = gating(model_dim=model_dim, num_experts=self.world_size * self.num_local_experts)
         self.in_generation = False
 
     def forward(self, input: Tensor, **kwargs: Any):
@@ -188,11 +232,13 @@ class MOELayer(torch.nn.Module):
         # Re-shape after all-to-all: ecm -> gecm
         dispatched_input = dispatched_input.reshape(self.world_size, self.num_local_experts, -1, M)
 
-        chunks = dispatched_input.chunk(self.num_local_experts, dim=1)
-        expert_outputs = []
-        for chunk, expert in zip(chunks, self.experts):
-            expert_outputs += [expert(chunk)]
-        expert_output = torch.cat(expert_outputs, dim=1)
+        if len(self.experts) == 1:
+            expert_output = self.experts[0](dispatched_input)
+        else:
+            chunks = dispatched_input.chunk(self.num_local_experts, dim=1)
+            expert_outputs = [expert(chunk) for chunk, expert in zip(chunks, self.experts)]
+            expert_output = torch.cat(expert_outputs, dim=1)
+
         expert_output = _AllToAll.apply(self.expert_group, expert_output)
 
         # Re-shape back: gecm -> ecm
