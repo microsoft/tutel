@@ -7,14 +7,11 @@ from torch.nn import ModuleList
 import torch.nn.functional as F
 
 
-def get_world_size():
+def get_world_size(group):
     try:
-        world_size = dist.get_world_size(self.expert_group)
+        return dist.get_world_size(group)
     except:
-        # FIXME: dist.get_world_size(self.expert_group)
-        world_size = 1
-    return world_size
-
+        return 1
 
 def load_kernels(dtype):
     global JitKernels
@@ -30,21 +27,23 @@ def load_kernels(dtype):
 
 
 class _AllToAll(torch.autograd.Function):
+
     @staticmethod
     def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor):
-        return input # FIXME: not implemented
-
         ctx.group = group
+        ctx.world_size = get_world_size(group)
+        if ctx.world_size <= 1:
+            return input
         input = input.contiguous()
         output = torch.empty_like(input)
         dist.all_to_all_single(output, input, group=group)
         return output
 
     @staticmethod
-    def backward(ctx: Any, *grad_output: Tensor):
-        return (None, *grad_output) # FIXME: not implemented
-
-        return (None, _AllToAll.apply(ctx.group, *grad_output))
+    def backward(ctx: Any, grad_output: Tensor):
+        if ctx.world_size <= 1:
+            return (None, grad_output)
+        return (None, _AllToAll.apply(ctx.group, grad_output))
 
 
 class Top1Gate(torch.nn.Module):
@@ -147,7 +146,9 @@ class MOELayer(torch.nn.Module):
 
     def __init__(self, gate_type, experts: Union[torch.nn.Module, ModuleList], model_dim: int, group: Optional[Any] = None):
         super().__init__()
-        self.world_size = get_world_size()
+
+        self.expert_group = group if group is not None else dist.group.WORLD
+        self.world_size = get_world_size(self.expert_group)
 
         if gate_type == 'Top1Gate':
             gating = Top1Gate
@@ -162,7 +163,6 @@ class MOELayer(torch.nn.Module):
             self.experts = cast(ModuleList, experts)
         else:
             self.experts = ModuleList([experts])
-        self.expert_group = group if group is not None else dist.group.WORLD
         for expert in self.experts:
             for p in experts.parameters():
                 p.expert = True  # type: ignore
