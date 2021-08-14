@@ -76,8 +76,7 @@ class Top1Gate(torch.nn.Module):
             from .jit_kernels.gating import get_gating_kenel
             self.gating_kernel = get_gating_kenel(num_tokens, num_experts)
 
-        EVAL_CAPACITY_TOKEN_FRACTION = 0.25
-        capacity = int(EVAL_CAPACITY_TOKEN_FRACTION * num_tokens) if not self.training else int(self.capacity_factor * ((num_tokens + num_experts - 1) // num_experts))
+        capacity = int(self.capacity_factor * ((num_tokens + num_experts - 1) // num_experts))
 
         indices1_s = torch.argmax(logits, dim=1)
 
@@ -226,7 +225,7 @@ class MOELayer(torch.nn.Module):
         if not hasattr(self, 'ones_gates1_s'):
             self.ones_gates1_s = torch.ones([reshaped_input.size(0),], dtype=input.dtype, device=input.device)
         else:
-            assert self.ones_gates1_s.size(0) == reshaped_input.size(0), f"Did you have changed the batch_size of input? Expect {self.ones_gates1_s.size(0)}, get {reshaped_input.size(0)}. Please keep it constantly in one session."
+            assert self.ones_gates1_s.size(0) == reshaped_input.size(0), f"Did you have changed the batch_size of input? Expect {self.ones_gates1_s.size(0)}, get {reshaped_input.size(0)}. Please do padding to keep it constantly within one session."
 
         l_aux, shared_data.indices1_s, shared_data.capacity, shared_data.locations1_s, shared_data.gates1_s, shared_data.num_experts = self.gate(reshaped_input)
         shared_data.message_dtype = input.dtype
