@@ -179,7 +179,6 @@ class MOELayer(torch.nn.Module):
                 class FusedExpertsNetwork(torch.nn.Module):
                     def __init__(self, model_dim, hidden_size, local_experts):
                         super().__init__()
-                        torch.manual_seed(get_world_rank(group))
                         fc1 = torch.nn.Linear(model_dim, local_experts * hidden_size)
                         fc2 = torch.nn.Linear(hidden_size, local_experts * model_dim)
 
