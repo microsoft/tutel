@@ -62,11 +62,13 @@ class Top1Gate(torch.nn.Module):
         num_experts: int,
         input_noise_type=None,
         capacity_factor=1.0,
+        allow_approximation=False,
     ):
         super().__init__()
         self.wg = torch.nn.Linear(model_dim, num_experts, bias=False)
         self.input_noise_type = input_noise_type
         self.capacity_factor = capacity_factor
+        self.allow_approximation = allow_approximation
 
     def forward(self, input: torch.Tensor):
         logits = self.wg(input)
@@ -79,16 +81,21 @@ class Top1Gate(torch.nn.Module):
         capacity = int(self.capacity_factor * ((num_tokens + num_experts - 1) // num_experts))
 
         indices1_s = torch.argmax(logits, dim=1)
-
-        gates = F.softmax(logits, dim=1)
         mask1 = F.one_hot(indices1_s, num_classes=num_experts)
-        gates1_s = (gates * mask1).sum(dim=1)
+
+        if self.allow_approximation:
+            gates1_s = indices1_s.to(logits.dtype)
+        else:
+            gates = F.softmax(logits, dim=1)
+            gates1_s = (gates * mask1).sum(dim=1)
 
         locations1_s = torch.empty([num_tokens,], dtype=torch.int32, device=logits.device)
         self.gating_kernel(indices1_s.to(torch.int32), locations1_s)
 
         # Compute l_aux
-        if gates.dtype == torch.float32:
+        if self.allow_approximation:
+            l_aux = torch.mean(mask1.to(gates1_s.dtype))
+        elif gates.dtype == torch.float32:
             me = torch.sum(gates, dim=0)
             ce = torch.sum(mask1.to(gates.dtype), dim=0)
             l_aux = torch.sum(me * ce) * (num_experts / (gates.size(0) * gates.size(0)))
@@ -145,7 +152,7 @@ class _CustomDecoder(torch.autograd.Function):
 
 class MOELayer(torch.nn.Module):
 
-    def __init__(self, gate_type, model_dim: int, builtin_experts = None, external_experts = None, group: Optional[Any] = None):
+    def __init__(self, gate_type, model_dim: int, builtin_experts = None, external_experts = None, allow_approximation = False, group: Optional[Any] = None):
         super().__init__()
 
         self.expert_group = group = group if group is not None else dist.group.WORLD
@@ -211,7 +218,7 @@ class MOELayer(torch.nn.Module):
         else:
             raise Exception("You must specify either `builtin_experts` or `external_experts` for MoE layer.")
 
-        self.gate = gating(model_dim=model_dim, num_experts=self.world_size * self.num_local_experts)
+        self.gate = gating(model_dim=model_dim, num_experts=self.world_size * self.num_local_experts, allow_approximation=allow_approximation)
         self.in_generation = False
 
     def forward(self, input: Tensor, **kwargs: Any):
