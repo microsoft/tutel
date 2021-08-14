@@ -15,6 +15,12 @@ def get_world_size(group):
     except:
         return 1
 
+def get_world_rank(group):
+    try:
+        return dist.get_rank(group)
+    except:
+        return 0
+
 def load_kernels():
     global JitKernels
     try:
@@ -143,7 +149,7 @@ class MOELayer(torch.nn.Module):
     def __init__(self, gate_type, model_dim: int, builtin_experts = None, external_experts = None, group: Optional[Any] = None):
         super().__init__()
 
-        self.expert_group = group if group is not None else dist.group.WORLD
+        self.expert_group = group = group if group is not None else dist.group.WORLD
         self.world_size = get_world_size(self.expert_group)
 
         if gate_type == 'Top1Gate':
@@ -174,6 +180,7 @@ class MOELayer(torch.nn.Module):
                 class FusedExpertsNetwork(torch.nn.Module):
                     def __init__(self, model_dim, hidden_size, local_experts):
                         super().__init__()
+                        torch.manual_seed(get_world_rank(group))
                         fc1 = torch.nn.Linear(model_dim, local_experts * hidden_size)
                         fc2 = torch.nn.Linear(hidden_size, local_experts * model_dim)
 
@@ -210,8 +217,16 @@ class MOELayer(torch.nn.Module):
         self.in_generation = False
 
     def forward(self, input: Tensor, **kwargs: Any):
-        assert len(input.shape) == 3, "input Tensor must have dimensions: (s)equence, (t)oken, (m)odel"
+        original_shape  = input.shape
+        if input.shape == 2:
+            input = input.view(input.shape[0], 1, input.shape[1])
+        assert len(input.shape) == 3, "input Tensor must be 2D/3D format: (s)equence, (t)oken [Optional], (m)odel"
         reshaped_input = input.reshape(-1, input.shape[2])
+
+        if not hasattr(self, 'ones_gates1_s'):
+            self.ones_gates1_s = torch.ones([reshaped_input.size(0),], dtype=input.dtype, device=input.device)
+        else:
+            assert self.ones_gates1_s.size(0) == reshaped_input.size(0), f"Did you have changed the batch_size of input? Expect {self.ones_gates1_s.size(0)}, get {reshaped_input.size(0)}. Please keep it constantly in one session."
 
         l_aux, shared_data.indices1_s, shared_data.capacity, shared_data.locations1_s, shared_data.gates1_s, shared_data.num_experts = self.gate(reshaped_input)
         shared_data.message_dtype = input.dtype
@@ -220,11 +235,6 @@ class MOELayer(torch.nn.Module):
 
         S, M = reshaped_input.size(0), reshaped_input.size(1) 
         E, C = shared_data.num_experts, shared_data.capacity
-
-        if not hasattr(self, 'ones_gates1_s'):
-            self.ones_gates1_s = torch.ones(shared_data.gates1_s.size(), dtype=shared_data.gates1_s.dtype, device=shared_data.gates1_s.device)
-        else:
-            assert self.ones_gates1_s.size() == shared_data.gates1_s.size(), f"The batch_size of forwarding step is irregularly changed to {self.ones_gates1_s.shape[0]}. Please keep it constantly to its initialized size: {shared_data.gates1_s.shape[0]}."
 
         dispatched_input = _CustomEncoder.apply(self.ones_gates1_s, reshaped_input)
         dispatched_input = _AllToAll.apply(self.expert_group, dispatched_input)
@@ -249,6 +259,7 @@ class MOELayer(torch.nn.Module):
         
         combined_output = combined_output.reshape(input.shape)
         combined_output = combined_output[:input.shape[0], :, :]
+        combined_output = combined_output.view(original_shape)
         combined_output.l_aux = l_aux
         return combined_output
 
