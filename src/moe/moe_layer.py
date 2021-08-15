@@ -83,19 +83,14 @@ class Top1Gate(torch.nn.Module):
         indices1_s = torch.argmax(logits, dim=1)
         mask1 = F.one_hot(indices1_s, num_classes=num_experts)
 
-        if self.allow_approximation:
-            gates1_s = indices1_s.to(logits.dtype)
-        else:
-            gates = F.softmax(logits, dim=1)
-            gates1_s = (gates * mask1).sum(dim=1)
+        gates = F.softmax(logits, dim=1)
+        gates1_s = (gates * mask1).sum(dim=1)
 
         locations1_s = torch.empty([num_tokens,], dtype=torch.int32, device=logits.device)
         self.gating_kernel(indices1_s.to(torch.int32), locations1_s)
 
         # Compute l_aux
-        if self.allow_approximation:
-            l_aux = torch.mean(mask1.to(gates1_s.dtype))
-        elif gates.dtype == torch.float32:
+        if gates.dtype == torch.float32:
             me = torch.sum(gates, dim=0)
             ce = torch.sum(mask1.to(gates.dtype), dim=0)
             l_aux = torch.sum(me * ce) * (num_experts / (gates.size(0) * gates.size(0)))
@@ -186,13 +181,22 @@ class MOELayer(torch.nn.Module):
                 class FusedExpertsNetwork(torch.nn.Module):
                     def __init__(self, model_dim, hidden_size, local_experts):
                         super().__init__()
-                        fc1 = torch.nn.Linear(model_dim, local_experts * hidden_size)
-                        fc2 = torch.nn.Linear(hidden_size, local_experts * model_dim)
 
-                        self.register_parameter(name='fc1_weight', param=torch.nn.Parameter(fc1.weight.view(1, local_experts, model_dim, hidden_size)))
-                        self.register_parameter(name='fc2_weight', param=torch.nn.Parameter(fc2.weight.view(1, local_experts, hidden_size, model_dim)))
-                        self.register_parameter(name='fc1_bias', param=torch.nn.Parameter(fc1.bias.view(1, local_experts, 1, hidden_size)))
-                        self.register_parameter(name='fc2_bias', param=torch.nn.Parameter(fc2.bias.view(1, local_experts, 1, model_dim)))
+                        fc1_weight = torch.empty(1, local_experts, model_dim, hidden_size)
+                        fc2_weight = torch.empty(1, local_experts, hidden_size, model_dim)
+                        fc1_bias = torch.empty(1, local_experts, 1, hidden_size)
+                        fc2_bias = torch.empty(1, local_experts, 1, model_dim)
+
+                        for i in range(local_experts):
+                            fc1 = torch.nn.Linear(model_dim, hidden_size)
+                            fc2 = torch.nn.Linear(hidden_size, model_dim)
+                            fc1_weight[0, i, :, :], fc1_bias[0, i, :, :] = fc1.weight.t(), fc1.bias
+                            fc2_weight[0, i, :, :], fc2_bias[0, i, :, :] = fc2.weight.t(), fc2.bias
+
+                        self.register_parameter(name='fc1_weight', param=torch.nn.Parameter(fc1_weight))
+                        self.register_parameter(name='fc2_weight', param=torch.nn.Parameter(fc2_weight))
+                        self.register_parameter(name='fc1_bias', param=torch.nn.Parameter(fc1_bias))
+                        self.register_parameter(name='fc2_bias', param=torch.nn.Parameter(fc2_bias))
 
                     def forward(self, x):
                         x = torch.matmul(x, self.fc1_weight) + self.fc1_bias
