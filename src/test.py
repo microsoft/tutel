@@ -17,6 +17,7 @@ parser.add_argument('--num-tokens', type=int, default=512)
 parser.add_argument('--model-dim', type=int, default=2048)
 parser.add_argument('--hidden-size', type=int, default=1024)
 parser.add_argument('--num-local-experts', type=int, default=2)
+parser.add_argument('--dtype', type=str, default='float32')
 args = parser.parse_args()
 
 
@@ -31,8 +32,12 @@ activation_fn = lambda x: x
 device = 'cuda'
 torch.manual_seed(1)
 
-torch.set_default_dtype(torch.float32)
-
+if args.dtype == 'float32':
+  torch.set_default_dtype(torch.float32)
+elif args.dtype == 'float16':
+  torch.set_default_dtype(torch.float16)
+else:
+  raise Exception(f'Unrecognized data type specified: {args.dtype}')
 
 class ExpertModel(torch.nn.Module):
     def __init__(self, model_dim, hidden_size, activation_fn = lambda x: x):
