@@ -18,6 +18,7 @@ parser.add_argument('--model-dim', type=int, default=2048)
 parser.add_argument('--hidden-size', type=int, default=1024)
 parser.add_argument('--num-local-experts', type=int, default=2)
 parser.add_argument('--dtype', type=str, default='float32')
+parser.add_argument('--top', type=int, default=1)
 args = parser.parse_args()
 
 
@@ -26,6 +27,8 @@ num_tokens = args.num_tokens
 model_dim = args.model_dim
 hidden_size = args.hidden_size
 num_local_experts = args.num_local_experts
+top_value = args.top
+assert top_value > 0 and top_value <= 2
 
 activation_fn = lambda x: x
 
@@ -55,8 +58,9 @@ class ExpertModel(torch.nn.Module):
 class ExampleModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        # self._moe_layer = MOELayer('Top1Gate', model_dim, external_experts=[ExpertModel(model_dim, hidden_size, activation_fn) for i in range(num_local_experts)]).to(device)
-        self._moe_layer = MOELayer('Top1Gate', model_dim, builtin_experts={'type': 'ffn', 'count_per_node': num_local_experts, 'hidden_size_per_expert': hidden_size, 'activation_fn': activation_fn}, allow_approximation=True).to(device)
+        gate_type = 'Top1Gate' if top_value == 1 else 'Top2Gate'
+        # self._moe_layer = MOELayer(gate_type, model_dim, external_experts=[ExpertModel(model_dim, hidden_size, activation_fn) for i in range(num_local_experts)]).to(device)
+        self._moe_layer = MOELayer(gate_type, model_dim, builtin_experts={'type': 'ffn', 'count_per_node': num_local_experts, 'hidden_size_per_expert': hidden_size, 'activation_fn': activation_fn}, allow_approximation=True).to(device)
 
     def forward(self, input):
         result = self._moe_layer(input)

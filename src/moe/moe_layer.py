@@ -60,13 +60,11 @@ class Top1Gate(torch.nn.Module):
         self,
         model_dim: int,
         num_experts: int,
-        input_noise_type=None,
         capacity_factor=1.0,
         allow_approximation=False,
     ):
         super().__init__()
         self.wg = torch.nn.Linear(model_dim, num_experts, bias=False)
-        self.input_noise_type = input_noise_type
         self.capacity_factor = capacity_factor
         self.allow_approximation = allow_approximation
 
@@ -101,6 +99,24 @@ class Top1Gate(torch.nn.Module):
             l_aux = torch.sum(me * ce) * num_experts
 
         return l_aux, indices1_s.to(torch.int32), capacity, locations1_s.to(torch.int32), gates1_s, num_experts
+
+
+class Top2Gate(torch.nn.Module):
+ 
+    def __init__(
+        self,
+        model_dim: int,
+        num_experts: int,
+        capacity_factor=1.0,
+        allow_approximation=False,
+    ):
+        super().__init__()
+        self.wg = torch.nn.Linear(model_dim, num_experts, bias=False)
+        self.capacity_factor = capacity_factor
+        self.allow_approximation = allow_approximation
+
+    def forward(self, input: torch.Tensor):
+        raise Exception('Not implemented')  ## FIXME: not implemented
 
 
 class _CustomEncoder(torch.autograd.Function):
@@ -156,7 +172,7 @@ class MOELayer(torch.nn.Module):
         if gate_type == 'Top1Gate':
             gating = Top1Gate
         elif gate_type == 'Top2Gate':
-            from .top2gate import Top2Gate as gating  ## FIXME: not implemented
+            gating = Top2Gate
         else:
             raise Exception(f"Unrecognized gate_type: {gate_type}")
 
