@@ -1,3 +1,6 @@
+import torch
+import torch.nn.functional as F
+
 from ..jit import JitKernel
 
 def get_gating_kenel(batched_tokens, global_experts):
@@ -5,19 +8,24 @@ def get_gating_kenel(batched_tokens, global_experts):
     try:
         return GATING_FUNC
     except:
-        assert (batched_tokens & (batched_tokens - 1)) == 0, "`batched_tokens` must be 2^k."
-        assert (batched_tokens % global_experts) == 0, "`global_experts` cannot be devided by `batched_tokens`."
+        if (batched_tokens & (batched_tokens - 1)) != 0:
+            print('[WARN]', f"`batched_tokens` (= {batched_tokens}) isn't in the form of 2^k, which is outside optimization scope and may result in big performance regression.")
+            def general_gating(indices1_s, locations1_s):
+                # Un-fused Version
+                mask1 = F.one_hot(indices1_s.to(torch.int64), num_classes=global_experts)
+                locations1 = torch.cumsum(mask1, dim=0) - 1
+                _locations1_s = torch.sum(locations1 * mask1, dim=1).to(torch.int32)
+                locations1_s.copy_(_locations1_s)
+            return general_gating
 
         tensor_cnt = batched_tokens * global_experts
         thread_num = min(1024, batched_tokens)
         batch_num = global_experts
-        capacity = batched_tokens // global_experts
 
         GATING_FUNC = JitKernel.create('''
 #define tensor_cnt  (@tensor_cnt@)
 #define thread_num  (@thread_num@)
 #define batch_num   (@batch_num@)
-#define capacity    (@capacity@)
 #define __out__
 
 extern "C" __global__ __launch_bounds__(thread_num) void cumsum(int* __restrict__ indices1_s, __out__ int* __restrict__ locations1_s) {
@@ -59,6 +67,6 @@ extern "C" __global__ __launch_bounds__(thread_num) void cumsum(int* __restrict_
         last_sum += temp[thread_num];
     }
 }
-'''.replace('@tensor_cnt@', str(tensor_cnt)).replace('@thread_num@', str(thread_num)).replace('@batch_num@', str(batch_num)).replace('@capacity@', str(capacity)))
+'''.replace('@tensor_cnt@', str(tensor_cnt)).replace('@thread_num@', str(thread_num)).replace('@batch_num@', str(batch_num)))
 
         return GATING_FUNC
