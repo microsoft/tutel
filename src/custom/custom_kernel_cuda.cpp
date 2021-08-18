@@ -37,20 +37,23 @@ static void invoke(const std::vector<torch::Tensor> &ts, int ctx) {
     int dev = 0;
     CHECK_EQ(0, cudaGetDevice(&dev));
 
+    auto suffix = "_" + std::to_string(rand());
+
 #if !defined(__HIP_PLATFORM_HCC__)
     std::string cc = "30";
     int major, minor;
     CHECK_EQ(0, cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev));
     CHECK_EQ(0, cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, dev));
     std::string arch = std::to_string(major) + std::to_string(minor);
-    CHECK_EQ(0, system(("/usr/local/cuda/bin/nvcc " + file_name + " -o " + file_name + ".fatbin --fatbin -O2 -gencode arch=compute_" + arch  + ",code=sm_" + arch).c_str()));
+    CHECK_EQ(0, system(("/usr/local/cuda/bin/nvcc " + file_name + " -o " + file_name + suffix + ".fatbin --fatbin -O2 -gencode arch=compute_" + arch  + ",code=sm_" + arch).c_str()));
 #else
     hipDeviceProp_t prop;
     CHECK_EQ(0, hipGetDeviceProperties(&prop, dev));
     std::string arch = std::to_string(prop.gcnArch);
-    CHECK_EQ(0, system(("/opt/rocm/bin/hipcc " + file_name + " -o " + file_name + ".fatbin --genco -O2 --amdgpu-target=gfx" + arch).c_str()));
+    CHECK_EQ(0, system(("/opt/rocm/bin/hipcc " + file_name + " -o " + file_name + suffix + ".fatbin --genco -O2 --amdgpu-target=gfx" + arch).c_str()));
 #endif
-    CHECK_EQ(0, cuModuleLoad(&gm.hMod, (file_name + ".fatbin").c_str()));
+    CHECK_EQ(0, cuModuleLoad(&gm.hMod, (file_name + suffix + ".fatbin").c_str()));
+    system(("rm -f " + file_name + suffix + ".fatbin").c_str());
 
     const char *source = code.data(), *pos, *tail;
     CHECK_EQ(true, nullptr != (pos = strstr(source, " void ")));
