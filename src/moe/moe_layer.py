@@ -84,8 +84,8 @@ class Top1Gate(torch.nn.Module):
         gates = F.softmax(logits, dim=1)
         gates1_s = (gates * mask1).sum(dim=1)
 
-        locations1_s = torch.empty([num_tokens,], dtype=torch.int32, device=logits.device)
-        self.gating_kernel(indices1_s.to(torch.int32), locations1_s)
+        locations1_s = torch.empty([num_tokens,], dtype=torch.int32, device=logits.device).contiguous()
+        self.gating_kernel(indices1_s.to(torch.int32).contiguous(), locations1_s)
 
         # Compute l_aux
         if gates.dtype == torch.float32:
@@ -247,11 +247,12 @@ class MOELayer(torch.nn.Module):
             else:
                 raise Exception(f'Builtin expert type is not recognized: {network_type}')
 
-            for expert in self.experts:
-                for p in expert.parameters():
-                    p.expert = True
         else:
             raise Exception("You must specify either `builtin_experts` or `external_experts` for MoE layer.")
+
+        for expert in self.experts:
+            for p in expert.parameters():
+                p.expert = True
 
         self.gate = gating(model_dim=model_dim, num_experts=self.world_size * self.num_local_experts, allow_approximation=allow_approximation)
         self.in_generation = False
