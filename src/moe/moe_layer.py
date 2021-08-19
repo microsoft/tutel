@@ -215,9 +215,9 @@ class MOELayer(torch.nn.Module):
                         self.register_parameter(name='fc2_bias', param=torch.nn.Parameter(fc2_bias))
 
                     def forward(self, x):
-                        x = torch.matmul(x, self.fc1_weight) + self.fc1_bias
+                        x = torch.matmul(x, self.fc1_weight.repeat(x.shape[0], 1, 1, 1) if x.shape[0] > 1 else self.fc1_weight) + self.fc1_bias
                         x = activation_fn(x)
-                        x = torch.matmul(x, self.fc2_weight) + self.fc2_bias
+                        x = torch.matmul(x, self.fc2_weight.repeat(x.shape[0], 1, 1, 1) if x.shape[0] > 1 else self.fc2_weight) + self.fc2_bias
                         return x
 
                     def to(self, *args, **kwargs):
