@@ -8,7 +8,8 @@ def get_gating_kenel(batched_tokens, global_experts):
     try:
         return GATING_FUNC
     except:
-        if (batched_tokens & (batched_tokens - 1)) != 0:
+        import os
+        if int(os.environ.get('GATE', '1')) == 0 or (batched_tokens & (batched_tokens - 1)) != 0:
             print('[WARN]', f"`batched_tokens` (= {batched_tokens}) isn't in the form of 2^k, which is outside optimization scope and may result in big performance regression.")
             def general_gating(indices1_s, locations1_s):
                 # Un-fused Version

@@ -20,6 +20,9 @@ class JitKernel:
         __ctx__ = JitKernel.__CTX__
         JitKernel.__CTX__ += 1
 
+        import random
+        key = random.randint(0, 1000000)
+
         temp_loc = f'{tempfile.mktemp()}-{__ctx__}.MoE'
         with open(temp_loc, 'w') as fp:
             if IS_HIP_EXTENSION:
@@ -27,9 +30,9 @@ class JitKernel:
             else:
               fp.write('#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n')
             fp.write(source)
-        os.rename(temp_loc, f'/tmp/{__ctx__}.cu')
+        os.rename(temp_loc, f'/tmp/{__ctx__}-{key}.cu')
 
         def func(*inputs):
-            custom_kernel.invoke(inputs, __ctx__)
+            custom_kernel.invoke(inputs, __ctx__, key)
         return func
 

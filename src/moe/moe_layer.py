@@ -125,6 +125,9 @@ class _CustomEncoder(torch.autograd.Function):
         ctx.reshaped_input = reshaped_input
         ctx.gates1_s = gates1_s
 
+        assert shared_data.num_experts * shared_data.capacity == 2048
+        assert reshaped_input.size(1) == 2048
+
         dispatched_input = torch.zeros([shared_data.num_experts * shared_data.capacity, reshaped_input.size(1)], dtype=reshaped_input.dtype, device=reshaped_input.device)
         JitKernels.func_fwd(gates1_s, shared_data.indices1_s, shared_data.locations1_s, reshaped_input, dispatched_input)
         return dispatched_input
@@ -134,6 +137,10 @@ class _CustomEncoder(torch.autograd.Function):
         # grad_gates1_s = None
         # grad_gates1_s = torch.empty([ctx.reshaped_input.size(0)], dtype=dispatched_input.dtype, device=dispatched_input.device)
         # JitKernels.func_bwd_gate(dispatched_input, shared_data.indices1_s, shared_data.locations1_s, ctx.reshaped_input, grad_gates1_s)
+
+        assert len(ctx.reshaped_input.shape) == 2
+        assert ctx.reshaped_input.shape[0] == 2048
+        assert ctx.reshaped_input.shape[1] == 2048
 
         grad_reshaped_input = torch.empty(ctx.reshaped_input.shape, dtype=dispatched_input.dtype, device=dispatched_input.device)
         JitKernels.func_bwd_data(dispatched_input, ctx.gates1_s, shared_data.indices1_s, shared_data.locations1_s, grad_reshaped_input)
@@ -147,15 +154,23 @@ class _CustomDecoder(torch.autograd.Function):
         ctx.expert_output = expert_output
         ctx.gates1_s = gates1_s
 
+        assert gates1_s.size(0) == 2048
+        assert expert_output.size(1) == 2048
+
         combined_output = torch.empty([gates1_s.size(0), expert_output.size(1)], dtype=gates1_s.dtype, device=gates1_s.device)
         JitKernels.func_bwd_data(expert_output, ctx.gates1_s, shared_data.indices1_s, shared_data.locations1_s, combined_output)
         return combined_output
         
     @staticmethod
     def backward(ctx: Any, combined_output: Tensor):
+        assert len(shared_data.indices1_s.shape) == 1
+        assert shared_data.indices1_s.shape[0] == 2048
         grad_gates1_s = torch.empty(shared_data.indices1_s.shape, dtype=combined_output.dtype, device=combined_output.device)
         JitKernels.func_bwd_gate(ctx.expert_output, shared_data.indices1_s, shared_data.locations1_s, combined_output, grad_gates1_s)
 
+        assert len(ctx.expert_output.shape) == 2
+        assert ctx.expert_output.shape[0] == 2048
+        assert ctx.expert_output.shape[1] == 2048
         grad_expert_output = torch.zeros(ctx.expert_output.shape, dtype=combined_output.dtype, device=combined_output.device)
         JitKernels.func_fwd(ctx.gates1_s, shared_data.indices1_s, shared_data.locations1_s, combined_output, grad_expert_output)
         return (grad_gates1_s, grad_expert_output)

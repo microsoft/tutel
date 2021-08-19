@@ -17,6 +17,7 @@ for tree in ('custom_kernel.egg-info', 'build', 'dist'):
   except:
     pass
 
+
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
