@@ -62,8 +62,8 @@ extern "C" __global__ __launch_bounds__(thread_num) void cumsum(int* __restrict_
                 }
         }
         __syncthreads();
-        if (bid == indices1_s[thid]) {
-          locations1_s[thid] = temp[thid + 1] + last_sum;
+        if (bid == indices1_s[thid] && temp[thid + 1] + last_sum >= 0) {
+                locations1_s[thid] = temp[thid + 1] + last_sum;
         }
         last_sum += temp[thread_num];
     }
