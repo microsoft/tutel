@@ -5,26 +5,23 @@ from ..moe_layer import shared_data
 
 func_fwd = JitKernel.create('''
 #define capacity (@capacity@)
+#define samples (@samples@)
+#define hidden (@hidden@)
 
 extern "C" __global__ __launch_bounds__(64) void forward_dispatched_input(float* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, float* __restrict__ reshaped_input, float* __restrict__ dispatched_input) {
   // [thread_extent] blockIdx.x = 64
-  // [thread_extent] threadIdx.x = 1
-  // [thread_extent] blockIdx.y = 8
-  // [thread_extent] threadIdx.y = 64
-  for (int vthread_s = 0; vthread_s < 16; ++vthread_s) {
-    ((locations1_s[(((((int)blockIdx.x) * 32) + vthread_s))] < capacity) ? atomicAdd(&dispatched_input[(((((indices1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * (2048 * capacity)) + (locations1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)))], (gates1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * reshaped_input[(((((((int)blockIdx.x) * 65536) + (vthread_s * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)))])) : 0.000000e+00f);
-    ((locations1_s[(((((int)blockIdx.x) * 32) + vthread_s))] < capacity) ? atomicAdd(&dispatched_input[((((((indices1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * (2048 * capacity)) + (locations1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 64))], (gates1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * reshaped_input[((((((((int)blockIdx.x) * 65536) + (vthread_s * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 64))])) : 0.000000e+00f);
-    ((locations1_s[(((((int)blockIdx.x) * 32) + vthread_s))] < capacity) ? atomicAdd(&dispatched_input[((((((indices1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * (2048 * capacity)) + (locations1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 128))], (gates1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * reshaped_input[((((((((int)blockIdx.x) * 65536) + (vthread_s * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 128))])) : 0.000000e+00f);
-    ((locations1_s[(((((int)blockIdx.x) * 32) + vthread_s))] < capacity) ? atomicAdd(&dispatched_input[((((((indices1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * (2048 * capacity)) + (locations1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 192))], (gates1_s[(((((int)blockIdx.x) * 32) + vthread_s))] * reshaped_input[((((((((int)blockIdx.x) * 65536) + (vthread_s * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 192))])) : 0.000000e+00f);
-  }
-  for (int vthread_s1 = 0; vthread_s1 < 16; ++vthread_s1) {
-    ((locations1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] < capacity) ? atomicAdd(&dispatched_input[(((((indices1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * (2048 * capacity)) + (locations1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)))], (gates1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * reshaped_input[((((((((int)blockIdx.x) * 65536) + (vthread_s1 * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 32768))])) : 0.000000e+00f);
-    ((locations1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] < capacity) ? atomicAdd(&dispatched_input[((((((indices1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * (2048 * capacity)) + (locations1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 64))], (gates1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * reshaped_input[((((((((int)blockIdx.x) * 65536) + (vthread_s1 * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 32832))])) : 0.000000e+00f);
-    ((locations1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] < capacity) ? atomicAdd(&dispatched_input[((((((indices1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * (2048 * capacity)) + (locations1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 128))], (gates1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * reshaped_input[((((((((int)blockIdx.x) * 65536) + (vthread_s1 * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 32896))])) : 0.000000e+00f);
-    ((locations1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] < capacity) ? atomicAdd(&dispatched_input[((((((indices1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * (2048 * capacity)) + (locations1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 192))], (gates1_s[((((((int)blockIdx.x) * 32) + vthread_s1) + 16))] * reshaped_input[((((((((int)blockIdx.x) * 65536) + (vthread_s1 * 2048)) + (((int)blockIdx.y) * 256)) + ((int)threadIdx.y)) + 32960))])) : 0.000000e+00f);
-  }
+  // [thread_extent] threadIdx.x = 64
+
+  const int stride = hidden / gridDim.x;
+
+  for (int i = blockIdx.x; i < samples; i += gridIdx.x)
+      if (locations1_s[i] < capacity) {
+          #pragma unroll
+          for (int j = 0; j < stride; ++j)
+              atomicAdd(&dispatched_input[(indices1_s[i] * capacity + locations1_s[i]) * (hidden) + threadIdx.x * stride + j], gates1_s[i] * reshaped_input[i * (hidden) + threadIdx.x * stride + j]);
+      }
 }
-'''.replace('@capacity@', str(shared_data.capacity)))
+'''.replace('@capacity@', str(shared_data.capacity)).replace('@samples@', str(shared_data.gates1_s.shape[0])).replace('@hidden@', str(shared_data.model_dim)))
 
 if not IS_HIP_EXTENSION:
     func_bwd_gate = JitKernel.create('''
