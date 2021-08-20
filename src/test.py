@@ -67,7 +67,7 @@ class ExampleModel(torch.nn.Module):
         local_experts_param_count = sum([torch.numel(param) for name, param in self._moe_layer.get_parameter_iterator(param_type='local_experts')])
         shared_gate_param_count = sum([torch.numel(param) for name, param in self._moe_layer.get_parameter_iterator(param_type='gate')])
 
-        print(f'[Statistics] param count for MoE gate = {local_experts_param_count}, param count for MoE local_experts = {shared_gate_param_count}.\n')
+        print(f'[Statistics] param count for MoE local_experts = {local_experts_param_count}, param count for MoE gate = {shared_gate_param_count}.\n')
 
     def forward(self, input):
         result = self._moe_layer(input)

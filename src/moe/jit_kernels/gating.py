@@ -3,7 +3,7 @@ import torch.nn.functional as F
 
 from ..jit import JitKernel
 
-def get_gating_kenel(batched_tokens, global_experts):
+def get_gating_kernel(batched_tokens, global_experts):
     global GATING_FUNC
     try:
         return GATING_FUNC
@@ -71,3 +71,4 @@ extern "C" __global__ __launch_bounds__(thread_num) void cumsum(int* __restrict_
 '''.replace('@tensor_cnt@', str(tensor_cnt)).replace('@thread_num@', str(thread_num)).replace('@batch_num@', str(batch_num)))
 
         return GATING_FUNC
+

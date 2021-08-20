@@ -70,8 +70,8 @@ class Top1Gate(torch.nn.Module):
         num_tokens, num_experts = logits.shape[0], logits.shape[1]
 
         if not hasattr(self, 'gating_kernel'):
-            from .jit_kernels.gating import get_gating_kenel
-            self.gating_kernel = get_gating_kenel(num_tokens, num_experts)
+            from .jit_kernels.gating import get_gating_kernel
+            self.gating_kernel = get_gating_kernel(num_tokens, num_experts)
 
         capacity = int(self.capacity_factor * ((num_tokens + num_experts - 1) // num_experts))
 
@@ -113,7 +113,43 @@ class Top2Gate(torch.nn.Module):
         self.allow_approximation = allow_approximation
 
     def forward(self, input: torch.Tensor):
-        raise Exception('Not implemented')  ## FIXME: not implemented
+        logits = self.wg(input)
+        num_tokens, num_experts = logits.shape[0], logits.shape[1]
+
+        if not hasattr(self, 'gating_kernel'):
+            from .jit_kernels.gating import get_gating_kernel
+            self.gating_kernel = get_gating_kernel(num_tokens, num_experts)
+
+        capacity = 2 * int(self.capacity_factor * ((num_tokens + num_experts - 1) // num_experts))
+
+        top2_indices = torch.topk(logits, 2, dim=1).indices.to(torch.int32)
+        indices1_s, indices2_s = top2_indices.chunk(2, dim=1)
+
+        locations1_s = torch.empty([num_tokens, ], dtype=torch.int32, device=logits.device).contiguous()
+        self.gating_kernel(indices1_s.contiguous(), locations1_s)
+        locations2_s = torch.empty([num_tokens, ], dtype=torch.int32, device=logits.device).contiguous()
+        self.gating_kernel(indices2_s.contiguous(), locations2_s)
+        print(locations2_s)
+        exit(0)
+
+        indices1_s = torch.argmax(logits, dim=1)
+        mask1 = F.one_hot(indices1_s, num_classes=num_experts)
+
+        gates = F.softmax(logits, dim=1)
+        gates1_s = (gates * mask1).sum(dim=1)
+
+        # Compute l_aux
+        if gates.dtype == torch.float32:
+            me = torch.sum(gates, dim=0)
+            ce = torch.sum(mask1.to(gates.dtype), dim=0)
+            l_aux = torch.sum(me * ce) * (num_experts / (gates.size(0) * gates.size(0)))
+        else:
+            # Avoid data overflow in float16 mode
+            me = torch.mean(gates, dim=0)
+            ce = torch.mean(mask1.to(gates.dtype), dim=0)
+            l_aux = torch.sum(me * ce) * num_experts
+
+        return l_aux, indices1_s.to(torch.int32), capacity, locations1_s.to(torch.int32), gates1_s, num_experts
 
 
 class _CustomEncoder(torch.autograd.Function):
