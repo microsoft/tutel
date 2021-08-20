@@ -59,12 +59,18 @@ class ExampleModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
         gate_type = 'Top1Gate' if top_value == 1 else 'Top2Gate'
+
         # self._moe_layer = MOELayer(gate_type, model_dim, external_experts=[ExpertModel(model_dim, hidden_size, activation_fn) for i in range(num_local_experts)]).to(device)
         self._moe_layer = MOELayer(gate_type, model_dim, builtin_experts={'type': 'ffn', 'count_per_node': num_local_experts, 'hidden_size_per_expert': hidden_size, 'activation_fn': activation_fn}, allow_approximation=True).to(device)
 
+        # Distinguish different parameter types: gate, local_experts
+        local_experts_param_count = sum([torch.numel(param) for name, param in self._moe_layer.get_parameter_iterator(param_type='local_experts')])
+        shared_gate_param_count = sum([torch.numel(param) for name, param in self._moe_layer.get_parameter_iterator(param_type='gate')])
+
+        print(f'[Statistics] param count for MoE gate = {local_experts_param_count}, param count for MoE local_experts = {shared_gate_param_count}.\n')
+
     def forward(self, input):
         result = self._moe_layer(input)
-
         result = F.log_softmax(torch.sum(result, dim=2), dim=1)
         return result
 
@@ -74,7 +80,11 @@ optimizer = torch.optim.SGD(model.parameters(), lr=1e-5)
 x = torch.randn([batch_size, num_tokens, model_dim], device=device, requires_grad=True)
 y = torch.LongTensor(batch_size).random_(1).to(device)
 
-for i in range(10):
+print(f'[Benchmark] dtype = {args.dtype}, model_dim = {model_dim}, batched_tokens = {batch_size * num_tokens}, hidden_size = {hidden_size}, num_local_experts = {num_local_experts}, topK = {top_value}')
+
+average_time, num_steps = 0, 20
+
+for i in range(num_steps):
   torch.cuda.synchronize()
   t_start = time.time()
   optimizer.zero_grad()
@@ -87,3 +97,9 @@ for i in range(10):
   torch.cuda.synchronize()
   t_stop = time.time()
   print(f'STEP-{i}: DONE, loss = {loss.data}, step_time = {t_stop - t_start} sec.')
+
+  if i + 10 >= num_steps:
+      average_time += t_stop - t_start
+
+average_time /= 10
+print(f'\n[Summary] Average synchronized step_time = {average_time} sec.')

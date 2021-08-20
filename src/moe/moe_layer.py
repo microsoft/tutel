@@ -237,6 +237,16 @@ class MOELayer(torch.nn.Module):
         self.gate = gating(model_dim=model_dim, num_experts=self.world_size * self.num_local_experts, allow_approximation=allow_approximation)
         self.in_generation = False
 
+    def get_parameter_iterator(self, param_type='all'):
+        if param_type == 'all':
+            return self.named_parameters()
+        elif param_type == 'gate':
+            return self.gate.named_parameters()
+        elif param_type == 'local_experts':
+            return self.experts.named_parameters()
+        else:
+            raise Exception(f"Specified parameter type is not recognized: {param_type}. Valid `param_type` includes: all, gate, local_experts.")
+
     def forward(self, input: Tensor, **kwargs: Any):
         original_shape  = input.shape
         if input.shape == 2:
