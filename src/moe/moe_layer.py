@@ -125,10 +125,11 @@ class _CustomEncoder(torch.autograd.Function):
         ctx.reshaped_input = reshaped_input
         ctx.gates1_s = gates1_s
 
-        assert shared_data.num_experts * shared_data.capacity == 2048
+        sc_size = shared_data.num_experts * shared_data.capacity
+        assert sc_size == 2048
         assert reshaped_input.size(1) == 2048
 
-        dispatched_input = torch.zeros([shared_data.num_experts * shared_data.capacity, reshaped_input.size(1)], dtype=reshaped_input.dtype, device=reshaped_input.device)
+        dispatched_input = torch.zeros([sc_size, reshaped_input.size(1)], dtype=reshaped_input.dtype, device=reshaped_input.device)
         JitKernels.func_fwd(gates1_s, shared_data.indices1_s, shared_data.locations1_s, reshaped_input, dispatched_input)
         return dispatched_input
 
