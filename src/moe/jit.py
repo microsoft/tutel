@@ -1,4 +1,6 @@
 import torch
+import torch.distributed as dist
+
 import os, tempfile
 
 try:
@@ -11,6 +13,11 @@ try:
 except:
     IS_HIP_EXTENSION = False
 
+try:
+	dist_rank = dist.get_rank()
+except:
+	dist_rank = 0
+
 class JitKernel:
     @staticmethod
     def create(source):
@@ -20,9 +27,7 @@ class JitKernel:
         __ctx__ = JitKernel.__CTX__
         JitKernel.__CTX__ += 1
 
-        import random
-        key = random.randint(0, 1000000)
-
+        key = dist_rank
         temp_loc = f'{tempfile.mktemp()}-{__ctx__}.MoE'
         with open(temp_loc, 'w') as fp:
             if IS_HIP_EXTENSION:
