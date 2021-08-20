@@ -271,6 +271,7 @@ class MOELayer(torch.nn.Module):
             assert self.ones_gates1_s.size(0) == reshaped_input.size(0), f"Did you have changed the batch_size of input? Expect {self.ones_gates1_s.size(0)}, get {reshaped_input.size(0)}. Please do padding to keep it constantly within one session."
 
         l_aux, shared_data.indices1_s, shared_data.capacity, shared_data.locations1_s, shared_data.gates1_s, shared_data.num_experts = self.gate(reshaped_input)
+        shared_data.model_dim = reshaped_input.shape[1]
         shared_data.message_dtype = input.dtype
 
         load_kernels()
