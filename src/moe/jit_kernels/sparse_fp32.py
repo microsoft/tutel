@@ -8,17 +8,17 @@ func_fwd = JitKernel.create('''
 #define samples (@samples@)
 #define hidden (@hidden@)
 
-extern "C" __global__ __launch_bounds__(64) void forward_dispatched_input(float* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, float* __restrict__ reshaped_input, float* __restrict__ dispatched_input) {
-  // [thread_extent] blockIdx.x = 64
-  // [thread_extent] threadIdx.x = 64
+extern "C" __global__ __launch_bounds__(1024) void forward_dispatched_input(float* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, float* __restrict__ reshaped_input, float* __restrict__ dispatched_input) {
+  // [thread_extent] blockIdx.x = 128
+  // [thread_extent] threadIdx.x = 1024
 
   const int stride = hidden / gridDim.x;
 
-  for (int i = blockIdx.x; i < samples; i += gridIdx.x)
+  for (int i = blockIdx.x; i < samples; i += gridDim.x)
       if (locations1_s[i] < capacity) {
           #pragma unroll
-          for (int j = 0; j < stride; ++j)
-              atomicAdd(&dispatched_input[(indices1_s[i] * capacity + locations1_s[i]) * (hidden) + threadIdx.x * stride + j], gates1_s[i] * reshaped_input[i * (hidden) + threadIdx.x * stride + j]);
+          for (int j = threadIdx.x; j < hidden; j += blockDim.x)
+              atomicAdd(&dispatched_input[(indices1_s[i] * capacity + locations1_s[i]) * (hidden) + j], gates1_s[i] * reshaped_input[i * (hidden) + j]);
       }
 }
 '''.replace('@capacity@', str(shared_data.capacity)).replace('@samples@', str(shared_data.gates1_s.shape[0])).replace('@hidden@', str(shared_data.model_dim)))
