@@ -12,8 +12,6 @@ extern "C" __global__ __launch_bounds__(1024) void forward_dispatched_input(floa
   // [thread_extent] blockIdx.x = 128
   // [thread_extent] threadIdx.x = 1024
 
-  const int stride = hidden / gridDim.x;
-
   for (int i = blockIdx.x; i < samples; i += gridDim.x)
       if (locations1_s[i] < capacity) {
           #pragma unroll
@@ -95,7 +93,7 @@ extern "C" __global__ __launch_bounds__(64) void template_op_kernel0(float* __re
 func_bwd_data = JitKernel.create('''
 #define capacity (@capacity@)
 
-extern "C" __global__ __launch_bounds__(32) void backward_reshaped_input(float* __restrict__ dispatched_input, float* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, float* __restrict__ grad_reshaped_input) {
+extern "C" __global__ __launch_bounds__(32) void backward_reshaped_input(float* __restrict__ gates1_s, float* __restrict__ dispatched_input, int* __restrict__ indices1_s, int* __restrict__ locations1_s, float* __restrict__ grad_reshaped_input) {
   // [thread_extent] blockIdx.x = 256
   // [thread_extent] threadIdx.x = 1
   // [thread_extent] blockIdx.y = 32

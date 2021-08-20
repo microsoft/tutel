@@ -144,7 +144,7 @@ class _CustomEncoder(torch.autograd.Function):
         assert ctx.reshaped_input.shape[1] == 2048
 
         grad_reshaped_input = torch.empty(ctx.reshaped_input.shape, dtype=dispatched_input.dtype, device=dispatched_input.device)
-        JitKernels.func_bwd_data(dispatched_input, ctx.gates1_s, shared_data.indices1_s, shared_data.locations1_s, grad_reshaped_input)
+        JitKernels.func_bwd_data(ctx.gates1_s, dispatched_input, shared_data.indices1_s, shared_data.locations1_s, grad_reshaped_input)
         return (None, grad_reshaped_input)
 
 
@@ -159,7 +159,7 @@ class _CustomDecoder(torch.autograd.Function):
         assert expert_output.size(1) == 2048
 
         combined_output = torch.empty([gates1_s.size(0), expert_output.size(1)], dtype=gates1_s.dtype, device=gates1_s.device)
-        JitKernels.func_bwd_data(expert_output, ctx.gates1_s, shared_data.indices1_s, shared_data.locations1_s, combined_output)
+        JitKernels.func_bwd_data(ctx.gates1_s, expert_output, shared_data.indices1_s, shared_data.locations1_s, combined_output)
         return combined_output
         
     @staticmethod
@@ -181,6 +181,8 @@ class MOELayer(torch.nn.Module):
 
     def __init__(self, gate_type, model_dim: int, builtin_experts = None, external_experts = None, allow_approximation = False, group: Optional[Any] = None):
         super().__init__()
+
+        assert model_dim % 2 == 0, f"Model_dim ({model_dim}) must be even value, while this Model_dim % 2 > 0."
 
         self.expert_group = group = group if group is not None else dist.group.WORLD
         self.world_size = get_world_size(self.expert_group)
@@ -266,11 +268,13 @@ class MOELayer(torch.nn.Module):
         reshaped_input = input.reshape(-1, input.shape[2])
 
         if not hasattr(self, 'ones_gates1_s'):
-            self.ones_gates1_s = torch.ones([reshaped_input.size(0),], dtype=input.dtype, device=input.device)
+            self.ones_gates1_s = torch.ones([reshaped_input.size(0), ], dtype=input.dtype, device=input.device)
         else:
             assert self.ones_gates1_s.size(0) == reshaped_input.size(0), f"Did you have changed the batch_size of input? Expect {self.ones_gates1_s.size(0)}, get {reshaped_input.size(0)}. Please do padding to keep it constantly within one session."
 
         l_aux, shared_data.indices1_s, shared_data.capacity, shared_data.locations1_s, shared_data.gates1_s, shared_data.num_experts = self.gate(reshaped_input)
+
+        shared_data.samples = shared_data.locations1_s.shape[0]
         shared_data.model_dim = reshaped_input.shape[1]
         shared_data.message_dtype = input.dtype
 
