@@ -18,7 +18,7 @@ parser.add_argument('--model-dim', type=int, default=2048)
 parser.add_argument('--hidden-size', type=int, default=1024)
 parser.add_argument('--num-local-experts', type=int, default=2)
 parser.add_argument('--dtype', type=str, default='float32')
-parser.add_argument('--fp32-gate', type=bool, default=False)
+parser.add_argument('--fp32-gate', default=False, action='store_true')
 parser.add_argument('--top', type=int, default=2)
 args = parser.parse_args()
 
@@ -84,8 +84,8 @@ optimizer = torch.optim.SGD(model.parameters(), lr=1e-5)
 x = torch.randn([batch_size, num_tokens, model_dim], device=device, requires_grad=True)
 y = torch.LongTensor(batch_size).random_(1).to(device)
 
-tuples = (args.dtype, model_dim, batch_size * num_tokens, hidden_size, num_local_experts, top_value)
-print('[Benchmark] dtype = %s, model_dim = %s, batched_tokens = %s, hidden_size = %s, num_local_experts = %s, topK = %s' % tuples)
+tuples = (args.dtype, args.fp32_gate, model_dim, hidden_size, batch_size * num_tokens, num_local_experts, top_value)
+print('[Benchmark] dtype = %s, fp32-gate = %s, model-dim = %s, hidden-size = %s, samples = %s, num-local-experts = %s, topK = %s' % tuples)
 
 average_time, num_steps = 0, 20
 

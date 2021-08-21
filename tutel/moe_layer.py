@@ -84,9 +84,9 @@ class Top1Gate(torch.nn.Module):
         locations1_s = self.gating_kernel(indices1_s, mask1)
 
         # Compute l_aux
-        if gates.dtype == torch.float32:
-            me = torch.sum(gates, dim=0)
-            ce = torch.sum(mask1.to(gates.dtype), dim=0)
+        if gates.dtype == torch.float32 or self.use_fp32:
+            me = torch.sum(gates.float(), dim=0)
+            ce = torch.sum(mask1.to(me.dtype), dim=0)
             l_aux = torch.sum(me * ce) * (num_experts / (gates.size(0) * gates.size(0)))
         else:
             # Avoid data overflow in float16 mode
@@ -150,9 +150,9 @@ class Top2Gate(torch.nn.Module):
         '''
 
         # Compute l_aux
-        if gates.dtype == torch.float32:
-            me = torch.sum(gates, dim=0)
-            ce = torch.sum(mask1.to(gates.dtype), dim=0)
+        if gates.dtype == torch.float32 or self.use_fp32:
+            me = torch.sum(gates.float(), dim=0)
+            ce = torch.sum(mask1.to(me.dtype), dim=0)
             l_aux = torch.sum(me * ce) * (num_experts / (gates.size(0) * gates.size(0)))
         else:
             # Avoid data overflow in float16 mode
@@ -215,11 +215,10 @@ class _CustomDecoder(torch.autograd.Function):
 
 class MOELayer(torch.nn.Module):
 
-    def __init__(self, gate_type, model_dim: int, builtin_experts = None, external_experts = None, fp32_gate = False, group: Optional[Any] = None):
+    def __init__(self, gate_type, model_dim: int, builtin_experts = None, external_experts = None, fp32_gate = False, scan_experts = None, group: Optional[Any] = None):
         super().__init__()
 
-        assert model_dim % 2 == 0, "Model_dim (%s) must be even value, while this Model_dim % 2 > 0." % model_dim
-
+        assert model_dim % 2 == 0, "Model_dim (%s) must be even value, while this Model_dim mod 2 > 0." % model_dim
         self.expert_group = group = group if group is not None else dist.group.WORLD
         self.world_size = get_world_size(self.expert_group)
 
@@ -292,9 +291,10 @@ class MOELayer(torch.nn.Module):
         else:
             raise Exception("You must specify either `builtin_experts` or `external_experts` for MoE layer.")
 
-        for expert in self.experts:
-            for p in expert.parameters():
-                p.expert = True
+        if scan_experts is not None:
+            for expert in self.experts:
+                for n, p in expert.named_parameters():
+                    scan_experts(n, p)
 
         self.gate = gating(model_dim=model_dim, num_experts=self.world_size * self.num_local_experts, use_fp32=fp32_gate)
         self.in_generation = False
