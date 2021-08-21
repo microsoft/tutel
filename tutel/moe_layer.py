@@ -81,8 +81,7 @@ class Top1Gate(torch.nn.Module):
         gates = F.softmax(logits, dim=1)
         gates1_s = (gates * mask1).sum(dim=1)
 
-        locations1_s = torch.empty([num_tokens,], dtype=torch.int32, device=logits.device).contiguous()
-        self.gating_kernel(indices1_s.to(torch.int32).contiguous(), locations1_s)
+        locations1_s = self.gating_kernel(indices1_s, mask1)
 
         # Compute l_aux
         if gates.dtype == torch.float32:

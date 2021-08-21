@@ -4,23 +4,20 @@ import torch.nn.functional as F
 from ..jit import JitKernel
 
 def get_gating_kernel(batched_tokens, global_experts):
-    if not hasattr(get_gating_kernel, 'func_dict'):
-        import os
-        if int(os.environ.get('GATE', '1')) == 0 or (batched_tokens & (batched_tokens - 1)) != 0:
-            print('[WARN]', "`batched_tokens` (= %s) isn't in the form of 2^k, which is outside optimization scope and may result in big performance regression." % batched_tokens)
-            def general_gating(indices1_s, locations1_s):
-                # Un-fused Version
-                mask1 = F.one_hot(indices1_s.to(torch.int64), num_classes=global_experts)
-                locations1 = torch.cumsum(mask1, dim=0) - 1
-                _locations1_s = torch.sum(locations1 * mask1, dim=1).to(torch.int32)
-                locations1_s.copy_(_locations1_s)
-            return general_gating
+    import os
+    if int(os.environ.get('GATE', '0')) == 0 or (batched_tokens & (batched_tokens - 1)) != 0:
+        # print('[WARN]', "`batched_tokens` (= %s) isn't in the form of 2^k, which is outside optimization scope and may result in big performance regression." % batched_tokens)
+        def general_gating(indices1_s, mask1):
+            locations1 = torch.cumsum(mask1, dim=0) - 1
+            locations1_s = torch.sum(locations1 * mask1, dim=1).to(torch.int32)
+            return locations1_s
+        return general_gating
 
-        tensor_cnt = batched_tokens * global_experts
-        thread_num = min(1024, batched_tokens)
-        batch_num = global_experts
+    tensor_cnt = batched_tokens * global_experts
+    thread_num = min(1024, batched_tokens)
+    batch_num = global_experts
 
-        get_gating_kernel.func_dict = JitKernel.create('''
+    jit_func = JitKernel.create('''
 #define tensor_cnt  (@tensor_cnt@)
 #define thread_num  (@thread_num@)
 #define batch_num   (@batch_num@)
@@ -67,5 +64,10 @@ extern "C" __global__ __launch_bounds__(thread_num) void cumsum(int* __restrict_
 }
 '''.replace('@tensor_cnt@', str(tensor_cnt)).replace('@thread_num@', str(thread_num)).replace('@batch_num@', str(batch_num)))
 
-        return get_gating_kernel.func_dict
+    def jit_gating(indices1_s, mask1 = None):
+        indices1_s = indices1_s.to(torch.int32).contiguous()
+        locations1_s = torch.empty([batched_tokens,], dtype=torch.int32, device=indices1_s.device).contiguous()
+        jit_func(indices1_s, locations1_s)
+        return locations1_s
 
+    return jit_gating
