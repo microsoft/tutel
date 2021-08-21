@@ -1,3 +1,9 @@
+```sh
+$ ./setup.py
+$ ./test_tutel.py
+$ ./test_baseline.py
+```
+
 # Project
 
 > This repo has been populated by an initial template to help get you started. Please

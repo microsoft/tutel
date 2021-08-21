@@ -18,9 +18,8 @@ parser.add_argument('--model-dim', type=int, default=2048)
 parser.add_argument('--hidden-size', type=int, default=1024)
 parser.add_argument('--num-local-experts', type=int, default=2)
 parser.add_argument('--dtype', type=str, default='float32')
-parser.add_argument('--top', type=int, default=1)
+parser.add_argument('--top', type=int, default=2)
 args = parser.parse_args()
-
 
 batch_size = args.batch_size
 num_tokens = args.num_tokens
@@ -28,10 +27,10 @@ model_dim = args.model_dim
 hidden_size = args.hidden_size
 num_local_experts = args.num_local_experts
 top_value = args.top
-assert top_value > 0 and top_value <= 2
+
+assert top_value in (1, 2), "Only suppoert top_value = 1, 2 in this version"
 
 activation_fn = lambda x: x
-
 device = 'cuda'
 torch.manual_seed(1)
 

@@ -3,8 +3,10 @@ import torch.distributed as dist
 
 import os, tempfile
 
+assert torch.cuda.is_available() == True, "This version of Tutel MoE only supports CUDA. More backends will be supported soon."
+
 try:
-    import custom_kernel
+    import tutel_custom_kernel
 except:
     raise Exception("Cannot import JIT optimized kernels. Did you forget to install Custom Kernel Extension?")
 
@@ -38,6 +40,6 @@ class JitKernel:
         os.rename(temp_loc, f'/tmp/{__ctx__}-{key}.cu')
 
         def func(*inputs):
-            custom_kernel.invoke(inputs, __ctx__, key)
+            tutel_custom_kernel.invoke(inputs, __ctx__, key)
         return func
 

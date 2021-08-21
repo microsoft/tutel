@@ -13,14 +13,6 @@ os.chdir('./tutel/custom')
 
 sys.dont_write_bytecode = False
 
-'''
-for tree in ('custom_kernel.egg-info', 'build', 'dist'):
-  try:
-    shutil.rmtree(f'{root_path}/{tree}')
-  except:
-    pass
-'''
-
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
@@ -32,9 +24,9 @@ except:
 cpp_flags = ['-w']
 
 setup(
-    name='custom_kernel',
+    name='tutel_custom_kernel',
     ext_modules=[
-        CUDAExtension('custom_kernel', [
+        CUDAExtension('tutel_custom_kernel', [
             'custom_kernel_cuda.cpp',
         ],
 		extra_compile_args={'cxx': cpp_flags, 'nvcc': cpp_flags},
