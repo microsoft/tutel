@@ -3,7 +3,7 @@
 import os, shutil, sys
 
 if len(sys.argv) <= 1:
-    sys.argv += ['install']
+    sys.argv += ['install', '--user']
 
 root_path = os.path.dirname(sys.argv[0])
 os.chdir(root_path if root_path else '.')
@@ -30,7 +30,7 @@ setup(
             'custom_kernel_cuda.cpp',
         ],
 		extra_compile_args={'cxx': cpp_flags, 'nvcc': cpp_flags},
-        libraries=['cuda'] if not IS_HIP_EXTENSION else [])
+        libraries=[':libcuda.so.1'] if not IS_HIP_EXTENSION else [])
     ],
     cmdclass={
         'build_ext': BuildExtension
@@ -46,7 +46,7 @@ except FileExistsError:
   pass
 
 def user_setup(dir_name, site_name):
-  path = f'{site.USER_SITE}/{site_name}'
+  path = '%s/%s' % (site.USER_SITE, site_name)
   try:
     shutil.rmtree(path)
   except:

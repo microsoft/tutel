@@ -41,7 +41,7 @@ if args.dtype == 'float32':
 elif args.dtype == 'float16':
   torch.set_default_dtype(torch.float16)
 else:
-  raise Exception(f'Unrecognized data type specified: {args.dtype}')
+  raise Exception('Unrecognized data type specified: %s' % args.dtype)
 
 class ExpertModel(torch.nn.Module):
     def __init__(self, model_dim, hidden_size, activation_fn = lambda x: x):
@@ -67,7 +67,7 @@ class ExampleModel(torch.nn.Module):
         local_experts_param_count = sum([torch.numel(param) for name, param in self._moe_layer.get_parameter_iterator(param_type='local_experts')])
         shared_gate_param_count = sum([torch.numel(param) for name, param in self._moe_layer.get_parameter_iterator(param_type='gate')])
 
-        print(f'[Statistics] param count for MoE local_experts = {local_experts_param_count}, param count for MoE gate = {shared_gate_param_count}.\n')
+        print('[Statistics] param count for MoE local_experts = %s, param count for MoE gate = %s.\n' % (local_experts_param_count, shared_gate_param_count))
 
     def forward(self, input):
         result = self._moe_layer(input)
@@ -80,7 +80,8 @@ optimizer = torch.optim.SGD(model.parameters(), lr=1e-5)
 x = torch.randn([batch_size, num_tokens, model_dim], device=device, requires_grad=True)
 y = torch.LongTensor(batch_size).random_(1).to(device)
 
-print(f'[Benchmark] dtype = {args.dtype}, model_dim = {model_dim}, batched_tokens = {batch_size * num_tokens}, hidden_size = {hidden_size}, num_local_experts = {num_local_experts}, topK = {top_value}')
+tuples = (args.dtype, model_dim, batch_size * num_tokens, hidden_size, num_local_experts, top_value)
+print('[Benchmark] dtype = %s, model_dim = %s, batched_tokens = %s, hidden_size = %s, num_local_experts = %s, topK = %s' % tuples)
 
 average_time, num_steps = 0, 20
 
@@ -96,10 +97,10 @@ for i in range(num_steps):
 
   torch.cuda.synchronize()
   t_stop = time.time()
-  print(f'STEP-{i}: DONE, loss = {loss.data}, step_time = {t_stop - t_start} sec.')
+  print('STEP-%s: DONE, loss = %s, step_time = %s sec.' % (i, float(loss.data), t_stop - t_start))
 
   if i + 10 >= num_steps:
       average_time += t_stop - t_start
 
 average_time /= 10
-print(f'\n[Summary] Average synchronized step_time = {average_time} sec.')
+print('\n[Summary] Average synchronized step_time = %s sec.' % average_time)

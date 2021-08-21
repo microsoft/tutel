@@ -30,14 +30,14 @@ class JitKernel:
         JitKernel.__CTX__ += 1
 
         key = dist_rank
-        temp_loc = f'{tempfile.mktemp()}-{__ctx__}.MoE'
+        temp_loc = '%s-%s.MoE' % (tempfile.mktemp(), __ctx__)
         with open(temp_loc, 'w') as fp:
             if IS_HIP_EXTENSION:
               fp.write('#include <hip/hip_runtime.h>\n#include <hip/hip_fp16.h>\n')
             else:
               fp.write('#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n')
             fp.write(source)
-        os.rename(temp_loc, f'/tmp/{__ctx__}-{key}.cu')
+        os.rename(temp_loc, '/tmp/%s-%s.cu' % (__ctx__, key))
 
         def func(*inputs):
             tutel_custom_kernel.invoke(inputs, __ctx__, key)

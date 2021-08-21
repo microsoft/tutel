@@ -219,7 +219,7 @@ class MOELayer(torch.nn.Module):
     def __init__(self, gate_type, model_dim: int, builtin_experts = None, external_experts = None, allow_approximation = False, group: Optional[Any] = None):
         super().__init__()
 
-        assert model_dim % 2 == 0, f"Model_dim ({model_dim}) must be even value, while this Model_dim % 2 > 0."
+        assert model_dim % 2 == 0, "Model_dim (%s) must be even value, while this Model_dim % 2 > 0." % model_dim
 
         self.expert_group = group = group if group is not None else dist.group.WORLD
         self.world_size = get_world_size(self.expert_group)
@@ -232,7 +232,7 @@ class MOELayer(torch.nn.Module):
         elif gate_type == 'Top2Gate':
             gating = Top2Gate
         else:
-            raise Exception(f"Unrecognized gate_type: {gate_type}")
+            raise Exception("Unrecognized gate_type: %s" % gate_type)
 
         if external_experts is not None:
             self.experts = cast(ModuleList, external_experts) if type(external_experts) == ModuleList else ModuleList(external_experts)
@@ -288,7 +288,7 @@ class MOELayer(torch.nn.Module):
 
                 self.experts = ModuleList([FusedExpertsNetwork(model_dim, builtin_experts['hidden_size_per_expert'], self.num_local_experts)])
             else:
-                raise Exception(f'Builtin expert type is not recognized: {network_type}')
+                raise Exception('Builtin expert type is not recognized: %s' % network_type)
 
         else:
             raise Exception("You must specify either `builtin_experts` or `external_experts` for MoE layer.")
@@ -306,7 +306,7 @@ class MOELayer(torch.nn.Module):
         elif param_type == 'local_experts':
             return self.experts.named_parameters()
         else:
-            raise Exception(f"Specified parameter type is not recognized: {param_type}. Valid `param_type` includes: gate, local_experts.")
+            raise Exception("Specified parameter type is not recognized: %s. Valid `param_type` includes: gate, local_experts." % param_type)
 
     def forward(self, input: Tensor, **kwargs: Any):
         if self.testing_skip:
@@ -332,7 +332,7 @@ class MOELayer(torch.nn.Module):
 
             shared_data.ones_s = torch.ones([shared_data.samples, 2], dtype=input.dtype, device=input.device)
         else:
-            assert shared_data.samples == reshaped_input.shape[0], f"Have you changed the batch_size of input? Expect {shared_data.samples}, get {reshaped_input.shape[0]}. Please do padding to keep it."
+            assert shared_data.samples == reshaped_input.shape[0], "Have you changed the batch_size of input? Expect %s, get %s. Please do padding to keep it." % (shared_data.samples, reshaped_input.shape[0])
 
         load_kernels()
 

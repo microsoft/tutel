@@ -7,7 +7,7 @@ def get_gating_kernel(batched_tokens, global_experts):
     if not hasattr(get_gating_kernel, 'func_dict'):
         import os
         if int(os.environ.get('GATE', '1')) == 0 or (batched_tokens & (batched_tokens - 1)) != 0:
-            print('[WARN]', f"`batched_tokens` (= {batched_tokens}) isn't in the form of 2^k, which is outside optimization scope and may result in big performance regression.")
+            print('[WARN]', "`batched_tokens` (= %s) isn't in the form of 2^k, which is outside optimization scope and may result in big performance regression." % batched_tokens)
             def general_gating(indices1_s, locations1_s):
                 # Un-fused Version
                 mask1 = F.one_hot(indices1_s.to(torch.int64), num_classes=global_experts)

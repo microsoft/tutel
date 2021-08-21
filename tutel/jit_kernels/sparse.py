@@ -8,7 +8,7 @@ if s_cfg.message_dtype == torch.float16:
 elif s_cfg.message_dtype == torch.float32:
     str_dtype = 'float'
 else:
-    raise Exception(f'Unrecognized data type: {s_cfg.message_dtype}')
+    raise Exception("Unrecognized data type: %s" % s_cfg.message_dtype)
 
 func_fwd = JitKernel.create('''
 #define capacity (@capacity@)

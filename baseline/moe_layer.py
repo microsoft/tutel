@@ -70,7 +70,7 @@ class MOELayer(Base):
         elif gate_type == 'Top2Gate':
             from .top2gate import Top2Gate as gating
         else:
-            raise Exception(f"Unrecognized gate_type: {gate_type}")
+            raise Exception("Unrecognized gate_type: %s" % gate_type)
 
         self.gate = gating(model_dim=model_dim, num_experts=self.world_size * len(experts), use_fp32=True)
 
@@ -91,7 +91,7 @@ class MOELayer(Base):
         elif param_type == 'local_experts':
             return self.experts.named_parameters()
         else:
-            raise Exception(f"Specified parameter type is not recognized: {param_type}. Valid `param_type` includes: gate, local_experts.")
+            raise Exception("Specified parameter type is not recognized: %s. Valid `param_type` includes: gate, local_experts." % param_type)
 
     def forward(self, *input: Tensor, **kwargs: Any) -> Tensor:
         assert len(input) == 1, "only single input Tensor supported"
@@ -108,14 +108,13 @@ class MOELayer(Base):
             self.expected_bsz = input.shape[0]
 
         expected_bsz = getattr(self, 'expected_bsz')
-        assert expected_bsz > 0 and expected_bsz == input.shape[0], f"Current batch_size {input.shape[0]} is changed or illegal to perform pre-designed load balance, expect: {expected_bsz}"
+        assert expected_bsz > 0 and expected_bsz == input.shape[0], "Current batch_size %s is changed or illegal to perform pre-designed load balance, expect: %s" % (input.shape[0], expected_bsz)
 
         # Note: Padding is not necessary at generation time at present
         # because all DDP workers process the same batch. Also, batch size at generation time
         # can be different from that present in the checkpoint state
         if not self.in_generation and expected_bsz != 0 and input_shape[0] != expected_bsz:
-            print(f"padding batch with unexpected size {input_shape[0]} (expected: {expected_bsz})")
-            assert input_shape[0] < expected_bsz, f"{input_shape[0]} < {expected_bsz}"
+            print("padding batch with unexpected size %s (expected: %s)" % (input_shape[0], expected_bsz))
             padded_input = torch.zeros(
                 (expected_bsz, input_shape[1], input_shape[2]),
                 dtype=input.dtype, layout=input.layout, device=input.device)
