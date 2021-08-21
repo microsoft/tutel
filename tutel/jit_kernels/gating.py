@@ -4,10 +4,7 @@ import torch.nn.functional as F
 from ..jit import JitKernel
 
 def get_gating_kernel(batched_tokens, global_experts):
-    global GATING_FUNC
-    try:
-        return GATING_FUNC
-    except:
+    if not hasattr(get_gating_kernel, 'func_dict'):
         import os
         if int(os.environ.get('GATE', '1')) == 0 or (batched_tokens & (batched_tokens - 1)) != 0:
             print('[WARN]', f"`batched_tokens` (= {batched_tokens}) isn't in the form of 2^k, which is outside optimization scope and may result in big performance regression.")
@@ -23,7 +20,7 @@ def get_gating_kernel(batched_tokens, global_experts):
         thread_num = min(1024, batched_tokens)
         batch_num = global_experts
 
-        GATING_FUNC = JitKernel.create('''
+        get_gating_kernel.func_dict = JitKernel.create('''
 #define tensor_cnt  (@tensor_cnt@)
 #define thread_num  (@thread_num@)
 #define batch_num   (@batch_num@)
@@ -70,5 +67,5 @@ extern "C" __global__ __launch_bounds__(thread_num) void cumsum(int* __restrict_
 }
 '''.replace('@tensor_cnt@', str(tensor_cnt)).replace('@thread_num@', str(thread_num)).replace('@batch_num@', str(batch_num)))
 
-        return GATING_FUNC
+        return get_gating_kernel.func_dict
 
