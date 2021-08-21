@@ -165,6 +165,7 @@ class Top2Gate(torch.nn.Module):
 
 
 class _CustomEncoder(torch.autograd.Function):
+
     @staticmethod
     def forward(ctx: Any, reshaped_input: Tensor):
         ctx.reshaped_input = reshaped_input
@@ -222,6 +223,9 @@ class MOELayer(torch.nn.Module):
 
         self.expert_group = group = group if group is not None else dist.group.WORLD
         self.world_size = get_world_size(self.expert_group)
+
+        import os
+        self.testing_skip = (int(os.environ.get('SKIP_MOE', '0')) != 0)
 
         if gate_type == 'Top1Gate':
             gating = Top1Gate
@@ -305,6 +309,10 @@ class MOELayer(torch.nn.Module):
             raise Exception(f"Specified parameter type is not recognized: {param_type}. Valid `param_type` includes: gate, local_experts.")
 
     def forward(self, input: Tensor, **kwargs: Any):
+        if self.testing_skip:
+            input.l_aux = None
+            return input
+
         original_shape  = input.shape
         if input.shape == 2:
             input = input.view(input.shape[0], 1, input.shape[1])
