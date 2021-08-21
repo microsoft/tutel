@@ -198,7 +198,7 @@ class GatingDecoder(torch.autograd.Function):
 
 class MOELayer(torch.nn.Module):
 
-    def __init__(self, gate_type, model_dim: int, builtin_experts = None, external_experts = None, fp32_gate = False, scan_experts = None, expected_sample_size = None, group: Optional[Any] = None):
+    def __init__(self, gate_type, model_dim: int, builtin_experts = None, external_experts = None, fp32_gate = False, scan_experts = None, group: Optional[Any] = None):
         super().__init__()
 
         assert model_dim % 2 == 0, "Model_dim (%s) must be even value, while this Model_dim mod 2 > 0." % model_dim
@@ -282,13 +282,8 @@ class MOELayer(torch.nn.Module):
                 for n, p in expert.named_parameters():
                     scan_experts(n, p)
 
-        if expected_sample_size is not None:
-            self._create_jit(expected_sample_size)
-
         self.num_global_experts = self.world_size * self.num_local_experts
-        self.params_dtype = next(iter(self.experts.parameters())).dtype
         self.model_dim = model_dim
-        self.aligned_dim = self.model_dim // (2 if self.params_dtype == torch.float16 else 1)
         self.gate = gating(model_dim=model_dim, num_global_experts=self.num_global_experts, use_fp32=fp32_gate)
 
     def get_parameter_iterator(self, param_type):
@@ -306,13 +301,14 @@ class MOELayer(torch.nn.Module):
 
         original_shape, original_dtype  = input.shape, input.dtype
         assert len(input.shape) >= 2, "Input data must be at least 2D tensor: (s)amples, .., (m)odel_dim"
-        reshaped_input = input.reshape(-1, input.shape[-1]).to(self.params_dtype)
+        reshaped_input = input.reshape(-1, input.shape[-1])
 
         if not hasattr(self, 'expected_sample_size'):
             self._create_jit(reshaped_input.size(0))
         elif self.expected_sample_size != reshaped_input.size(0):
             raise Exception('MoE expects to keep working on sample size = %s, while receiving sample size = %s' % (self.expected_sample_size, reshaped_input.size(0)))
 
+        reshaped_input = reshaped_input.to(self.params_dtype)
         l_aux, gates_, self.indices_, self.locations_ = self.gate(reshaped_input)
 
         S, M, E, C = self.expected_sample_size, self.model_dim, self.num_global_experts, self.capacity
@@ -345,8 +341,10 @@ class MOELayer(torch.nn.Module):
         return result_output
 
     def _create_jit(self, expected_sample_size):
+        self.params_dtype = next(iter(self.experts.parameters())).dtype
         self.expected_sample_size = expected_sample_size
         self.capacity = self.gate.capacity(expected_sample_size)
+        self.aligned_dim = self.model_dim // (2 if self.params_dtype == torch.float16 else 1)
 
         from .jit_kernels import sparse as jit_kernel
         self.func_fwd = jit_kernel.create_forward(expected_sample_size, self.num_global_experts, self.capacity, self.aligned_dim, self.params_dtype)
