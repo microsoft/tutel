@@ -38,8 +38,8 @@ static void invoke(const std::vector<torch::Tensor> &ts, int _key) {
     CHECK_EQ(code_size, fread((void*)code.data(), 1, code_size, fp));
     fclose(fp);
 
-    int dev = 0;
-    CHECK_EQ(0, cudaGetDevice(&dev));
+    int dev = key_int;
+    CHECK_EQ(0, cudaSetDevice(dev));
 
 #if !defined(__HIP_PLATFORM_HCC__)
     std::string cc = "30";
