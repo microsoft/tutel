@@ -89,8 +89,6 @@ class Top1Gate(torch.nn.Module):
             number of experts in model
     """
 
-    wg: torch.nn.Linear
-
     def __init__(
         self, 
         model_dim: int, 

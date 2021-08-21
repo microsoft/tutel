@@ -6,8 +6,6 @@ import torch.distributed as dist
 from torch.nn import ModuleList
 import torch.nn.functional as F
 
-def shared_data():
-    pass
 
 def get_world_size(group):
     try:
@@ -21,18 +19,8 @@ def get_world_rank(group):
     except:
         return 0
 
-def load_kernels():
-    global JitKernels
-    try:
-        return JitKernels
-    except:
-      from .jit_kernels import sparse as jit_kernel
-      JitKernels = jit_kernel
-      return JitKernels
 
-
-class _AllToAll(torch.autograd.Function):
-
+class AllToAll(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor):
         ctx.group = group
@@ -48,35 +36,38 @@ class _AllToAll(torch.autograd.Function):
     def backward(ctx: Any, grad_output: Tensor):
         if ctx.world_size <= 1:
             return (None, grad_output)
-        return (None, _AllToAll.apply(ctx.group, grad_output))
+        return (None, AllToAll.apply(ctx.group, grad_output))
 
 
 class Top1Gate(torch.nn.Module):
 
     def __init__(
         self,
-        model_dim: int,
-        num_experts: int,
+        model_dim,
+        num_global_experts,
         capacity_factor=1.0,
         use_fp32=False,
     ):
         super().__init__()
-        self.wg = torch.nn.Linear(model_dim, num_experts, bias=False)
+        self.wg = torch.nn.Linear(model_dim, num_global_experts, bias=False)
         self.capacity_factor = capacity_factor
         self.use_fp32 = use_fp32
+        self.num_global_experts = num_global_experts
+
+    def capacity(self, expected_sample_size):
+        if not hasattr(self, 'capacity_int'):
+            self.capacity_int = int(self.capacity_factor * ((expected_sample_size + self.num_global_experts - 1) // self.num_global_experts))
+        return self.capacity_int
 
     def forward(self, input: torch.Tensor):
         logits = self.wg(input)
-        num_tokens, num_experts = logits.shape[0], logits.shape[1]
 
         if not hasattr(self, 'gating_kernel'):
             from .jit_kernels.gating import get_gating_kernel
-            self.gating_kernel = get_gating_kernel(num_tokens, num_experts)
-
-        capacity = int(self.capacity_factor * ((num_tokens + num_experts - 1) // num_experts))
+            self.gating_kernel = get_gating_kernel(logits.size(0), self.num_global_experts)
 
         indices1_s = torch.argmax(logits, dim=1)
-        mask1 = F.one_hot(indices1_s, num_classes=num_experts)
+        mask1 = F.one_hot(indices1_s, num_classes=self.num_global_experts)
 
         gates = F.softmax(logits, dim=1)
         gates1_s = (gates * mask1).sum(dim=1)
@@ -87,42 +78,46 @@ class Top1Gate(torch.nn.Module):
         if gates.dtype == torch.float32 or self.use_fp32:
             me = torch.sum(gates.float(), dim=0)
             ce = torch.sum(mask1.to(me.dtype), dim=0)
-            l_aux = torch.sum(me * ce) * (num_experts / (gates.size(0) * gates.size(0)))
+            l_aux = torch.sum(me * ce) * (self.num_global_experts / (gates.size(0) * gates.size(0)))
         else:
             # Avoid data overflow in float16 mode
             me = torch.mean(gates, dim=0)
             ce = torch.mean(mask1.to(gates.dtype), dim=0)
-            l_aux = torch.sum(me * ce) * num_experts
+            l_aux = torch.sum(me * ce) * self.num_global_experts
 
-        return l_aux, capacity, num_experts, [indices1_s.to(torch.int32), ], [locations1_s.to(torch.int32), ], [gates1_s, ]
+        return l_aux, [gates1_s, ], [indices1_s.to(torch.int32), ], [locations1_s.to(torch.int32), ]
 
 
 class Top2Gate(torch.nn.Module):
  
     def __init__(
         self,
-        model_dim: int,
-        num_experts: int,
+        model_dim,
+        num_global_experts,
         capacity_factor=1.0,
         use_fp32=False,
     ):
         super().__init__()
-        self.wg = torch.nn.Linear(model_dim, num_experts, bias=False)
+        self.wg = torch.nn.Linear(model_dim, num_global_experts, bias=False)
         self.capacity_factor = capacity_factor
         self.use_fp32 = use_fp32
+        self.num_global_experts = num_global_experts
+
+    def capacity(self, expected_sample_size):
+        if not hasattr(self, 'capacity_int'):
+            self.capacity_int = 2 * int(self.capacity_factor * ((expected_sample_size + self.num_global_experts - 1) // self.num_global_experts))
+        return self.capacity_int
 
     def forward(self, input: torch.Tensor):
         logits = self.wg(input)
-        num_tokens, num_experts = logits.shape[0], logits.shape[1]
-
-        capacity = 2 * int(self.capacity_factor * ((num_tokens + num_experts - 1) // num_experts))
+        num_samples = logits.size(0)
 
         top2_indices = torch.topk(logits, 2, dim=1).indices
         indices1_s, indices2_s = top2_indices.chunk(2, dim=1)
         indices1_s, indices2_s = indices1_s.view(-1), indices2_s.view(-1)
 
-        mask1 = F.one_hot(indices1_s, num_classes=num_experts)
-        mask2 = F.one_hot(indices2_s, num_classes=num_experts)
+        mask1 = F.one_hot(indices1_s, num_classes=self.num_global_experts)
+        mask2 = F.one_hot(indices2_s, num_classes=self.num_global_experts)
 
         gates = F.softmax(logits, dim=1)
         gates1_s = (gates * mask1).sum(dim=1)
@@ -132,90 +127,78 @@ class Top2Gate(torch.nn.Module):
         locations2 = torch.cumsum(mask2, dim=0) - 1
         locations2 += torch.sum(mask1, dim=0, keepdim=True)
 
-        mask1 = mask1 * torch.lt(locations1, capacity)
-        mask2 = mask2 * torch.lt(locations2, capacity)
+        mask1 = mask1 * torch.lt(locations1, self.capacity(num_samples))
+        mask2 = mask2 * torch.lt(locations2, self.capacity(num_samples))
 
         locations1_s = torch.sum(locations1 * mask1, dim=1)
         locations2_s = torch.sum(locations2 * mask2, dim=1)
-
-        '''
-        if not hasattr(self, 'gating_kernel'):
-            from .jit_kernels.gating import get_gating_kernel
-            self.gating_kernel = get_gating_kernel(num_tokens, num_experts)
-
-        locations1_s = torch.empty([num_tokens, ], dtype=torch.int32, device=logits.device).contiguous()
-        self.gating_kernel(indices1_s.contiguous(), locations1_s)
-        locations2_s = torch.empty([num_tokens, ], dtype=torch.int32, device=logits.device).contiguous()
-        self.gating_kernel(indices2_s.contiguous(), locations2_s)
-        '''
 
         # Compute l_aux
         if gates.dtype == torch.float32 or self.use_fp32:
             me = torch.sum(gates.float(), dim=0)
             ce = torch.sum(mask1.to(me.dtype), dim=0)
-            l_aux = torch.sum(me * ce) * (num_experts / (gates.size(0) * gates.size(0)))
+            l_aux = torch.sum(me * ce) * (self.num_global_experts / (gates.size(0) * gates.size(0)))
         else:
             # Avoid data overflow in float16 mode
             me = torch.mean(gates, dim=0)
             ce = torch.mean(mask1.to(gates.dtype), dim=0)
-            l_aux = torch.sum(me * ce) * num_experts
+            l_aux = torch.sum(me * ce) * self.num_global_experts
 
-        return l_aux, capacity, num_experts, [indices1_s.to(torch.int32), indices2_s.to(torch.int32)], [locations1_s.to(torch.int32), locations2_s.to(torch.int32)], [gates1_s, gates2_s]
+        return l_aux, [gates1_s, gates2_s], [indices1_s.to(torch.int32), indices2_s.to(torch.int32)], [locations1_s.to(torch.int32), locations2_s.to(torch.int32)]
 
 
-class _CustomEncoder(torch.autograd.Function):
-
+class GatingEncoder(torch.autograd.Function):
     @staticmethod
-    def forward(ctx: Any, reshaped_input: Tensor):
+    def forward(ctx: Any, config: Any, reshaped_input: Tensor):
         ctx.reshaped_input = reshaped_input
-        sc_size = shared_data.num_experts * shared_data.capacity
+        ctx.config = config
 
-        dispatched_input = torch.zeros([sc_size, reshaped_input.size(1)], dtype=reshaped_input.dtype, device=reshaped_input.device)
-        for i in range(len(shared_data.indices_)):
-          JitKernels.func_fwd(shared_data.ones_s, shared_data.indices_[i], shared_data.locations_[i], reshaped_input, dispatched_input)
+        dispatched_input = torch.zeros([ctx.config.num_global_experts * ctx.config.capacity, ctx.config.model_dim], dtype=reshaped_input.dtype, device=reshaped_input.device)
+        for i in range(len(ctx.config.indices_)):
+          ctx.config.func_fwd(ctx.config.ones_helper, ctx.config.indices_[i], ctx.config.locations_[i], reshaped_input, dispatched_input)
         return dispatched_input
 
     @staticmethod
     def backward(ctx: Any, dispatched_input: Tensor):
         last_result = None
-        for i in range(len(shared_data.indices_)):
+        for i in range(len(ctx.config.indices_)):
           grad_data = torch.empty(ctx.reshaped_input.shape, dtype=dispatched_input.dtype, device=dispatched_input.device)
-          JitKernels.func_bwd_data(shared_data.ones_s, dispatched_input, shared_data.indices_[i], shared_data.locations_[i], grad_data)
+          ctx.config.func_bwd_data(ctx.config.ones_helper, dispatched_input, ctx.config.indices_[i], ctx.config.locations_[i], grad_data)
           last_result = grad_data if last_result is None else last_result + grad_data
-        return last_result
+        return (None, last_result)
 
 
-class _CustomDecoder(torch.autograd.Function):
-
+class GatingDecoder(torch.autograd.Function):
     @staticmethod
-    def forward(ctx: Any, expert_output: Tensor, *gates_: Tensor):
+    def forward(ctx: Any, config: Any, expert_output: Tensor, *gates_: Tensor):
         ctx.expert_output = expert_output
         ctx.gates_h2 = [x.view(-1, 1).repeat(1, 2) if x.dtype == torch.float16 else x for x in gates_]
+        ctx.config = config
 
         last_result = None
-        for i in range(len(shared_data.indices_)):
-          single_output = torch.empty([shared_data.samples, expert_output.size(1)], dtype=expert_output.dtype, device=expert_output.device)
-          JitKernels.func_bwd_data(ctx.gates_h2[i], expert_output, shared_data.indices_[i], shared_data.locations_[i], single_output)
+        for i in range(len(config.indices_)):
+          single_output = torch.empty([config.expected_sample_size, config.model_dim], dtype=expert_output.dtype, device=expert_output.device)
+          config.func_bwd_data(ctx.gates_h2[i], expert_output, config.indices_[i], config.locations_[i], single_output)
           last_result = single_output if last_result is None else last_result + single_output
         return last_result
-        
+
     @staticmethod
     def backward(ctx: Any, combined_output: Tensor):
         grad_expert_output = torch.zeros(ctx.expert_output.shape, dtype=combined_output.dtype, device=combined_output.device)
-        for i in range(len(shared_data.indices_)):
-          JitKernels.func_fwd(ctx.gates_h2[i], shared_data.indices_[i], shared_data.locations_[i], combined_output, grad_expert_output)
+        for i in range(len(ctx.config.indices_)):
+          ctx.config.func_fwd(ctx.gates_h2[i], ctx.config.indices_[i], ctx.config.locations_[i], combined_output, grad_expert_output)
 
         grad_gates = []
-        for i in range(len(shared_data.indices_)):
-          grad_gates1_s = torch.empty([shared_data.samples,], dtype=combined_output.dtype, device=combined_output.device)
-          JitKernels.func_bwd_gate(ctx.expert_output, shared_data.indices_[i], shared_data.locations_[i], combined_output, grad_gates1_s)
+        for i in range(len(ctx.config.indices_)):
+          grad_gates1_s = torch.empty([ctx.config.expected_sample_size,], dtype=combined_output.dtype, device=combined_output.device)
+          ctx.config.func_bwd_gate(ctx.expert_output, ctx.config.indices_[i], ctx.config.locations_[i], combined_output, grad_gates1_s)
           grad_gates.append(grad_gates1_s)
-        return (grad_expert_output, *grad_gates)
+        return (None, grad_expert_output, *grad_gates)
 
 
 class MOELayer(torch.nn.Module):
 
-    def __init__(self, gate_type, model_dim: int, builtin_experts = None, external_experts = None, fp32_gate = False, scan_experts = None, group: Optional[Any] = None):
+    def __init__(self, gate_type, model_dim: int, builtin_experts = None, external_experts = None, fp32_gate = False, scan_experts = None, expected_sample_size = None, group: Optional[Any] = None):
         super().__init__()
 
         assert model_dim % 2 == 0, "Model_dim (%s) must be even value, while this Model_dim mod 2 > 0." % model_dim
@@ -223,7 +206,7 @@ class MOELayer(torch.nn.Module):
         self.world_size = get_world_size(self.expert_group)
 
         import os
-        self.testing_skip = (int(os.environ.get('SKIP_MOE', '0')) != 0)
+        self.skip_moe = (int(os.environ.get('SKIP_MOE', '0')) != 0)
 
         if gate_type == 'Top1Gate':
             gating = Top1Gate
@@ -253,6 +236,7 @@ class MOELayer(torch.nn.Module):
                 class FusedExpertsNetwork(torch.nn.Module):
                     def __init__(self, model_dim, hidden_size, local_experts):
                         super().__init__()
+                        self.skip_moe = (int(os.environ.get('SKIP_EXPERT', '0')) != 0)
 
                         fc1_weight = torch.empty(1, local_experts, model_dim, hidden_size)
                         fc2_weight = torch.empty(1, local_experts, hidden_size, model_dim)
@@ -271,6 +255,8 @@ class MOELayer(torch.nn.Module):
                         self.register_parameter(name='fc2_bias', param=torch.nn.Parameter(fc2_bias))
 
                     def forward(self, x):
+                        if self.skip_moe:
+                            return x
                         x = torch.matmul(x, self.fc1_weight) + self.fc1_bias
                         x = activation_fn(x)
                         x = torch.matmul(x, self.fc2_weight) + self.fc2_bias
@@ -296,8 +282,14 @@ class MOELayer(torch.nn.Module):
                 for n, p in expert.named_parameters():
                     scan_experts(n, p)
 
-        self.gate = gating(model_dim=model_dim, num_experts=self.world_size * self.num_local_experts, use_fp32=fp32_gate)
-        self.in_generation = False
+        if expected_sample_size is not None:
+            self._create_jit(expected_sample_size)
+
+        self.num_global_experts = self.world_size * self.num_local_experts
+        self.params_dtype = next(iter(self.experts.parameters())).dtype
+        self.model_dim = model_dim
+        self.aligned_dim = self.model_dim // (2 if self.params_dtype == torch.float16 else 1)
+        self.gate = gating(model_dim=model_dim, num_global_experts=self.num_global_experts, use_fp32=fp32_gate)
 
     def get_parameter_iterator(self, param_type):
         if param_type == 'gate':
@@ -308,38 +300,28 @@ class MOELayer(torch.nn.Module):
             raise Exception("Specified parameter type is not recognized: %s. Valid `param_type` includes: gate, local_experts." % param_type)
 
     def forward(self, input: Tensor, **kwargs: Any):
-        if self.testing_skip:
+        if self.skip_moe:
             input.l_aux = None
             return input
 
-        original_shape  = input.shape
-        if input.shape == 2:
-            input = input.view(input.shape[0], 1, input.shape[1])
-        assert len(input.shape) == 3, "input Tensor must be 2D/3D format: (s)equence, (t)oken [Optional], (m)odel"
-        reshaped_input = input.reshape(-1, input.shape[2])
+        original_shape, original_dtype  = input.shape, input.dtype
+        assert len(input.shape) >= 2, "Input data must be at least 2D tensor: (s)amples, .., (m)odel_dim"
+        reshaped_input = input.reshape(-1, input.shape[-1]).to(self.params_dtype)
 
-        l_aux, capacity, num_experts, indices_, locations_, gates_ = self.gate(reshaped_input)
-        shared_data.indices_, shared_data.locations_ = indices_, locations_
+        if not hasattr(self, 'expected_sample_size'):
+            self._create_jit(reshaped_input.size(0))
+        elif self.expected_sample_size != reshaped_input.size(0):
+            raise Exception('MoE expects to keep working on sample size = %s, while receiving sample size = %s' % (self.expected_sample_size, reshaped_input.size(0)))
 
-        if not hasattr(shared_data, 'samples'):
-            shared_data.samples = reshaped_input.shape[0]
-            shared_data.model_dim = reshaped_input.shape[1]
-            shared_data.capacity = capacity
-            shared_data.num_experts = num_experts
-            shared_data.message_dtype = input.dtype
-            shared_data.aligned_dim =  shared_data.model_dim // (2 if shared_data.message_dtype == torch.float16 else 1)
+        l_aux, gates_, self.indices_, self.locations_ = self.gate(reshaped_input)
 
-            shared_data.ones_s = torch.ones([shared_data.samples, 2], dtype=input.dtype, device=input.device)
-        else:
-            assert shared_data.samples == reshaped_input.shape[0], "Have you changed the batch_size of input? Expect %s, get %s. Please do padding to keep it." % (shared_data.samples, reshaped_input.shape[0])
+        S, M, E, C = self.expected_sample_size, self.model_dim, self.num_global_experts, self.capacity
 
-        load_kernels()
+        if not hasattr(self, 'ones_helper'):
+            self.ones_helper = torch.ones([self.expected_sample_size, 2], dtype=reshaped_input.dtype, device=reshaped_input.device)
 
-        S, M = reshaped_input.size(0), reshaped_input.size(1) 
-        E, C = shared_data.num_experts, shared_data.capacity
-
-        dispatched_input = _CustomEncoder.apply(reshaped_input)
-        dispatched_input = _AllToAll.apply(self.expert_group, dispatched_input)
+        dispatched_input = GatingEncoder.apply(self, reshaped_input)
+        dispatched_input = AllToAll.apply(self.expert_group, dispatched_input)
         
         # Re-shape after all-to-all: ecm -> gecm
         dispatched_input = dispatched_input.reshape(self.world_size, self.num_local_experts, -1, M)
@@ -351,19 +333,22 @@ class MOELayer(torch.nn.Module):
             expert_outputs = [expert(chunk) for chunk, expert in zip(chunks, self.experts)]
             expert_output = torch.cat(expert_outputs, dim=1)
 
-        expert_output = _AllToAll.apply(self.expert_group, expert_output)
+        expert_output = AllToAll.apply(self.expert_group, expert_output)
 
-        # Re-shape back: gecm -> ecm
         expert_output = expert_output.reshape(self.world_size * self.num_local_experts, -1, M)
 
-        # einsum("sec,ecm->sm")
-        combined_output = _CustomDecoder.apply(expert_output.view(E*C, M), *gates_)
+        result_output = GatingDecoder.apply(self, expert_output.view(E * C, M), *gates_)
         
-        combined_output = combined_output.reshape(input.shape)
-        combined_output = combined_output[:input.shape[0], :, :]
-        combined_output = combined_output.view(original_shape)
-        combined_output.l_aux = l_aux
-        return combined_output
+        result_output = result_output.view(input.shape)[:input.shape[0], :]
+        result_output = result_output.view(original_shape).to(original_dtype)
+        result_output.l_aux = l_aux
+        return result_output
 
-    def prepare_for_inference_(self):
-        self.in_generation = True
+    def _create_jit(self, expected_sample_size):
+        self.expected_sample_size = expected_sample_size
+        self.capacity = self.gate.capacity(expected_sample_size)
+
+        from .jit_kernels import sparse as jit_kernel
+        self.func_fwd = jit_kernel.create_forward(expected_sample_size, self.num_global_experts, self.capacity, self.aligned_dim, self.params_dtype)
+        self.func_bwd_data = jit_kernel.create_backward_data(expected_sample_size, self.num_global_experts, self.capacity, self.aligned_dim, self.params_dtype)
+        self.func_bwd_gate = jit_kernel.create_backward_gate(expected_sample_size, self.num_global_experts, self.capacity, self.aligned_dim, self.params_dtype)

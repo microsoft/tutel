@@ -22,7 +22,7 @@ except:
 
 class JitKernel:
     @staticmethod
-    def create(source):
+    def create_raw(source):
         if not hasattr(JitKernel, '__CTX__'):
             torch.cuda.init()
             JitKernel.__CTX__ = 0
@@ -43,3 +43,8 @@ class JitKernel:
             tutel_custom_kernel.invoke(inputs, __ctx__, key)
         return func
 
+    @staticmethod
+    def generate_kernel(keyword_dict, template):
+      for key in keyword_dict:
+        template = template.replace('@%s@' % key, str(keyword_dict[key]))
+      return JitKernel.create_raw(template)
