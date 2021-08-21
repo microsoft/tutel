@@ -95,7 +95,7 @@ class Top1Gate(torch.nn.Module):
             ce = torch.mean(mask1.to(gates.dtype), dim=0)
             l_aux = torch.sum(me * ce) * num_experts
 
-        return l_aux, indices1_s.to(torch.int32), capacity, locations1_s.to(torch.int32), gates1_s, num_experts
+        return l_aux, capacity, num_experts, [indices1_s.to(torch.int32), ], [locations1_s.to(torch.int32), ], [gates1_s, ]
 
 
 class Top2Gate(torch.nn.Module):
@@ -116,27 +116,39 @@ class Top2Gate(torch.nn.Module):
         logits = self.wg(input)
         num_tokens, num_experts = logits.shape[0], logits.shape[1]
 
+        capacity = 2 * int(self.capacity_factor * ((num_tokens + num_experts - 1) // num_experts))
+
+        top2_indices = torch.topk(logits, 2, dim=1).indices
+        indices1_s, indices2_s = top2_indices.chunk(2, dim=1)
+        indices1_s, indices2_s = indices1_s.view(-1), indices2_s.view(-1)
+
+        mask1 = F.one_hot(indices1_s, num_classes=num_experts)
+        mask2 = F.one_hot(indices2_s, num_classes=num_experts)
+
+        gates = F.softmax(logits, dim=1)
+        gates1_s = (gates * mask1).sum(dim=1)
+        gates2_s = (gates * mask2).sum(dim=1)
+
+        locations1 = torch.cumsum(mask1, dim=0) - 1
+        locations2 = torch.cumsum(mask2, dim=0) - 1
+        locations2 += torch.sum(mask1, dim=0, keepdim=True)
+
+        mask1 = mask1 * torch.lt(locations1, capacity)
+        mask2 = mask2 * torch.lt(locations2, capacity)
+
+        locations1_s = torch.sum(locations1 * mask1, dim=1)
+        locations2_s = torch.sum(locations2 * mask2, dim=1)
+
+        '''
         if not hasattr(self, 'gating_kernel'):
             from .jit_kernels.gating import get_gating_kernel
             self.gating_kernel = get_gating_kernel(num_tokens, num_experts)
-
-        capacity = 2 * int(self.capacity_factor * ((num_tokens + num_experts - 1) // num_experts))
-
-        top2_indices = torch.topk(logits, 2, dim=1).indices.to(torch.int32)
-        indices1_s, indices2_s = top2_indices.chunk(2, dim=1)
 
         locations1_s = torch.empty([num_tokens, ], dtype=torch.int32, device=logits.device).contiguous()
         self.gating_kernel(indices1_s.contiguous(), locations1_s)
         locations2_s = torch.empty([num_tokens, ], dtype=torch.int32, device=logits.device).contiguous()
         self.gating_kernel(indices2_s.contiguous(), locations2_s)
-        print(locations2_s)
-        exit(0)
-
-        indices1_s = torch.argmax(logits, dim=1)
-        mask1 = F.one_hot(indices1_s, num_classes=num_experts)
-
-        gates = F.softmax(logits, dim=1)
-        gates1_s = (gates * mask1).sum(dim=1)
+        '''
 
         # Compute l_aux
         if gates.dtype == torch.float32:
@@ -149,7 +161,7 @@ class Top2Gate(torch.nn.Module):
             ce = torch.mean(mask1.to(gates.dtype), dim=0)
             l_aux = torch.sum(me * ce) * num_experts
 
-        return l_aux, indices1_s.to(torch.int32), capacity, locations1_s.to(torch.int32), gates1_s, num_experts
+        return l_aux, capacity, num_experts, [indices1_s.to(torch.int32), indices2_s.to(torch.int32)], [locations1_s.to(torch.int32), locations2_s.to(torch.int32)], [gates1_s, gates2_s]
 
 
 class _CustomEncoder(torch.autograd.Function):
@@ -159,35 +171,46 @@ class _CustomEncoder(torch.autograd.Function):
         sc_size = shared_data.num_experts * shared_data.capacity
 
         dispatched_input = torch.zeros([sc_size, reshaped_input.size(1)], dtype=reshaped_input.dtype, device=reshaped_input.device)
-        JitKernels.func_fwd(shared_data.ones_s, shared_data.indices1_s, shared_data.locations1_s, reshaped_input, dispatched_input)
+        for i in range(len(shared_data.indices_)):
+          JitKernels.func_fwd(shared_data.ones_s, shared_data.indices_[i], shared_data.locations_[i], reshaped_input, dispatched_input)
         return dispatched_input
 
     @staticmethod
     def backward(ctx: Any, dispatched_input: Tensor):
-        grad_reshaped_input = torch.empty(ctx.reshaped_input.shape, dtype=dispatched_input.dtype, device=dispatched_input.device)
-        JitKernels.func_bwd_data(shared_data.ones_s, dispatched_input, shared_data.indices1_s, shared_data.locations1_s, grad_reshaped_input)
-        return grad_reshaped_input
+        last_result = None
+        for i in range(len(shared_data.indices_)):
+          grad_data = torch.empty(ctx.reshaped_input.shape, dtype=dispatched_input.dtype, device=dispatched_input.device)
+          JitKernels.func_bwd_data(shared_data.ones_s, dispatched_input, shared_data.indices_[i], shared_data.locations_[i], grad_data)
+          last_result = grad_data if last_result is None else last_result + grad_data
+        return last_result
 
 
 class _CustomDecoder(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx: Any, gates1_s: Tensor, expert_output: Tensor):
+    def forward(ctx: Any, expert_output: Tensor, *gates_: Tensor):
         ctx.expert_output = expert_output
-        ctx.gates1_s_h2 = gates1_s.view(-1, 1).repeat(1, 2) if gates1_s.dtype == torch.float16 else gates1_s
+        ctx.gates_h2 = [x.view(-1, 1).repeat(1, 2) if x.dtype == torch.float16 else x for x in gates_]
 
-        combined_output = torch.empty([gates1_s.size(0), expert_output.size(1)], dtype=gates1_s.dtype, device=gates1_s.device)
-        JitKernels.func_bwd_data(ctx.gates1_s_h2, expert_output, shared_data.indices1_s, shared_data.locations1_s, combined_output)
-        return combined_output
+        last_result = None
+        for i in range(len(shared_data.indices_)):
+          single_output = torch.empty([shared_data.samples, expert_output.size(1)], dtype=expert_output.dtype, device=expert_output.device)
+          JitKernels.func_bwd_data(ctx.gates_h2[i], expert_output, shared_data.indices_[i], shared_data.locations_[i], single_output)
+          last_result = single_output if last_result is None else last_result + single_output
+        return last_result
         
     @staticmethod
     def backward(ctx: Any, combined_output: Tensor):
-        grad_gates1_s = torch.empty(shared_data.indices1_s.shape, dtype=combined_output.dtype, device=combined_output.device)
-        JitKernels.func_bwd_gate(ctx.expert_output, shared_data.indices1_s, shared_data.locations1_s, combined_output, grad_gates1_s)
-
         grad_expert_output = torch.zeros(ctx.expert_output.shape, dtype=combined_output.dtype, device=combined_output.device)
-        JitKernels.func_fwd(ctx.gates1_s_h2, shared_data.indices1_s, shared_data.locations1_s, combined_output, grad_expert_output)
-        return (grad_gates1_s, grad_expert_output)
+        for i in range(len(shared_data.indices_)):
+          JitKernels.func_fwd(ctx.gates_h2[i], shared_data.indices_[i], shared_data.locations_[i], combined_output, grad_expert_output)
+
+        grad_gates = []
+        for i in range(len(shared_data.indices_)):
+          grad_gates1_s = torch.empty([shared_data.samples,], dtype=combined_output.dtype, device=combined_output.device)
+          JitKernels.func_bwd_gate(ctx.expert_output, shared_data.indices_[i], shared_data.locations_[i], combined_output, grad_gates1_s)
+          grad_gates.append(grad_gates1_s)
+        return (grad_expert_output, *grad_gates)
 
 
 class MOELayer(torch.nn.Module):
@@ -288,17 +311,20 @@ class MOELayer(torch.nn.Module):
         assert len(input.shape) == 3, "input Tensor must be 2D/3D format: (s)equence, (t)oken [Optional], (m)odel"
         reshaped_input = input.reshape(-1, input.shape[2])
 
-        l_aux, shared_data.indices1_s, shared_data.capacity, shared_data.locations1_s, shared_data.gates1_s, shared_data.num_experts = self.gate(reshaped_input)
+        l_aux, capacity, num_experts, indices_, locations_, gates_ = self.gate(reshaped_input)
+        shared_data.indices_, shared_data.locations_ = indices_, locations_
 
         if not hasattr(shared_data, 'samples'):
-            shared_data.samples = shared_data.locations1_s.shape[0]
+            shared_data.samples = reshaped_input.shape[0]
             shared_data.model_dim = reshaped_input.shape[1]
+            shared_data.capacity = capacity
+            shared_data.num_experts = num_experts
             shared_data.message_dtype = input.dtype
             shared_data.aligned_dim =  shared_data.model_dim // (2 if shared_data.message_dtype == torch.float16 else 1)
 
-            shared_data.ones_s = torch.ones([reshaped_input.size(0), 2], dtype=input.dtype, device=input.device)
+            shared_data.ones_s = torch.ones([shared_data.samples, 2], dtype=input.dtype, device=input.device)
         else:
-            assert shared_data.samples == shared_data.locations1_s.shape[0], f"Have you changed the batch_size of input? Expect {shared_data.samples}, get {shared_data.locations1_s.shape[0]}. Please do padding to keep it."
+            assert shared_data.samples == reshaped_input.shape[0], f"Have you changed the batch_size of input? Expect {shared_data.samples}, get {reshaped_input.shape[0]}. Please do padding to keep it."
 
         load_kernels()
 
@@ -324,7 +350,7 @@ class MOELayer(torch.nn.Module):
         expert_output = expert_output.reshape(self.world_size * self.num_local_experts, -1, M)
 
         # einsum("sec,ecm->sm")
-        combined_output = _CustomDecoder.apply(shared_data.gates1_s, expert_output.view(E*C, M))
+        combined_output = _CustomDecoder.apply(expert_output.view(E*C, M), *gates_)
         
         combined_output = combined_output.reshape(input.shape)
         combined_output = combined_output[:input.shape[0], :, :]
