@@ -58,12 +58,12 @@ class Top1Gate(torch.nn.Module):
         model_dim: int,
         num_experts: int,
         capacity_factor=1.0,
-        allow_approximation=False,
+        use_fp32=False,
     ):
         super().__init__()
         self.wg = torch.nn.Linear(model_dim, num_experts, bias=False)
         self.capacity_factor = capacity_factor
-        self.allow_approximation = allow_approximation
+        self.use_fp32 = use_fp32
 
     def forward(self, input: torch.Tensor):
         logits = self.wg(input)
@@ -104,12 +104,12 @@ class Top2Gate(torch.nn.Module):
         model_dim: int,
         num_experts: int,
         capacity_factor=1.0,
-        allow_approximation=False,
+        use_fp32=False,
     ):
         super().__init__()
         self.wg = torch.nn.Linear(model_dim, num_experts, bias=False)
         self.capacity_factor = capacity_factor
-        self.allow_approximation = allow_approximation
+        self.use_fp32 = use_fp32
 
     def forward(self, input: torch.Tensor):
         logits = self.wg(input)
@@ -215,7 +215,7 @@ class _CustomDecoder(torch.autograd.Function):
 
 class MOELayer(torch.nn.Module):
 
-    def __init__(self, gate_type, model_dim: int, builtin_experts = None, external_experts = None, allow_approximation = False, group: Optional[Any] = None):
+    def __init__(self, gate_type, model_dim: int, builtin_experts = None, external_experts = None, fp32_gate = False, group: Optional[Any] = None):
         super().__init__()
 
         assert model_dim % 2 == 0, "Model_dim (%s) must be even value, while this Model_dim % 2 > 0." % model_dim
@@ -296,7 +296,7 @@ class MOELayer(torch.nn.Module):
             for p in expert.parameters():
                 p.expert = True
 
-        self.gate = gating(model_dim=model_dim, num_experts=self.world_size * self.num_local_experts, allow_approximation=allow_approximation)
+        self.gate = gating(model_dim=model_dim, num_experts=self.world_size * self.num_local_experts, use_fp32=fp32_gate)
         self.in_generation = False
 
     def get_parameter_iterator(self, param_type):

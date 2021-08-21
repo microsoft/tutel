@@ -20,6 +20,7 @@ parser.add_argument('--model-dim', type=int, default=2048)
 parser.add_argument('--hidden-size', type=int, default=1024)
 parser.add_argument('--num-local-experts', type=int, default=2)
 parser.add_argument('--dtype', type=str, default='float32')
+parser.add_argument('--fp32-gate', type=bool, default=False)
 parser.add_argument('--top', type=int, default=2)
 args = parser.parse_args()
 
@@ -61,7 +62,7 @@ class ExampleModel(torch.nn.Module):
         super().__init__()
         gate_type = 'Top1Gate' if top_value == 1 else 'Top2Gate'
 
-        self._moe_layer = MOELayer(gate_type, model_dim, external_experts=[ExpertModel(model_dim, hidden_size, activation_fn) for i in range(num_local_experts)]).to(device)
+        self._moe_layer = MOELayer(gate_type, model_dim, external_experts=[ExpertModel(model_dim, hidden_size, activation_fn) for i in range(num_local_experts)], fp32_gate=args.fp32_gate).to(device)
 
         # Distinguish different parameter types: gate, local_experts
         local_experts_param_count = sum([torch.numel(param) for name, param in self._moe_layer.get_parameter_iterator(param_type='local_experts')])
