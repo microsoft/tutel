@@ -11,14 +11,17 @@
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 
 
-static void invoke(const std::vector<torch::Tensor> &ts, int ctx, int key_int) {
+static void invoke(const std::vector<torch::Tensor> &ts, int _key) {
   struct ModuleConfig {
     CUmodule hMod = nullptr;
     CUfunction hFunc = nullptr;
 
     dim3 blocks, threads;
   };
+
   static std::vector<ModuleConfig> gpuMods;
+
+  int key_int = (_key & 255), ctx = _key >> 8;
   if (ctx >= gpuMods.size())
     gpuMods.resize(ctx + 1);
 

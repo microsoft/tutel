@@ -40,7 +40,7 @@ class JitKernel:
         os.rename(temp_loc, '/tmp/%s-%s.cu' % (__ctx__, key))
 
         def func(*inputs):
-            tutel_custom_kernel.invoke(inputs, __ctx__, key)
+            tutel_custom_kernel.invoke(inputs, __ctx__ * 256 + key)
         return func
 
     @staticmethod
