@@ -6,7 +6,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch import nn
 
-from moe.moe_layer import MOELayer
+from tutel_moe.moe_layer import MOELayer
 
 import argparse
 
