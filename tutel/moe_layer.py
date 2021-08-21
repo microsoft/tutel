@@ -302,11 +302,18 @@ class MOELayer(torch.nn.Module):
         original_shape, original_dtype  = input.shape, input.dtype
         assert len(input.shape) >= 2, "Input data must be at least 2D tensor: (s)amples, .., (m)odel_dim"
         reshaped_input = input.reshape(-1, input.shape[-1])
+        reshaped_input_samples = reshaped_input.shape[0]
 
         if not hasattr(self, 'expected_sample_size'):
             self._create_jit(reshaped_input.size(0))
-        elif self.expected_sample_size != reshaped_input.size(0):
-            raise Exception('MoE expects to keep working on sample size = %s, while receiving sample size = %s' % (self.expected_sample_size, reshaped_input.size(0)))
+        elif reshaped_input.size(0) != self.expected_sample_size:
+            if reshaped_input.size(0) > self.expected_sample_size:
+                raise Exception('MoE expects to keep working on sample size = %s, while receiving sample size = %s (> %s)' % (self.expected_sample_size, reshaped_input.size(0), self.expected_sample_size))
+            else:
+                print('MoE is initialized to keep working on sample size = %s, while receiving sample size = %s (will slow down this forward step)' % (self.expected_sample_size, reshaped_input.size(0)))
+                pad_input = torch.zeros([self.expected_sample_size, self.model_dim], dtype=reshaped_input.dtype, layout=reshaped_input.layout, device=reshaped_input.device)
+                pad_input[:reshaped_input.size(0)] = reshaped_input
+                reshaped_input = pad_input
 
         reshaped_input = reshaped_input.to(self.params_dtype)
         l_aux, gates_, self.indices_, self.locations_ = self.gate(reshaped_input)
@@ -335,7 +342,8 @@ class MOELayer(torch.nn.Module):
 
         result_output = GatingDecoder.apply(self, expert_output.view(E * C, M), *gates_)
         
-        result_output = result_output.view(input.shape)[:input.shape[0], :]
+        result_output = result_output[:reshaped_input_samples, :]
+        result_output = result_output.view(input.shape)[:input.shape[0], ]
         result_output = result_output.view(original_shape).to(original_dtype)
         result_output.l_aux = l_aux
         return result_output
