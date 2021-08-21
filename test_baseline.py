@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 
-# [Dist-Ex] python3 -m torch.distributed.launch --nproc_per_node=8 test.py --batch-size 8 --num-tokens 512 --model-dim 2048
-
 import time
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
+import torch.distributed as dist
 from torch import nn
-
-from baseline_moe.moe_layer import MOELayer
-
 import argparse
 
+
 parser = argparse.ArgumentParser()
+
+parser.add_argument('--local_rank', type=int, default=0)
 
 parser.add_argument('--batch-size', type=int, default=4)
 parser.add_argument('--num-tokens', type=int, default=512)
@@ -24,25 +23,32 @@ parser.add_argument('--fp32-gate', default=False, action='store_true')
 parser.add_argument('--top', type=int, default=2)
 args = parser.parse_args()
 
+try:
+    if dist.is_available():
+        dist.init_process_group('nccl')
+except:
+    pass
+
 batch_size = args.batch_size
 num_tokens = args.num_tokens
 model_dim = args.model_dim
 hidden_size = args.hidden_size
 num_local_experts = args.num_local_experts
 top_value = args.top
+local_rank = args.local_rank
 
-assert top_value in (1, 2), "Only suppoert top_value = 1, 2 in this version"
+assert top_value in (1, 2), "Only support top_value = 1, 2 in this version."
 
 activation_fn = lambda x: x
-device = 'cuda'
+device = torch.device('cuda', args.local_rank)
 torch.manual_seed(1)
 
 if args.dtype == 'float32':
-  torch.set_default_dtype(torch.float32)
+    torch.set_default_dtype(torch.float32)
 elif args.dtype == 'float16':
-  torch.set_default_dtype(torch.float16)
+    torch.set_default_dtype(torch.float16)
 else:
-  raise Exception('Unrecognized data type specified: %s' % args.dtype)
+    raise Exception('Unrecognized data type specified: %s' % args.dtype)
 
 class ExpertModel(torch.nn.Module):
     def __init__(self, model_dim, hidden_size, activation_fn = lambda x: x):
@@ -62,6 +68,7 @@ class ExampleModel(torch.nn.Module):
         super().__init__()
         gate_type = 'Top1Gate' if top_value == 1 else 'Top2Gate'
 
+        from baseline_moe.moe_layer import MOELayer
         self._moe_layer = MOELayer(gate_type, model_dim, external_experts=[ExpertModel(model_dim, hidden_size, activation_fn) for i in range(num_local_experts)], fp32_gate=args.fp32_gate).to(device)
 
         # Distinguish different parameter types: gate, local_experts
@@ -87,21 +94,21 @@ print('[Benchmark] dtype = %s, fp32-gate = %s, model-dim = %s, hidden-size = %s,
 average_time, num_steps = 0, 20
 
 for i in range(num_steps):
-  torch.cuda.synchronize()
-  t_start = time.time()
-  optimizer.zero_grad()
+    torch.cuda.synchronize()
+    t_start = time.time()
+    optimizer.zero_grad()
 
-  output = model(x)
-  loss = F.nll_loss(output, y)
-  loss.backward()
-  optimizer.step()
+    output = model(x)
+    loss = F.nll_loss(output, y)
+    loss.backward()
+    optimizer.step()
 
-  torch.cuda.synchronize()
-  t_stop = time.time()
-  print('STEP-%s: DONE, loss = %s, step_time = %s sec.' % (i, float(loss.data), t_stop - t_start))
+    torch.cuda.synchronize()
+    t_stop = time.time()
+    print('STEP-%s: DONE, loss = %s, step_time = %s sec.' % (i, float(loss.data), t_stop - t_start))
 
-  if i + 10 >= num_steps:
-      average_time += t_stop - t_start
+    if i + 10 >= num_steps:
+        average_time += t_stop - t_start
 
 average_time /= 10
 print('\n[Summary] Average synchronized step_time = %s sec.' % average_time)
