@@ -19,7 +19,7 @@ from torch.distributions import Categorical
 import torch.nn.functional as F
 
 
-gumbel_map: Dict[torch.device, Callable] = {}
+gumbel_map = {}
 
 # maximum capacity of 1 expert as a fraction of number of tokens in the batch
 EVAL_CAPACITY_TOKEN_FRACTION = 0.25
@@ -176,8 +176,6 @@ class Top2Gate(torch.nn.Module):
         num_experts (ints):
             number of experts in model
     """
-
-    wg: torch.nn.Linear
 
     def __init__(
         self,
