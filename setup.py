@@ -53,10 +53,13 @@ try:
 except FileExistsError:
   pass
 
-tutel_path = f'{site.USER_SITE}/tutel_moe'
-try:
-  shutil.rmtree(tutel_path)
-except:
-  pass
+def user_setup(dir_name, site_name):
+  path = f'{site.USER_SITE}/{site_name}'
+  try:
+    shutil.rmtree(path)
+  except:
+    pass
+  shutil.copytree(dir_name, path)
 
-shutil.copytree('../../tutel', tutel_path)
+user_setup('../../tutel', 'tutel_moe')
+user_setup('../../baseline', 'baseline_moe')
