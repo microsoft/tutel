@@ -26,8 +26,9 @@ args = parser.parse_args()
 try:
     if dist.is_available():
         dist.init_process_group('nccl')
+    dist_rank = dist.get_rank()
 except:
-    pass
+    dist_rank = 0
 
 batch_size = args.batch_size
 num_tokens = args.num_tokens
@@ -41,7 +42,7 @@ assert top_value in (1, 2), "Only support top_value = 1, 2 in this version."
 
 activation_fn = lambda x: x
 device = torch.device('cuda', args.local_rank)
-torch.manual_seed(1)
+torch.manual_seed(dist_rank + 1)
 
 if args.dtype == 'float32':
     torch.set_default_dtype(torch.float32)
