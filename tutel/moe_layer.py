@@ -334,11 +334,11 @@ class MOELayer(torch.nn.Module):
                             x = x.view(original_shape)
                         else:
                             x = x.permute(1, 0, 2, 3)
-                            original_shape, x = x.shape, x.view(self.local_experts, -1, self.model_dim)
+                            original_shape, x = x.shape, x.reshape(self.local_experts, -1, self.model_dim)
                             x = self.native_bgemm(x, self.fc1_weight) + self.fc1_bias
                             x = activation_fn(x)
                             x = self.native_bgemm(x, self.fc2_weight) + self.fc2_bias
-                            x = x.view(self.local_experts, original_shape[1], original_shape[2], self.model_dim)
+                            x = x.reshape(self.local_experts, original_shape[1], original_shape[2], self.model_dim)
                             x = x.permute(1, 0, 2, 3)
 
                         '''
