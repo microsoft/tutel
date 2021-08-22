@@ -15,8 +15,8 @@ parser.add_argument('--h', type=int, default=2048)
 
 args = parser.parse_args()
 
-assert args.h % (args.e * args.w) == 0
-args.h //= args.e * args.w
+assert args.h % args.e == 0
+args.h //= args.e
 
 device = torch.device('cuda', 0)
 default_dtype = torch.float16 if args.fp16 else torch.float32

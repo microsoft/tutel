@@ -295,6 +295,10 @@ class MOELayer(torch.nn.Module):
                         self.register_parameter(name='fc2_weight', param=torch.nn.Parameter(fc2_weight))
                         self.register_parameter(name='fc1_bias', param=torch.nn.Parameter(fc1_bias))
                         self.register_parameter(name='fc2_bias', param=torch.nn.Parameter(fc2_bias))
+                        self.model_dim, self.hidden_size, self.local_experts = model_dim, hidden_size, local_experts
+
+                    def extra_repr(self):
+                        return 'model_dim=%d, hidden_size=%d, local_experts=%d' % (self.model_dim, self.hidden_size, self.local_experts)
 
                     def forward(self, x):
                         if self.skip_moe:
