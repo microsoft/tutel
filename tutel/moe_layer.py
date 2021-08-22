@@ -26,7 +26,7 @@ class AllToAll(torch.autograd.Function):
     def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor):
         ctx.group = group
         ctx.world_size = get_world_size(group)
-        if ctx.world_size <= 1:
+        if ctx.world_size <= 1 or AllToAll.skip_a2a:
             return input
         input = input.contiguous()
         output = torch.empty_like(input)
@@ -35,7 +35,7 @@ class AllToAll(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx: Any, grad_output: Tensor):
-        if ctx.world_size <= 1:
+        if ctx.world_size <= 1 or AllToAll.skip_a2a:
             return (None, grad_output)
         return (None, AllToAll.apply(ctx.group, grad_output))
 
@@ -242,6 +242,7 @@ class MOELayer(torch.nn.Module):
 
         import os
         self.skip_moe = (int(os.environ.get('SKIP_MOE', '0')) != 0)
+        AllToAll.skip_a2a = (int(os.environ.get('SKIP_A2A', '0')) != 0)
 
         if gate_type == 'Top1Gate':
             gating = Top1Gate

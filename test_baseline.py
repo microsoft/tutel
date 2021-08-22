@@ -85,13 +85,14 @@ class ExampleModel(torch.nn.Module):
 
 model = ExampleModel()
 print(model)
+
 optimizer = torch.optim.SGD(model.parameters(), lr=1e-5)
 
 x = torch.randn([batch_size, num_tokens, model_dim], device=device, requires_grad=True)
 y = torch.LongTensor(batch_size).random_(1).to(device)
 
-tuples = (args.dtype, args.fp32_gate, model_dim, hidden_size, batch_size * num_tokens, num_local_experts, top_value)
-print('[Benchmark] dtype = %s, fp32-gate = %s, model-dim = %s, hidden-size = %s, samples = %s, num-local-experts = %s, topK = %s' % tuples)
+tuples = (args.dtype, args.fp32_gate, model_dim, hidden_size, batch_size * num_tokens, num_local_experts, top_value, device)
+print('[Benchmark] dtype = %s, fp32-gate = %s, model-dim = %s, hidden-size = %s, samples = %s, num-local-experts = %s, topK = %s, device = `%s`' % tuples)
 
 average_time, num_steps = 0, 20
 
