@@ -294,6 +294,12 @@ class MOELayer(torch.nn.Module):
                             ExpertsGemm.algo_id = self.expert_gemm_algo
                             self.native_bgemm = ExpertsGemm.apply
 
+                        if self.local_experts == 1:
+                            fc1_weight = fc1_weight.view(self.model_dim, self.hidden_size)
+                            fc2_weight = fc2_weight.view(self.hidden_size, self.model_dim)
+                            fc1_bias = fc1_bias.view(-1, self.hidden_size)
+                            fc2_bias = fc2_bias.view(-1, self.model_dim)
+
                         self.register_parameter(name='fc1_weight', param=torch.nn.Parameter(fc1_weight))
                         self.register_parameter(name='fc2_weight', param=torch.nn.Parameter(fc2_weight))
                         self.register_parameter(name='fc1_bias', param=torch.nn.Parameter(fc1_bias))
@@ -304,6 +310,13 @@ class MOELayer(torch.nn.Module):
 
                     def forward(self, x):
                         if self.skip_moe:
+                            return x
+                        if self.local_experts == 1:
+                            original_shape, x = x.shape, x.view(-1, self.model_dim)
+                            x = torch.addmm(self.fc1_bias, x, self.fc1_weight)
+                            x = activation_fn(x)
+                            x = torch.addmm(self.fc2_bias, x, self.fc2_weight)
+                            x = x.view(original_shape)
                             return x
                         x = self.native_bgemm(x, self.fc1_weight) + self.fc1_bias
                         x = activation_fn(x)
