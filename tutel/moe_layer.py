@@ -41,24 +41,24 @@ class AllToAll(torch.autograd.Function):
 
 
 class ExpertsGemm(torch.autograd.Function):
+    # output[W, E, C, V] +=! data[W, E, C, M] x weight[0, E, M, V]
     @staticmethod
     def forward(ctx: Any, data: Tensor, weight: Tensor):
         ctx.data = data
         ctx.weight = weight
 
         output = torch.empty([data.size(0), data.size(1), data.size(2), weight.size(3)], dtype=data.dtype, device=data.device)
-        tutel_custom_kernel.experts_gemm_forward(data, weight, output)
+        tutel_custom_kernel.experts_gemm_forward([data, weight, output], ExpertsGemm.algo_id)
         return output
 
     @staticmethod
     def backward(ctx: Any, grad_output: Tensor):
-        # output[W, E, C, V] +=! data[W, E, C, M] x weight[0, E, M, V]
         grad_weight = torch.empty(ctx.weight.size(), dtype=grad_output.dtype, device=grad_output.device)
-        tutel_custom_kernel.experts_gemm_backward_data(ctx.data, grad_output, grad_weight)
+        tutel_custom_kernel.experts_gemm_backward_weight([ctx.data, grad_output, grad_weight], ExpertsGemm.algo_id)
 
         grad_data = torch.empty(ctx.data.size(), dtype=grad_output.dtype, device=grad_output.device)
-        tutel_custom_kernel.experts_gemm_backward_weight(grad_output, ctx.weight, grad_data)
-        return (grad_data, torch.sum(grad_weight, dim=0, keepdim=True))
+        tutel_custom_kernel.experts_gemm_backward_data([grad_output, ctx.weight, grad_data], ExpertsGemm.algo_id)
+        return (grad_data, grad_weight)
 
 
 class Top1Gate(torch.nn.Module):
@@ -124,6 +124,7 @@ class Top2Gate(torch.nn.Module):
         self.capacity_factor = capacity_factor
         self.use_fp32 = use_fp32
         self.num_global_experts = num_global_experts
+        assert self.num_global_experts >= 2, "You have only 1 expert, while you are using a top-2 gate."
 
     def capacity(self, expected_sample_size):
         if not hasattr(self, 'capacity_int'):
@@ -260,10 +261,12 @@ class MOELayer(torch.nn.Module):
                         super().__init__()
                         self.skip_moe = (int(os.environ.get('SKIP_EXPERT', '0')) != 0)
 
-                        if int(os.environ.get('EXPERT_GEMM', '1')) != 0:
-                            self.native_bgemm = ExpertsGemm.apply
-                        else:
+                        expert_gemm_algo = int(os.environ.get('EXPERT_ALGO', '0'))
+                        if expert_gemm_algo == 0:
                             self.native_bgemm = torch.matmul
+                        else:
+                            ExpertsGemm.algo_id = expert_gemm_algo
+                            self.native_bgemm = ExpertsGemm.apply
 
                         fc1_weight = torch.empty(1, local_experts, model_dim, hidden_size)
                         fc2_weight = torch.empty(1, local_experts, hidden_size, model_dim)
