@@ -4,8 +4,8 @@ from ..jit import JitKernel
 
 
 def get_gating_kernel(samples, global_experts):
-  if int(os.environ.get('GATE', '0')) == 0 or (samples & (samples - 1)) != 0:
-    # print('[WARN]', "`samples` (= %s) isn't in the form of 2^k, which is outside optimization scope and may result in big performance regression." % samples)
+  if int(os.environ.get('GATE', '1')) == 0 or (samples & (samples - 1)) != 0:
+    print('[WARN]', "`samples` (= %s) isn't in the form of 2^k, which is outside optimization scope and may result in big performance regression." % samples)
 
     def general_gating(indices1_s, mask1):
         locations1 = torch.cumsum(mask1, dim=0) - 1
