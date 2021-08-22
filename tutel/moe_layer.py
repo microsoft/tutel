@@ -274,13 +274,6 @@ class MOELayer(torch.nn.Module):
                         super().__init__()
                         self.skip_moe = (int(os.environ.get('SKIP_EXPERT', '0')) != 0)
 
-                        expert_gemm_algo = int(os.environ.get('EXPERT_ALGO', '0'))
-                        if expert_gemm_algo == 0:
-                            self.native_bgemm = torch.matmul
-                        else:
-                            ExpertsGemm.algo_id = expert_gemm_algo
-                            self.native_bgemm = ExpertsGemm.apply
-
                         fc1_weight = torch.empty(1, local_experts, model_dim, hidden_size)
                         fc2_weight = torch.empty(1, local_experts, hidden_size, model_dim)
                         fc1_bias = torch.empty(1, local_experts, 1, hidden_size)
@@ -292,11 +285,19 @@ class MOELayer(torch.nn.Module):
                             fc1_weight[0, i, :, :], fc1_bias[0, i, :, :] = fc1.weight.t(), fc1.bias
                             fc2_weight[0, i, :, :], fc2_bias[0, i, :, :] = fc2.weight.t(), fc2.bias
 
+                        self.model_dim, self.hidden_size, self.local_experts = model_dim, hidden_size, local_experts
+                        self.expert_gemm_algo = int(os.environ.get('EXPERT_ALGO', '0'))
+
+                        if self.expert_gemm_algo == 0:
+                            self.native_bgemm = torch.matmul
+                        else:
+                            ExpertsGemm.algo_id = self.expert_gemm_algo
+                            self.native_bgemm = ExpertsGemm.apply
+
                         self.register_parameter(name='fc1_weight', param=torch.nn.Parameter(fc1_weight))
                         self.register_parameter(name='fc2_weight', param=torch.nn.Parameter(fc2_weight))
                         self.register_parameter(name='fc1_bias', param=torch.nn.Parameter(fc1_bias))
                         self.register_parameter(name='fc2_bias', param=torch.nn.Parameter(fc2_bias))
-                        self.model_dim, self.hidden_size, self.local_experts = model_dim, hidden_size, local_experts
 
                     def extra_repr(self):
                         return 'model_dim=%d, hidden_size=%d, local_experts=%d' % (self.model_dim, self.hidden_size, self.local_experts)
@@ -365,7 +366,7 @@ class MOELayer(torch.nn.Module):
         reshaped_input = reshaped_input.to(self.params_dtype)
         l_aux, gates_, self.indices_, self.locations_ = self.gate(reshaped_input)
 
-        S, M, E, C = self.expected_sample_size, self.model_dim, self.num_global_experts, self.capacity
+        S, M, GE, C = self.expected_sample_size, self.model_dim, self.num_global_experts, self.capacity
 
         if not hasattr(self, 'ones_helper'):
             self.ones_helper = torch.ones([self.expected_sample_size, 2], dtype=reshaped_input.dtype, device=reshaped_input.device)
@@ -373,7 +374,6 @@ class MOELayer(torch.nn.Module):
         dispatched_input = GatingEncoder.apply(self, reshaped_input)
         dispatched_input = AllToAll.apply(self.expert_group, dispatched_input)
         
-        # Re-shape after all-to-all: ecm -> gecm
         dispatched_input = dispatched_input.reshape(self.world_size, self.num_local_experts, -1, M)
 
         if len(self.experts) == 1:
@@ -387,10 +387,9 @@ class MOELayer(torch.nn.Module):
 
         expert_output = expert_output.reshape(self.world_size * self.num_local_experts, -1, M)
 
-        result_output = GatingDecoder.apply(self, expert_output.view(E * C, M), *gates_)
+        result_output = GatingDecoder.apply(self, expert_output.view(GE * C, M), *gates_)
         
         result_output = result_output[:reshaped_input_samples, :]
-        result_output = result_output.view(input.shape)[:input.shape[0], ]
         result_output = result_output.view(original_shape).to(original_dtype)
         result_output.l_aux = l_aux
         return result_output
