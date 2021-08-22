@@ -257,13 +257,23 @@ class MOELayer(torch.nn.Module):
         elif builtin_experts is not None:
             network_type = builtin_experts['type']
             if network_type == 'ffn':
-                ''' << Fused FFN Experts >>
+                ''' << Fused FFN Experts V1 >> (kernels = 5)
 
                     hidden[W, E, C, V] +=! input[W, E, C, M] x expert_fc1[0, E, M, V]
                     hidden[W, E, C, V]  =  hidden[W, E, C, V] + bias_fc1[E, V]
                     hidden[W, E, C, V]  =  activation_fn(hidden[W, E, C, V])
                     hidden[W, E, C, M] +=! hidden[W, E, C, V] x expert_fc2[0, E, V, M]
                     output[W, E, C, M]  =  hidden[W, E, C, M] + bias_fc2[E, M]
+
+                    << Fused FFN Experts V2 >> (kernels = 7)
+
+                    hidden[E, W, C, M]  =   input[W, E, C, M]
+                    hidden[E, W, C, V] +=! hidden[E, W, C, M] x expert_fc1[0, E, M, V]
+                    hidden[E, W, C, V]  =  hidden[E, W, C, V] + bias_fc1[E, V]
+                    hidden[E, W, C, V]  =  activation_fn(hidden[E, W, C, V])
+                    hidden[E, W, C, M] +=! hidden[E, W, C, V] x expert_fc2[0, E, V, M]
+                    hidden[E, W, C, M]  =  hidden[E, W, C, M] + bias_fc2[E, M]
+                    output[E, W, C, M]  =  hidden[E, W, C, M]
                 '''
 
                 self.num_local_experts = builtin_experts.get('count_per_node', 1)
@@ -299,6 +309,11 @@ class MOELayer(torch.nn.Module):
                             fc2_weight = fc2_weight.view(self.hidden_size, self.model_dim)
                             fc1_bias = fc1_bias.view(-1, self.hidden_size)
                             fc2_bias = fc2_bias.view(-1, self.model_dim)
+                        else:
+                            fc1_weight = fc1_weight.view(self.local_experts, self.model_dim, self.hidden_size)
+                            fc2_weight = fc2_weight.view(self.local_experts, self.hidden_size, self.model_dim)
+                            fc1_bias = fc1_bias.view(self.local_experts, 1, self.hidden_size)
+                            fc2_bias = fc2_bias.view(self.local_experts, 1, self.model_dim)
 
                         self.register_parameter(name='fc1_weight', param=torch.nn.Parameter(fc1_weight))
                         self.register_parameter(name='fc2_weight', param=torch.nn.Parameter(fc2_weight))
@@ -317,10 +332,20 @@ class MOELayer(torch.nn.Module):
                             x = activation_fn(x)
                             x = torch.addmm(self.fc2_bias, x, self.fc2_weight)
                             x = x.view(original_shape)
-                            return x
+                        else:
+                            x = x.permute(1, 0, 2, 3)
+                            original_shape, x = x.shape, x.view(self.local_experts, -1, self.model_dim)
+                            x = self.native_bgemm(x, self.fc1_weight) + self.fc1_bias
+                            x = activation_fn(x)
+                            x = self.native_bgemm(x, self.fc2_weight) + self.fc2_bias
+                            x = x.view(self.local_experts, original_shape[1], original_shape[2], self.model_dim)
+                            x = x.permute(1, 0, 2, 3)
+
+                        '''
                         x = self.native_bgemm(x, self.fc1_weight) + self.fc1_bias
                         x = activation_fn(x)
                         x = self.native_bgemm(x, self.fc2_weight) + self.fc2_bias
+                        '''
                         return x
 
                     def to(self, *args, **kwargs):
