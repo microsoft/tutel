@@ -6,6 +6,7 @@ import torch.distributed as dist
 from torch.nn import ModuleList
 import torch.nn.functional as F
 
+import tutel_custom_kernel
 
 def get_world_size(group):
     try:
@@ -37,6 +38,27 @@ class AllToAll(torch.autograd.Function):
         if ctx.world_size <= 1:
             return (None, grad_output)
         return (None, AllToAll.apply(ctx.group, grad_output))
+
+
+class ExpertsGemm(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, data: Tensor, weight: Tensor):
+        ctx.data = data
+        ctx.weight = weight
+
+        output = torch.empty([data.size(0), data.size(1), data.size(2), weight.size(3)], dtype=data.dtype, device=data.device)
+        tutel_custom_kernel.experts_gemm_forward(data, weight, output)
+        return output
+
+    @staticmethod
+    def backward(ctx: Any, grad_output: Tensor):
+        # output[W, E, C, V] +=! data[W, E, C, M] x weight[0, E, M, V]
+        grad_weight = torch.empty(ctx.weight.size(), dtype=grad_output.dtype, device=grad_output.device)
+        tutel_custom_kernel.experts_gemm_backward_data(ctx.data, grad_output, grad_weight)
+
+        grad_data = torch.empty(ctx.data.size(), dtype=grad_output.dtype, device=grad_output.device)
+        tutel_custom_kernel.experts_gemm_backward_weight(grad_output, ctx.weight, grad_data)
+        return (grad_data, torch.sum(grad_weight, dim=0, keepdim=True))
 
 
 class Top1Gate(torch.nn.Module):
@@ -238,6 +260,11 @@ class MOELayer(torch.nn.Module):
                         super().__init__()
                         self.skip_moe = (int(os.environ.get('SKIP_EXPERT', '0')) != 0)
 
+                        if int(os.environ.get('EXPERT_GEMM', '1')) != 0:
+                            self.native_bgemm = ExpertsGemm.apply
+                        else:
+                            self.native_bgemm = torch.matmul
+
                         fc1_weight = torch.empty(1, local_experts, model_dim, hidden_size)
                         fc2_weight = torch.empty(1, local_experts, hidden_size, model_dim)
                         fc1_bias = torch.empty(1, local_experts, 1, hidden_size)
@@ -257,9 +284,9 @@ class MOELayer(torch.nn.Module):
                     def forward(self, x):
                         if self.skip_moe:
                             return x
-                        x = torch.matmul(x, self.fc1_weight) + self.fc1_bias
+                        x = self.native_bgemm(x, self.fc1_weight) + self.fc1_bias
                         x = activation_fn(x)
-                        x = torch.matmul(x, self.fc2_weight) + self.fc2_bias
+                        x = self.native_bgemm(x, self.fc2_weight) + self.fc2_bias
                         return x
 
                     def to(self, *args, **kwargs):
