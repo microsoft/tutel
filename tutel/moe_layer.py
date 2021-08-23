@@ -218,12 +218,13 @@ class GatingDecoder(torch.autograd.Function):
 
 class MOELayer(torch.nn.Module):
 
-    def __init__(self, gate_type, model_dim: int, builtin_experts = None, external_experts = None, fp32_gate = False, scan_experts = None, group: Optional[Any] = None):
+    def __init__(self, gate_type, model_dim: int, builtin_experts = None, external_experts = None, fp32_gate = False, scan_experts = None, result_func = None, group: Optional[Any] = None):
         super().__init__()
 
         assert model_dim % 2 == 0, "Model_dim (%s) must be even value, while this Model_dim mod 2 > 0." % model_dim
         self.expert_group = group = group if group is not None else dist.group.WORLD
         self.world_size = get_world_size(self.expert_group)
+        self.result_func = result_func
 
         import os
         self.skip_moe = (int(os.environ.get('SKIP_MOE', '0')) != 0)
@@ -407,7 +408,8 @@ class MOELayer(torch.nn.Module):
         result_output = result_output[:reshaped_input_samples, :]
         result_output = result_output.view(original_shape).to(original_dtype)
         result_output.l_aux = l_aux
-        return result_output
+
+        return self.result_func(result_output) if self.result_func is not None else result_output
 
     def _create_jit(self, expected_sample_size):
         self.params_dtype = next(iter(self.experts.parameters())).dtype
