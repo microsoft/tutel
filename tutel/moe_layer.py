@@ -60,17 +60,11 @@ class ExpertsGemm(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx: Any, grad_output: Tensor):
-        if not ctx.weight.requires_grad:
-          grad_weight = None
-        else:
-          grad_weight = torch.empty(ctx.weight.size(), dtype=grad_output.dtype, device=grad_output.device)
-          tutel_custom_kernel.experts_gemm_backward_weight([ctx.data, grad_output, grad_weight], 1)
+        grad_weight = torch.empty(ctx.weight.size(), dtype=grad_output.dtype, device=grad_output.device)
+        tutel_custom_kernel.experts_gemm_backward_weight([ctx.data, grad_output, grad_weight], 1)
 
-        if not ctx.data.requires_grad:
-          grad_data = None
-        else:
-          grad_data = torch.empty(ctx.data.size(), dtype=grad_output.dtype, device=grad_output.device)
-          tutel_custom_kernel.experts_gemm_backward_data([grad_output, ctx.weight, grad_data], 1)
+        grad_data = torch.empty(ctx.data.size(), dtype=grad_output.dtype, device=grad_output.device)
+        tutel_custom_kernel.experts_gemm_backward_data([grad_output, ctx.weight, grad_data], 1)
         return (grad_data, grad_weight)
 
 def load_balance(gates, mask1, num_global_experts, use_fp32):
@@ -210,18 +204,12 @@ class GatingDecoder(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx: Any, combined_output: Tensor):
-        if not ctx.expert_output.requires_grad:
-          grad_expert_output = None
-        else:
-          grad_expert_output = torch.zeros(ctx.expert_output.shape, dtype=combined_output.dtype, device=combined_output.device)
-          for i in range(len(ctx.config.indices_)):
-            ctx.config.func_fwd(ctx.gates_h2[i], ctx.config.indices_[i], ctx.config.locations_[i], combined_output, grad_expert_output)
+        grad_expert_output = torch.zeros(ctx.expert_output.shape, dtype=combined_output.dtype, device=combined_output.device)
+        for i in range(len(ctx.config.indices_)):
+          ctx.config.func_fwd(ctx.gates_h2[i], ctx.config.indices_[i], ctx.config.locations_[i], combined_output, grad_expert_output)
 
         grad_gates = []
         for i in range(len(ctx.config.indices_)):
-          if not ctx.gates_h2[i].requires_grad:
-            grad_gates.append(None)
-            continue
           grad_gates1_s = torch.empty([ctx.config.expected_sample_size,], dtype=combined_output.dtype, device=combined_output.device)
           ctx.config.func_bwd_gate(ctx.expert_output, ctx.config.indices_[i], ctx.config.locations_[i], combined_output, grad_gates1_s)
           grad_gates.append(grad_gates1_s)
