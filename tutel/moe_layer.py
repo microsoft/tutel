@@ -268,7 +268,7 @@ class MOELayer(torch.nn.Module):
                 class FusedExpertsNetwork(torch.nn.Module):
                     def __init__(self, model_dim, hidden_size, local_experts):
                         super().__init__()
-                        self.skip_moe = (int(os.environ.get('SKIP_EXPERT', '0')) != 0)
+                        self.skip_expert = (int(os.environ.get('SKIP_EXPERT', '0')) != 0)
 
                         fc1_weight = torch.empty(1, local_experts, model_dim, hidden_size)
                         fc2_weight = torch.empty(1, local_experts, hidden_size, model_dim)
@@ -304,7 +304,7 @@ class MOELayer(torch.nn.Module):
                         return 'model_dim=%d, hidden_size=%d, local_experts=%d' % (self.model_dim, self.hidden_size, self.local_experts)
 
                     def forward(self, x):
-                        if self.skip_moe:
+                        if self.skip_expert:
                             return x
                         if self.local_experts == 1:
                             original_shape, x = x.shape, x.view(-1, self.model_dim)
@@ -360,8 +360,9 @@ class MOELayer(torch.nn.Module):
 
     def forward(self, input: Tensor, **kwargs: Any):
         if self.skip_moe:
-            input.l_aux = None
-            return input
+            result_output = input
+            result_output.l_aux = None
+            return self.result_func(result_output) if self.result_func is not None else result_output
 
         original_shape, original_dtype  = input.shape, input.dtype
         assert len(input.shape) >= 2, "Input data must be at least 2D tensor: (s)amples, .., (m)odel_dim"
