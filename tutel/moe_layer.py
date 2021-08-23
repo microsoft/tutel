@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
+
 from typing import TYPE_CHECKING, Any, Optional, Tuple, Union, cast
 
 import torch
@@ -6,7 +9,11 @@ import torch.distributed as dist
 from torch.nn import ModuleList
 import torch.nn.functional as F
 
-import tutel_custom_kernel
+try:
+    import tutel_custom_kernel
+except:
+    raise Exception("Cannot import JIT optimized kernels. Did you forget to install Custom Kernel Extension?")
+
 
 def get_world_size(group):
     try:
@@ -48,7 +55,7 @@ class ExpertsGemm(torch.autograd.Function):
         ctx.weight = weight
 
         output = torch.empty([data.size(0), data.size(1), data.size(2), weight.size(3)], dtype=data.dtype, device=data.device)
-        tutel_custom_kernel.experts_gemm_forward([data, weight, output], ExpertsGemm.algo_id)
+        tutel_custom_kernel.experts_gemm_forward([data, weight, output], 1)
         return output
 
     @staticmethod
@@ -57,14 +64,25 @@ class ExpertsGemm(torch.autograd.Function):
           grad_weight = None
         else:
           grad_weight = torch.empty(ctx.weight.size(), dtype=grad_output.dtype, device=grad_output.device)
-          tutel_custom_kernel.experts_gemm_backward_weight([ctx.data, grad_output, grad_weight], ExpertsGemm.algo_id)
+          tutel_custom_kernel.experts_gemm_backward_weight([ctx.data, grad_output, grad_weight], 1)
 
         if not ctx.data.requires_grad:
           grad_data = None
         else:
           grad_data = torch.empty(ctx.data.size(), dtype=grad_output.dtype, device=grad_output.device)
-          tutel_custom_kernel.experts_gemm_backward_data([grad_output, ctx.weight, grad_data], ExpertsGemm.algo_id)
+          tutel_custom_kernel.experts_gemm_backward_data([grad_output, ctx.weight, grad_data], 1)
         return (grad_data, grad_weight)
+
+def load_balance(gates, mask1, num_global_experts, use_fp32):
+    if gates.dtype == torch.float32 or use_fp32:
+        me = torch.sum(gates.float(), dim=0)
+        ce = torch.sum(mask1.to(me.dtype), dim=0)
+        l_loss = torch.sum(me * ce) * (num_global_experts / (gates.size(0) * gates.size(0)))
+    else:
+        me = torch.mean(gates, dim=0)
+        ce = torch.mean(mask1.to(gates.dtype), dim=0)
+        l_loss = torch.sum(me * ce) * num_global_experts
+    return l_loss
 
 
 class Top1Gate(torch.nn.Module):
@@ -99,21 +117,11 @@ class Top1Gate(torch.nn.Module):
 
         gates = F.softmax(logits, dim=1)
         gates1_s = (gates * mask1).sum(dim=1)
+        l_loss = load_balance(gates, mask1, self.num_global_experts, self.use_fp32)
 
         locations1_s = self.gating_kernel(indices1_s, mask1)
 
-        # Compute l_aux
-        if gates.dtype == torch.float32 or self.use_fp32:
-            me = torch.sum(gates.float(), dim=0)
-            ce = torch.sum(mask1.to(me.dtype), dim=0)
-            l_aux = torch.sum(me * ce) * (self.num_global_experts / (gates.size(0) * gates.size(0)))
-        else:
-            # Avoid data overflow in float16 mode
-            me = torch.mean(gates, dim=0)
-            ce = torch.mean(mask1.to(gates.dtype), dim=0)
-            l_aux = torch.sum(me * ce) * self.num_global_experts
-
-        return l_aux, [gates1_s, ], [indices1_s.to(torch.int32), ], [locations1_s.to(torch.int32), ]
+        return l_loss, [gates1_s, ], [indices1_s.to(torch.int32), ], [locations1_s.to(torch.int32), ]
 
 
 class Top2Gate(torch.nn.Module):
@@ -139,7 +147,10 @@ class Top2Gate(torch.nn.Module):
 
     def forward(self, input: torch.Tensor):
         logits = self.wg(input)
-        num_samples = logits.size(0)
+
+        if not hasattr(self, 'gating_kernel'):
+            from .jit_kernels.gating import get_gating_kernel
+            self.gating_kernel = get_gating_kernel(logits.size(0), self.num_global_experts)
 
         top2_indices = torch.topk(logits, 2, dim=1).indices
         indices1_s, indices2_s = top2_indices.chunk(2, dim=1)
@@ -151,29 +162,15 @@ class Top2Gate(torch.nn.Module):
         gates = F.softmax(logits, dim=1)
         gates1_s = (gates * mask1).sum(dim=1)
         gates2_s = (gates * mask2).sum(dim=1)
+        l_loss = load_balance(gates, mask1, self.num_global_experts, self.use_fp32)
 
-        locations1 = torch.cumsum(mask1, dim=0) - 1
         locations2 = torch.cumsum(mask2, dim=0) - 1
         locations2 += torch.sum(mask1, dim=0, keepdim=True)
 
-        mask1 = mask1 * torch.lt(locations1, self.capacity(num_samples))
-        mask2 = mask2 * torch.lt(locations2, self.capacity(num_samples))
+        locations1_s = self.gating_kernel(indices1_s, mask1)
+        locations2_s = torch.sum(locations2 * (mask2 * torch.lt(locations2, self.capacity(logits.size(0)))), dim=1)
 
-        locations1_s = torch.sum(locations1 * mask1, dim=1)
-        locations2_s = torch.sum(locations2 * mask2, dim=1)
-
-        # Compute l_aux
-        if gates.dtype == torch.float32 or self.use_fp32:
-            me = torch.sum(gates.float(), dim=0)
-            ce = torch.sum(mask1.to(me.dtype), dim=0)
-            l_aux = torch.sum(me * ce) * (self.num_global_experts / (gates.size(0) * gates.size(0)))
-        else:
-            # Avoid data overflow in float16 mode
-            me = torch.mean(gates, dim=0)
-            ce = torch.mean(mask1.to(gates.dtype), dim=0)
-            l_aux = torch.sum(me * ce) * self.num_global_experts
-
-        return l_aux, [gates1_s, gates2_s], [indices1_s.to(torch.int32), indices2_s.to(torch.int32)], [locations1_s.to(torch.int32), locations2_s.to(torch.int32)]
+        return l_loss, [gates1_s, gates2_s], [indices1_s.to(torch.int32), indices2_s.to(torch.int32)], [locations1_s.to(torch.int32), locations2_s.to(torch.int32)]
 
 
 class GatingEncoder(torch.autograd.Function):
@@ -298,18 +295,12 @@ class MOELayer(torch.nn.Module):
                         self.model_dim, self.hidden_size, self.local_experts = model_dim, hidden_size, local_experts
                         self.expert_gemm_algo = int(os.environ.get('EXPERT_ALGO', '0'))
 
-                        if self.expert_gemm_algo == 0:
-                            self.native_bgemm = torch.matmul
-                        else:
-                            ExpertsGemm.algo_id = self.expert_gemm_algo
-                            self.native_bgemm = ExpertsGemm.apply
-
                         if self.local_experts == 1:
                             fc1_weight = fc1_weight.view(self.model_dim, self.hidden_size)
                             fc2_weight = fc2_weight.view(self.hidden_size, self.model_dim)
                             fc1_bias = fc1_bias.view(-1, self.hidden_size)
                             fc2_bias = fc2_bias.view(-1, self.model_dim)
-                        else:
+                        elif self.expert_gemm_algo == 0:
                             fc1_weight = fc1_weight.view(self.local_experts, self.model_dim, self.hidden_size)
                             fc2_weight = fc2_weight.view(self.local_experts, self.hidden_size, self.model_dim)
                             fc1_bias = fc1_bias.view(self.local_experts, 1, self.hidden_size)
@@ -332,20 +323,18 @@ class MOELayer(torch.nn.Module):
                             x = activation_fn(x)
                             x = torch.addmm(self.fc2_bias, x, self.fc2_weight)
                             x = x.view(original_shape)
-                        else:
+                        elif self.expert_gemm_algo == 0:
                             x = x.permute(1, 0, 2, 3)
                             original_shape, x = x.shape, x.reshape(self.local_experts, -1, self.model_dim)
-                            x = self.native_bgemm(x, self.fc1_weight) + self.fc1_bias
+                            x = torch.matmul(x, self.fc1_weight) + self.fc1_bias
                             x = activation_fn(x)
-                            x = self.native_bgemm(x, self.fc2_weight) + self.fc2_bias
+                            x = torch.matmul(x, self.fc2_weight) + self.fc2_bias
                             x = x.reshape(self.local_experts, original_shape[1], original_shape[2], self.model_dim)
                             x = x.permute(1, 0, 2, 3)
-
-                        '''
-                        x = self.native_bgemm(x, self.fc1_weight) + self.fc1_bias
-                        x = activation_fn(x)
-                        x = self.native_bgemm(x, self.fc2_weight) + self.fc2_bias
-                        '''
+                        else:
+                            x = ExpertsGemm.apply(x, self.fc1_weight) + self.fc1_bias
+                            x = activation_fn(x)
+                            x = ExpertsGemm.apply(x, self.fc2_weight) + self.fc2_bias
                         return x
 
                     def to(self, *args, **kwargs):

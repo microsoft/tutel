@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
+
 import time
 import torch
 import torch.optim as optim
