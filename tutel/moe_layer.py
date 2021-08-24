@@ -263,7 +263,9 @@ class MOELayer(torch.nn.Module):
                 '''
 
                 self.num_local_experts = builtin_experts.get('count_per_node', 1)
-                activation_fn = builtin_experts.get('activation_fn', lambda x: x)
+                fused_custom_fn = builtin_experts.get('fused_custom_fn')
+                if fused_custom_fn is None:
+                    activation_fn = builtin_experts.get('activation_fn', lambda x: x)
 
                 class FusedExpertsNetwork(torch.nn.Module):
                     def __init__(self, model_dim, hidden_size, local_experts):
@@ -306,7 +308,9 @@ class MOELayer(torch.nn.Module):
                     def forward(self, x):
                         if self.skip_expert:
                             return x
-                        if self.local_experts == 1:
+                        if fused_custom_fn is not None:
+                            x = fused_custom_fn(self, x)
+                        elif self.local_experts == 1:
                             original_shape, x = x.shape, x.view(-1, self.model_dim)
                             x = torch.addmm(self.fc1_bias, x, self.fc1_weight)
                             x = activation_fn(x)
