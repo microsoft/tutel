@@ -58,12 +58,13 @@ class MOELayer(Base):
             expert network
     """
 
-    def __init__(self, gate_type, model_dim: int, external_experts: Union[Module, ModuleList], fp32_gate = False, group: Optional[Any] = None) -> None:
+    def __init__(self, gate_type, model_dim: int, external_experts: Union[Module, ModuleList], fp32_gate = False, group: Optional[Any] = None, result_func = None) -> None:
         super().__init__()
 
         experts = external_experts
         self.expert_group = group if group is not None else dist.group.WORLD
         self.world_size = get_world_size(self.expert_group)
+        self.result_func = result_func
 
         if gate_type == 'Top1Gate':
             from .top1gate import Top1Gate as gating
@@ -169,7 +170,8 @@ class MOELayer(Base):
         combined_output = combined_output.reshape(input.shape)
         combined_output = combined_output[:input_shape[0], :, :]
         combined_output.l_aux = l_aux
-        return combined_output
+        result_output = combined_output
+        return self.result_func(result_output) if self.result_func is not None else result_output
 
     def prepare_for_inference_(self):
         self.in_generation = True
