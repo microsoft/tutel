@@ -27,6 +27,11 @@ def get_world_rank(group):
     except:
         return 0
 
+def one_hot_with_dtype(data, num_classes, dtype):
+    result = torch.zeros([data.size(0), num_classes], device=data.device, dtype=dtype)
+    result.scatter_(1, data.unsqueeze(-1), 1)
+    return result
+
 
 class AllToAll(torch.autograd.Function):
     @staticmethod
@@ -107,7 +112,7 @@ class Top1Gate(torch.nn.Module):
             self.gating_kernel = get_gating_kernel(logits.size(0), self.num_global_experts)
 
         indices1_s = torch.argmax(logits, dim=1)
-        mask1 = F.one_hot(indices1_s, num_classes=self.num_global_experts)
+        mask1 = one_hot_with_dtype(indices1_s, num_classes=self.num_global_experts, dtype=logits.dtype)
 
         gates = F.softmax(logits, dim=1)
         gates1_s = (gates * mask1).sum(dim=1)
@@ -150,13 +155,18 @@ class Top2Gate(torch.nn.Module):
         indices1_s, indices2_s = top2_indices.chunk(2, dim=1)
         indices1_s, indices2_s = indices1_s.view(-1), indices2_s.view(-1)
 
-        mask1 = F.one_hot(indices1_s, num_classes=self.num_global_experts)
-        mask2 = F.one_hot(indices2_s, num_classes=self.num_global_experts)
+        mask1 = one_hot_with_dtype(indices1_s, num_classes=self.num_global_experts, dtype=indices1_s.dtype)
+        mask2 = one_hot_with_dtype(indices2_s, num_classes=self.num_global_experts, dtype=indices2_s.dtype)
 
         gates = F.softmax(logits, dim=1)
         gates1_s = (gates * mask1).sum(dim=1)
         gates2_s = (gates * mask2).sum(dim=1)
         l_loss = load_balance(gates, mask1, self.num_global_experts, self.use_fp32)
+
+        # Normalize Gate
+        denom_s = torch.clamp(gates1_s + gates2_s, min=torch.finfo(gates2_s.dtype).eps)
+        gates1_s /= denom_s
+        gates2_s /= denom_s
 
         locations2 = torch.cumsum(mask2, dim=0) - 1
         locations2 += torch.sum(mask1, dim=0, keepdim=True)
@@ -229,13 +239,6 @@ class MOELayer(torch.nn.Module):
         import os
         self.skip_moe = (int(os.environ.get('SKIP_MOE', '0')) != 0)
         AllToAll.skip_a2a = (int(os.environ.get('SKIP_A2A', '0')) != 0)
-
-        if gate_type == 'Top1Gate':
-            gating = Top1Gate
-        elif gate_type == 'Top2Gate':
-            gating = Top2Gate
-        else:
-            raise Exception("Unrecognized gate_type: %s" % gate_type)
 
         if external_experts is not None:
             self.experts = cast(ModuleList, external_experts) if type(external_experts) == ModuleList else ModuleList(external_experts)
@@ -352,6 +355,13 @@ class MOELayer(torch.nn.Module):
 
         self.num_global_experts = self.world_size * self.num_local_experts
         self.model_dim = model_dim
+
+        if gate_type == 'Top1Gate' or (gate_type == 'Top2Gate' and self.num_global_experts == 1):
+            gating = Top1Gate
+        elif gate_type == 'Top2Gate':
+            gating = Top2Gate
+        else:
+            raise Exception("Unrecognized gate_type: %s" % gate_type)
         self.gate = gating(model_dim=model_dim, num_global_experts=self.num_global_experts, use_fp32=fp32_gate)
 
     def get_parameter_iterator(self, param_type):

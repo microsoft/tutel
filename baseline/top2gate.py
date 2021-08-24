@@ -50,7 +50,6 @@ def top2gating(
         orig_dtype = logits.dtype
         logits = logits.float()
     gates = F.softmax(logits, dim=1)
-    metadata["entropy_gating"] = Categorical(probs=gates).entropy().mean().detach()
     # gates has shape of SE
     num_tokens = gates.shape[0]
     num_experts = gates.shape[1]
@@ -79,6 +78,7 @@ def top2gating(
     gates2_s = (gates * mask2).sum(dim=1)
 
     if normalize_gate_prob_before_dropping:
+        assert False
         # Normalize gate probabilities
         denom_s = gates1_s + gates2_s
         # Avoid divide-by-zero
@@ -87,6 +87,7 @@ def top2gating(
         gates2_s = gates2_s / denom_s
 
     if second_expert_policy == 'random':
+        assert False
         sampled = (2 * gates2_s) > torch.rand_like(gates2_s)
         mask2 = mask2 * sampled.repeat(num_experts, 1).transpose(1, 0)
 
@@ -104,8 +105,6 @@ def top2gating(
 
 
     # for logging purposes
-    metadata["overflow_expert1"] = 100 * torch.sum(mask1 * torch.ge(locations1, capacity)) / torch.sum(mask1)
-    metadata["overflow_expert2"] = 100 * torch.sum(mask2 * torch.ge(locations2, capacity)) / torch.sum(mask2)
     # Remove locations outside capacity from mask
     mask1 = mask1 * torch.lt(locations1, capacity)
     mask2 = mask2 * torch.lt(locations2, capacity)
@@ -118,13 +117,6 @@ def top2gating(
     expert2_hist = torch.sort(expert2_hist, dim=0, descending=True).values +  torch.finfo(torch.float32).tiny
 
     sample_count = max(math.ceil(num_experts * SAMPLE_FRACTION), 1)
-    metadata["expert1_balance_top"] = expert1_hist[:sample_count].sum()
-    metadata["expert1_balance_bottom"] = expert1_hist[-sample_count:].sum()
-    metadata["unused_expert1_count"] = (expert1_hist == 0).sum()
-
-    metadata["expert2_balance_top"] = expert2_hist[:sample_count].sum()
-    metadata["expert2_balance_bottom"] = expert2_hist[-sample_count:].sum()
-    metadata["unused_expert2_count"] = (expert2_hist == 0).sum()
 
     # Store the capacity location for each token
     locations1_s = torch.sum(locations1 * mask1, dim=1)
@@ -182,7 +174,7 @@ class Top2Gate(torch.nn.Module):
         model_dim: int,
         num_experts: int,
         use_fp32=False,
-        second_expert_policy='sampling',
+        second_expert_policy='all',
         normalize_gate_prob_before_dropping=False,
     ) -> None:
         super().__init__()
