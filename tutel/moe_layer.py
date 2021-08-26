@@ -172,7 +172,7 @@ class Top2Gate(torch.nn.Module):
         locations2 += torch.sum(mask1, dim=0, keepdim=True)
 
         locations1_s = self.gating_kernel(indices1_s, mask1)
-        locations2_s = torch.sum(locations2 * (mask2 * torch.lt(locations2, self.capacity(logits.size(0)))), dim=1)
+        locations2_s = torch.sum(locations2 * mask2, dim=1)
 
         return l_loss, [gates1_s, gates2_s], [indices1_s.to(torch.int32), indices2_s.to(torch.int32)], [locations1_s.to(torch.int32), locations2_s.to(torch.int32)]
 
