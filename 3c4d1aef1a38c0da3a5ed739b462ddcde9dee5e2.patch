@@ -12,10 +12,10 @@ index d6a6823a..60a11f27 100644
          return moe_logging_output
  
 diff --git a/fairseq/modules/transformer_layer.py b/fairseq/modules/transformer_layer.py
-index 2d56ea0a..952a13b5 100644
+index 2d56ea0a..3ec1553f 100644
 --- a/fairseq/modules/transformer_layer.py
 +++ b/fairseq/modules/transformer_layer.py
-@@ -367,6 +367,47 @@ class TransformerDecoderLayer(nn.Module):
+@@ -367,6 +367,51 @@ class TransformerDecoderLayer(nn.Module):
                  self.quant_noise,
                  self.quant_noise_block_size,
              )
@@ -24,6 +24,7 @@ index 2d56ea0a..952a13b5 100644
 +            experts = make_experts(args, self.embed_dim, ffn_dim, self.dropout_module)
 +
 +            from tutel_moe.moe_layer import MOELayer as TutelMoeLayer
++            from fairseq import distributed_utils
 +            self.moe_layer = TutelMoeLayer(
 +                'Top1Gate' if args.moe_top1_expert else 'Top2Gate',
 +                model_dim = self.embed_dim,
@@ -31,6 +32,7 @@ index 2d56ea0a..952a13b5 100644
 +                fp32_gate = args.moe_gating_use_fp32,
 +                scan_experts = lambda name, param: setattr(param, 'expert', True),
 +                result_func = lambda result: (result, result.l_aux),
++                group = distributed_utils.get_moe_group(args.moe_expert_count),
 +            )
 +        elif torch.os.environ.get('TUTEL') == '1': # Recommend on any cases (for advanced developers)
 +            print('Using Tutel = 1')
@@ -44,6 +46,7 @@ index 2d56ea0a..952a13b5 100644
 +            local_moe_expert_count = args.moe_expert_count // (1 if not torch.distributed.is_initialized() else torch.distributed.get_world_size())
 +
 +            from tutel_moe.moe_layer import MOELayer as TutelMoeLayer
++            from fairseq import distributed_utils
 +            def fused_custom_fn(m, x):
 +                x_shape, x = x.shape, x.reshape(-1, x.size(-1))
 +                assert has_fused_bias_gelu and activation_fn == gelu
@@ -59,6 +62,7 @@ index 2d56ea0a..952a13b5 100644
 +                fp32_gate = args.moe_gating_use_fp32,
 +                scan_experts = lambda name, param: setattr(param, 'expert', True),
 +                result_func = lambda result: (result, result.l_aux),
++                group = distributed_utils.get_moe_group(args.moe_expert_count),
 +            )
          else:
  
