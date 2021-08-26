@@ -1,0 +1,106 @@
+diff --git a/fairseq/criterions/fairseq_criterion.py b/fairseq/criterions/fairseq_criterion.py
+index d6a6823a..60a11f27 100644
+--- a/fairseq/criterions/fairseq_criterion.py
++++ b/fairseq/criterions/fairseq_criterion.py
+@@ -217,7 +217,7 @@ class MoECriterion(FairseqCriterion):
+                 if isinstance(module, MOELayer):
+                     total_val += module.metadata[key] if key in module.metadata else 0
+                     count += 1
+-            moe_logging_output[key] = total_val / count
++            moe_logging_output[key] = total_val / count if count > 0 else -1
+         moe_logging_output["batch_count"] = 1
+         return moe_logging_output
+ 
+diff --git a/fairseq/modules/transformer_layer.py b/fairseq/modules/transformer_layer.py
+index 2d56ea0a..952a13b5 100644
+--- a/fairseq/modules/transformer_layer.py
++++ b/fairseq/modules/transformer_layer.py
+@@ -367,6 +367,47 @@ class TransformerDecoderLayer(nn.Module):
+                 self.quant_noise,
+                 self.quant_noise_block_size,
+             )
++        elif torch.os.environ.get('TUTEL') == '2': # Recommend if local_experts = 1 or you have custom expert list
++            print('Using Tutel = 2')
++            experts = make_experts(args, self.embed_dim, ffn_dim, self.dropout_module)
++
++            from tutel_moe.moe_layer import MOELayer as TutelMoeLayer
++            self.moe_layer = TutelMoeLayer(
++                'Top1Gate' if args.moe_top1_expert else 'Top2Gate',
++                model_dim = self.embed_dim,
++                external_experts = experts,
++                fp32_gate = args.moe_gating_use_fp32,
++                scan_experts = lambda name, param: setattr(param, 'expert', True),
++                result_func = lambda result: (result, result.l_aux),
++            )
++        elif torch.os.environ.get('TUTEL') == '1': # Recommend on any cases (for advanced developers)
++            print('Using Tutel = 1')
++
++            activation_fn = utils.get_activation_fn(activation=str(args.activation_fn) if getattr(args, "activation_fn", None) is not None else "relu")
++            activation_dropout_p = getattr(args, "activation_dropout", 0) or 0
++            if activation_dropout_p == 0:
++                activation_dropout_p = getattr(args, "relu_dropout", 0) or 0
++            activation_dropout_module = FairseqDropout(float(activation_dropout_p))
++            dropout_module = self.dropout_module
++            local_moe_expert_count = args.moe_expert_count // (1 if not torch.distributed.is_initialized() else torch.distributed.get_world_size())
++
++            from tutel_moe.moe_layer import MOELayer as TutelMoeLayer
++            def fused_custom_fn(m, x):
++                x_shape, x = x.shape, x.reshape(-1, x.size(-1))
++                assert has_fused_bias_gelu and activation_fn == gelu
++                x = _linear(x, m.fc1_weight.view(-1, x.size(-1)))
++                x = activation_dropout_module(fused_bias_gelu(x, m.fc1_bias))
++                x = dropout_module(_linear(x, m.fc2_weight.view(-1, x.size(-1)), m.fc2_bias).view(x_shape))
++                return x
++
++            self.moe_layer = TutelMoeLayer(
++                'Top1Gate' if args.moe_top1_expert else 'Top2Gate',
++                model_dim = self.embed_dim,
++                builtin_experts = {'type': 'ffn', 'count_per_node': local_moe_expert_count, 'hidden_size_per_expert': ffn_dim, 'fused_custom_fn': fused_custom_fn},
++                fp32_gate = args.moe_gating_use_fp32,
++                scan_experts = lambda name, param: setattr(param, 'expert', True),
++                result_func = lambda result: (result, result.l_aux),
++            )
+         else:
+ 
+             if args.moe_top1_expert:
+diff --git a/fairseq/tasks/fairseq_task.py b/fairseq/tasks/fairseq_task.py
+index 43a1512a..9b5ce9ac 100644
+--- a/fairseq/tasks/fairseq_task.py
++++ b/fairseq/tasks/fairseq_task.py
+@@ -545,6 +545,14 @@ class FairseqTask(object):
+                 metrics.log_scalar(k, v)
+             return
+ 
++        if not any("step_time" in log for log in logging_outputs):
++            warnings.warn(
++                "step_time not found in Criterion logging outputs, cannot log step_time"
++            )
++        else :
++            step_time = sum(log.get("step_time", 0) for log in logging_outputs)
++            metrics.log_scalar("step_time", step_time, weight = 50, priority=0, round=1)
++
+         if not any("ntokens" in log for log in logging_outputs):
+             warnings.warn(
+                 "ntokens not found in Criterion logging outputs, cannot log wpb or wps"
+diff --git a/fairseq/trainer.py b/fairseq/trainer.py
+index f42d3140..d6c5d1d2 100644
+--- a/fairseq/trainer.py
++++ b/fairseq/trainer.py
+@@ -780,6 +780,7 @@ class Trainer(object):
+             try:
+                 with maybe_no_sync():
+                     # forward and backward
++                    import time; torch.cuda.synchronize(); t_start = time.time()
+                     loss, sample_size_i, logging_output = self.task.train_step(
+                         sample=sample,
+                         model=self.model,
+@@ -788,7 +789,9 @@ class Trainer(object):
+                         update_num=self.get_num_updates(),
+                         ignore_grad=is_dummy_batch,
+                     )
++                    torch.cuda.synchronize(); t_stop = time.time(); # print('step time:', (t_stop - t_start))
+                     del loss
++                logging_output['step_time'] = (t_stop - t_start) * 1000 / self.data_parallel_world_size
+ 
+                 logging_outputs.append(logging_output)
+                 sample_size += sample_size_i
