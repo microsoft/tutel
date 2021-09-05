@@ -107,18 +107,20 @@ class Top1Gate(torch.nn.Module):
     def forward(self, input: torch.Tensor):
         logits = self.wg(input)
 
-        if not hasattr(self, 'gating_kernel'):
-            from .jit_kernels.gating import get_gating_kernel
-            self.gating_kernel = get_gating_kernel(logits.size(0), self.num_global_experts)
+        if not hasattr(self, 'tutel_cumsum'):
+            from .jit_kernels.gating import get_cumsum_kernel
+            self.tutel_cumsum = get_cumsum_kernel(logits.size(0), self.num_global_experts)
 
         indices1_s = torch.argmax(logits, dim=1)
-        mask1 = one_hot_with_dtype(indices1_s, num_classes=self.num_global_experts, dtype=logits.dtype)
+        mask1 = one_hot_with_dtype(indices1_s, num_classes=self.num_global_experts, dtype=indices1_s.dtype)
 
+        mask1_ = mask1.to(logits.dtype)
         gates = F.softmax(logits, dim=1)
-        gates1_s = (gates * mask1).sum(dim=1)
-        l_loss = load_balance(gates, mask1, self.num_global_experts, self.use_fp32)
+        gates1_s = (gates * mask1_).sum(dim=1)
+        l_loss = load_balance(gates, mask1_, self.num_global_experts, self.use_fp32)
 
-        locations1_s = self.gating_kernel(indices1_s, mask1)
+        locations1 = self.tutel_cumsum(mask1)
+        locations1_s = torch.sum(locations1 * mask1, dim=1).to(torch.int32)
 
         return l_loss, [gates1_s, ], [indices1_s.to(torch.int32), ], [locations1_s.to(torch.int32), ]
 
@@ -147,9 +149,9 @@ class Top2Gate(torch.nn.Module):
     def forward(self, input: torch.Tensor):
         logits = self.wg(input)
 
-        if not hasattr(self, 'gating_kernel'):
-            from .jit_kernels.gating import get_gating_kernel
-            self.gating_kernel = get_gating_kernel(logits.size(0), self.num_global_experts)
+        if not hasattr(self, 'tutel_cumsum'):
+            from .jit_kernels.gating import get_cumsum_kernel
+            self.tutel_cumsum = get_cumsum_kernel(logits.size(0), self.num_global_experts)
 
         top2_indices = torch.topk(logits, 2, dim=1).indices
         indices1_s, indices2_s = top2_indices.chunk(2, dim=1)
@@ -163,16 +165,17 @@ class Top2Gate(torch.nn.Module):
         gates2_s = (gates * mask2).sum(dim=1)
         l_loss = load_balance(gates, mask1, self.num_global_experts, self.use_fp32)
 
+        locations1 = self.tutel_cumsum(mask1)
+        locations1_s = torch.sum(locations1 * mask1, dim=1).to(torch.int32)
+
+        locations2 = self.tutel_cumsum(mask2)
+        locations2 += torch.sum(mask1, dim=0, keepdim=True)
+        locations2_s = torch.sum(locations2 * mask2, dim=1)
+
         # Normalize Gate
         denom_s = torch.clamp(gates1_s + gates2_s, min=torch.finfo(gates2_s.dtype).eps)
         gates1_s /= denom_s
         gates2_s /= denom_s
-
-        locations2 = torch.cumsum(mask2, dim=0) - 1
-        locations2 += torch.sum(mask1, dim=0, keepdim=True)
-
-        locations1_s = self.gating_kernel(indices1_s, mask1)
-        locations2_s = torch.sum(locations2 * mask2, dim=1)
 
         return l_loss, [gates1_s, gates2_s], [indices1_s.to(torch.int32), indices2_s.to(torch.int32)], [locations1_s.to(torch.int32), locations2_s.to(torch.int32)]
 
