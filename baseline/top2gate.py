@@ -78,7 +78,6 @@ def top2gating(
     gates2_s = (gates * mask2).sum(dim=1)
 
     if normalize_gate_prob_before_dropping:
-        assert False
         # Normalize gate probabilities
         denom_s = gates1_s + gates2_s
         # Avoid divide-by-zero
@@ -123,6 +122,7 @@ def top2gating(
     locations2_s = torch.sum(locations2 * mask2, dim=1)
 
     if not normalize_gate_prob_before_dropping:
+        assert False
         # Normalize gate probabilities
         gates1_s = (gates * mask1).sum(dim=1)
         gates2_s = (gates * mask2).sum(dim=1)
@@ -175,7 +175,7 @@ class Top2Gate(torch.nn.Module):
         num_experts: int,
         use_fp32=False,
         second_expert_policy='all',
-        normalize_gate_prob_before_dropping=False,
+        normalize_gate_prob_before_dropping=True,
     ) -> None:
         super().__init__()
         self.wg = torch.nn.Linear(model_dim, num_experts, bias=False)
