@@ -21,7 +21,7 @@ def create_forward(samples, global_experts, capacity, aligned_dim, param_dtype):
     #define hidden (@hidden@)
     #define __dtype @dtype@
 
-    extern "C" __global__ __launch_bounds__(1024) void forward_dispatched_input(__dtype* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, __dtype* __restrict__ reshaped_input, __dtype* __restrict__ dispatched_input) {
+    extern "C" __global__ __launch_bounds__(1024) void execute(__dtype* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, __dtype* __restrict__ reshaped_input, __dtype* __restrict__ dispatched_input) {
       // [thread_extent] blockIdx.x = 128
       // [thread_extent] threadIdx.x = 1024
 
@@ -42,7 +42,7 @@ def create_backward_data(samples, global_experts, capacity, aligned_dim, param_d
     #define hidden (@hidden@)
     #define __dtype @dtype@
 
-    extern "C" __global__ __launch_bounds__(1024) void template_op_kernel0(__dtype* __restrict__ gates1_s, __dtype* __restrict__ dispatched_input, int* __restrict__ indices1_s, int* __restrict__ locations1_s, __dtype* __restrict__ grad_reshaped_input) {
+    extern "C" __global__ __launch_bounds__(1024) void execute(__dtype* __restrict__ gates1_s, __dtype* __restrict__ dispatched_input, int* __restrict__ indices1_s, int* __restrict__ locations1_s, __dtype* __restrict__ grad_reshaped_input) {
       // [thread_extent] blockIdx.x = 128
       // [thread_extent] threadIdx.x = 1024
 
@@ -71,7 +71,7 @@ def create_backward_gate(samples, global_experts, capacity, aligned_dim, param_d
     #define hidden (@hidden@)
     #define __dtype @dtype@
 
-    extern "C" __global__ __launch_bounds__(32) void template_op_kernel0(__dtype* __restrict__ dispatched_input, int* __restrict__ indices1_s, int* __restrict__ locations1_s, __dtype* __restrict__ reshaped_input, void* __restrict__ grad_gates1_s) {
+    extern "C" __global__ __launch_bounds__(32) void execute(__dtype* __restrict__ dispatched_input, int* __restrict__ indices1_s, int* __restrict__ locations1_s, __dtype* __restrict__ reshaped_input, void* __restrict__ grad_gates1_s) {
       // [thread_extent] blockIdx.x = @samples@
       // [thread_extent] threadIdx.x = 32
       if (locations1_s[blockIdx.x] >= capacity) {
@@ -92,6 +92,7 @@ def create_backward_gate(samples, global_experts, capacity, aligned_dim, param_d
       for (int i = threadIdx.x; i < hidden; i += 32)
         grad_gates1_s_rf += dispatched_input[indice * (hidden) + i] * reshaped_input[((int)blockIdx.x) * (hidden) + i];
 
+#if !defined(__HIPCC__)
       __dtype red_buf0[1];
       uint mask[1];
       __dtype t0[1];
@@ -108,6 +109,19 @@ def create_backward_gate(samples, global_experts, capacity, aligned_dim, param_d
       t0[(0)] = __shfl_down_sync(mask[(0)], red_buf0[(0)], 1, 32);
       red_buf0[(0)] = (red_buf0[(0)] + t0[(0)]);
       red_buf0[(0)] = __shfl_sync(mask[(0)], red_buf0[(0)], 0, 32);
+#else
+      __shared__ __dtype red_buf0[32];
+      __syncthreads();
+      ((volatile __dtype*)red_buf0)[(((int)threadIdx.x))] = grad_gates1_s_rf;
+      if (((int)threadIdx.x) < 16) {
+        ((volatile __dtype*)red_buf0)[(((int)threadIdx.x))] = ((__dtype)(((volatile __dtype*)red_buf0)[(((int)threadIdx.x))]) + (__dtype)(((volatile __dtype*)red_buf0)[((((int)threadIdx.x) + 16))]));
+        ((volatile __dtype*)red_buf0)[(((int)threadIdx.x))] = ((__dtype)(((volatile __dtype*)red_buf0)[(((int)threadIdx.x))]) + (__dtype)(((volatile __dtype*)red_buf0)[((((int)threadIdx.x) + 8))]));
+        ((volatile __dtype*)red_buf0)[(((int)threadIdx.x))] = ((__dtype)(((volatile __dtype*)red_buf0)[(((int)threadIdx.x))]) + (__dtype)(((volatile __dtype*)red_buf0)[((((int)threadIdx.x) + 4))]));
+        ((volatile __dtype*)red_buf0)[(((int)threadIdx.x))] = ((__dtype)(((volatile __dtype*)red_buf0)[(((int)threadIdx.x))]) + (__dtype)(((volatile __dtype*)red_buf0)[((((int)threadIdx.x) + 2))]));
+        ((volatile __dtype*)red_buf0)[(((int)threadIdx.x))] = ((__dtype)(((volatile __dtype*)red_buf0)[(((int)threadIdx.x))]) + (__dtype)(((volatile __dtype*)red_buf0)[((((int)threadIdx.x) + 1))]));
+      }
+      __syncthreads();
+#endif
       if (((int)threadIdx.x) == 0)
     #if @IS_FLOAT@
         ((float*)grad_gates1_s)[(((int)blockIdx.x))] = red_buf0[(0)];

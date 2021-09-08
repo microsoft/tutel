@@ -73,7 +73,7 @@ static void invoke(const std::vector<torch::Tensor> &ts, int _key) {
     hipDeviceProp_t prop;
     CHECK_EQ(0, hipGetDeviceProperties(&prop, dev));
     std::string arch = std::to_string(prop.gcnArch);
-    CHECK_EQ(0, system(("/opt/rocm/bin/hipcc " + file_name + " -o " + file_name + ".fatbin --genco -O2 --amdgpu-target=gfx" + arch).c_str()));
+    CHECK_EQ(0, system(("/opt/rocm/bin/hipcc " + file_name + " -o " + file_name + ".fatbin --genco -O2 -w --amdgpu-target=gfx" + arch).c_str()));
 #endif
     CHECK_EQ(0, cuModuleLoad(&gm.hMod, (file_name + ".fatbin").c_str()));
 
