@@ -47,7 +47,6 @@ setup(
     packages=find_packages(),
     python_requires='>=3.6, <4',
     install_requires=[
-        'ninja>=1.10.2',
     ],
     ext_modules=[
         CUDAExtension('tutel_custom_kernel', [
