@@ -54,18 +54,6 @@ elif args.dtype == 'float16':
 else:
     raise Exception('Unrecognized data type specified: %s' % args.dtype)
 
-class ExpertModel(torch.nn.Module):
-    def __init__(self, model_dim, hidden_size, activation_fn = lambda x: x):
-        super().__init__()
-        self.fc1 = torch.nn.Linear(model_dim, hidden_size, bias=True)
-        self.fc2 = torch.nn.Linear(hidden_size, model_dim, bias=True)
-        self.activation_fn = activation_fn
-
-    def forward(self, x):
-        x = self.fc1(x)
-        x = self.activation_fn(x)
-        x = self.fc2(x)
-        return x
 
 class ExampleModel(torch.nn.Module):
     def __init__(self):
