@@ -26,7 +26,7 @@ class ExampleModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
 
-        from tutel_moe.moe_layer import MOELayer
+        from tutel.moe_layer import MOELayer
         self._moe_layer = MOELayer(
             'Top2Gate',
             model_dim,

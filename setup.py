@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
@@ -10,6 +11,9 @@ Reference:
 from setuptools import setup, find_packages
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
+import sys
+if len(sys.argv) <= 1:
+    sys.argv += ['install', '--user']
 
 setup(
     name='tutel',
@@ -41,7 +45,7 @@ setup(
     ],
     keywords=['Mixture of Experts', 'MoE', 'Optimization'],
     packages=find_packages(),
-    python_requires='>=3.5, <4',
+    python_requires='>=3.6, <4',
     install_requires=[
         'ninja>=1.10.2',
     ],

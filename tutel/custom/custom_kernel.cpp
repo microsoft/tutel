@@ -10,11 +10,15 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 
+#undef CHECK_EQ
+#undef CHECK_NE
+#undef CHECK_CUDA
+#undef CHECK_CONTIGUOUS
+
 #define CHECK_EQ(x, y) AT_ASSERTM((x) == (y), "CHECK_EQ fails.")
 #define CHECK_NE(x, y) AT_ASSERTM((x) != (y), "CHECK_NE fails.")
 #define CHECK_CUDA(x) AT_ASSERTM(x.type().is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) AT_ASSERTM(x.is_contiguous(), #x " must be contiguous")
-#define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 
 
 static void invoke(const std::vector<torch::Tensor> &ts, int _key) {
@@ -43,7 +47,7 @@ static void invoke(const std::vector<torch::Tensor> &ts, int _key) {
 #endif
 
   int key_int = (_key & 255), ctx = _key >> 8;
-  if (ctx >= gpuMods.size())
+  if (ctx >= (int)gpuMods.size())
     gpuMods.resize(ctx + 1);
 
   auto &gm = gpuMods[ctx];
@@ -93,7 +97,7 @@ static void invoke(const std::vector<torch::Tensor> &ts, int _key) {
   }
 
   std::vector<void*> pargs(ts.size()), ppargs(ts.size());
-  for (int i = 0; i < ts.size(); ++i) {
+  for (int i = 0; i < (int)ts.size(); ++i) {
     pargs[i] = (void*)ts[i].data_ptr(), ppargs[i] = &pargs[i];
   }
 
