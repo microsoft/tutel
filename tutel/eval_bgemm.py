@@ -80,11 +80,16 @@ def backward_reduce():
   middle = torch.matmul(X, Z)
   torch.sum(middle, dim=0)
 
-evaluate('auto_broadcast_bgemm')
-evaluate('manual_broadcast_bgemm')
-evaluate('skip_broadcast_bgemm')
-evaluate('world_bgemm')
-evaluate('expert_bgemm')
-evaluate('layout_sgemm')
-evaluate('backward_reduce_no_sum')
-evaluate('backward_reduce')
+def test():
+  evaluate('auto_broadcast_bgemm')
+  evaluate('manual_broadcast_bgemm')
+  evaluate('skip_broadcast_bgemm')
+  evaluate('world_bgemm')
+  evaluate('expert_bgemm')
+  evaluate('layout_sgemm')
+  evaluate('backward_reduce_no_sum')
+  evaluate('backward_reduce')
+
+if __name__ == '__main__':
+  test()
+
