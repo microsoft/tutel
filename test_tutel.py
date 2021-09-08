@@ -72,11 +72,6 @@ class ExampleModel(torch.nn.Module):
         super().__init__()
         gate_type = 'Top1Gate' if top_value == 1 else 'Top2Gate'
 
-        '''
-        from baseline_moe.moe_layer import MOELayer
-        self._moe_layer = MOELayer(gate_type, model_dim, external_experts=[ExpertModel(model_dim, hidden_size, activation_fn) for i in range(num_local_experts)], fp32_gate=args.fp32_gate).to(device)
-        '''
-
         from tutel_moe.moe_layer import MOELayer
         self._moe_layer = MOELayer(
             gate_type,

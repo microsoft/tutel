@@ -1,7 +1,6 @@
 ```sh
 $ ./setup.py
 $ ./test_tutel.py
-$ ./test_baseline.py
 ```
 
 # Project

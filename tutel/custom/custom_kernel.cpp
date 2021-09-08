@@ -8,6 +8,7 @@
 
 #include <dlfcn.h>
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 
 #define CHECK_EQ(x, y) AT_ASSERTM((x) == (y), "CHECK_EQ fails.")
 #define CHECK_NE(x, y) AT_ASSERTM((x) != (y), "CHECK_NE fails.")
