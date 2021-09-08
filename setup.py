@@ -16,21 +16,16 @@ sys.dont_write_bytecode = False
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
-try:
-	from torch.utils.cpp_extension import IS_HIP_EXTENSION
-except:
-	IS_HIP_EXTENSION = False
-
 cpp_flags = ['-w']
 
 setup(
     name='tutel_custom_kernel',
     ext_modules=[
         CUDAExtension('tutel_custom_kernel', [
-            'custom_kernel_cuda.cpp',
+            'custom_kernel.cpp',
         ],
 		extra_compile_args={'cxx': cpp_flags, 'nvcc': cpp_flags},
-        libraries=[':libcuda.so.1'] if not IS_HIP_EXTENSION else [])
+        libraries=[])
     ],
     cmdclass={
         'build_ext': BuildExtension
