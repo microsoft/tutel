@@ -25,7 +25,7 @@ setup(
             'custom_kernel.cpp',
         ],
 		extra_compile_args={'cxx': cpp_flags, 'nvcc': cpp_flags},
-        libraries=[])
+        libraries=['dl'])
     ],
     cmdclass={
         'build_ext': BuildExtension
@@ -49,4 +49,3 @@ def user_setup(dir_name, site_name):
   shutil.copytree(dir_name, path)
 
 user_setup('../../tutel', 'tutel_moe')
-user_setup('../../baseline', 'baseline_moe')

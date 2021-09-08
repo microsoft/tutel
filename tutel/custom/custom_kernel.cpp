@@ -6,10 +6,11 @@
 
 #include <vector>
 
-#include <cuda.h>
+#include <dlfcn.h>
 #include <cuda_runtime.h>
 
 #define CHECK_EQ(x, y) AT_ASSERTM((x) == (y), "CHECK_EQ fails.")
+#define CHECK_NE(x, y) AT_ASSERTM((x) != (y), "CHECK_NE fails.")
 #define CHECK_CUDA(x) AT_ASSERTM(x.type().is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) AT_ASSERTM(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
@@ -143,6 +144,21 @@ static void invoke(const std::vector<torch::Tensor> &ts, int _key) {
   };
 
   static std::vector<ModuleConfig> gpuMods;
+
+#if !defined(__HIP_PLATFORM_HCC__)
+  static void *libcuda = nullptr;
+  static int (*cuModuleLoad)(...) = nullptr;
+  static int (*cuModuleGetFunction)(...) = nullptr;
+  static int (*cuLaunchKernel)(...) = nullptr;
+
+  if (libcuda == nullptr) {
+    CHECK_NE(nullptr, (libcuda = dlopen("/usr/lib/x86_64-linux-gnu/libcuda.so.1", RTLD_LAZY | RTLD_GLOBAL)));
+
+    CHECK_NE(nullptr, (cuModuleLoad = (decltype(cuModuleLoad))dlsym(libcuda, "cuModuleLoad")));
+    CHECK_NE(nullptr, (cuModuleGetFunction = (decltype(cuModuleGetFunction))dlsym(libcuda, "cuModuleGetFunction")));
+    CHECK_NE(nullptr, (cuLaunchKernel = (decltype(cuLaunchKernel))dlsym(libcuda, "cuLaunchKernel")));
+  }
+#endif
 
   int key_int = (_key & 255), ctx = _key >> 8;
   if (ctx >= gpuMods.size())
