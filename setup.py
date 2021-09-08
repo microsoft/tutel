@@ -1,51 +1,61 @@
-#!/usr/bin/env python3
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
 
-import os, shutil, sys
+"""The setuptools based setup module.
 
-if len(sys.argv) <= 1:
-    sys.argv += ['install', '--user']
+Reference:
+    https://packaging.python.org/guides/distributing-packages-using-setuptools/
+"""
 
-root_path = os.path.dirname(sys.argv[0])
-os.chdir(root_path if root_path else '.')
-root_path = '.'
-
-os.chdir('./tutel/custom')
-
-sys.dont_write_bytecode = False
-
-from setuptools import setup
+from setuptools import setup, find_packages
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
-cpp_flags = ['-w']
 
 setup(
-    name='tutel_custom_kernel',
+    name='tutel',
+    version='0.0.1',
+    description='An Optimized Mixture-of-Experts Implementation.',
+    url='https://github.com/microsoft/Tutel',
+    author='Microsoft',
+    author_email='tutel@microsoft.com',
+    license='MIT',
+    classifiers=[
+        'Development Status :: 2 - Pre-Alpha',
+        'Environment :: GPU',
+        'Intended Audience :: Developers',
+        'Intended Audience :: Education',
+        'Intended Audience :: Science/Research',
+        'License :: OSI Approved :: MIT License',
+        'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3 :: Only',
+        'Programming Language :: Python :: 3.5',
+        'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: 3.7',
+        'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3.9',
+        'Topic :: Scientific/Engineering',
+        'Topic :: Scientific/Engineering :: Artificial Intelligence',
+        'Topic :: Software Development',
+        'Topic :: Software Development :: Libraries',
+        'Topic :: Software Development :: Libraries :: Python Modules',
+    ],
+    keywords=['Mixture of Experts', 'MoE', 'Optimization'],
+    packages=find_packages(),
+    python_requires='>=3.5, <4',
+    install_requires=[
+        'ninja>=1.10.2',
+    ],
     ext_modules=[
         CUDAExtension('tutel_custom_kernel', [
-            'custom_kernel.cpp',
+            './tutel/custom/custom_kernel.cpp',
         ],
-		extra_compile_args={'cxx': cpp_flags, 'nvcc': cpp_flags},
         libraries=['dl'])
     ],
     cmdclass={
         'build_ext': BuildExtension
-    })
-
-
-# Copy library to user-site directly
-import site
-
-try:
-  os.makedirs(site.USER_SITE)
-except FileExistsError:
-  pass
-
-def user_setup(dir_name, site_name):
-  path = '%s/%s' % (site.USER_SITE, site_name)
-  try:
-    shutil.rmtree(path)
-  except:
-    pass
-  shutil.copytree(dir_name, path)
-
-user_setup('../../tutel', 'tutel_moe')
+    },
+    project_urls={
+        'Source': 'https://github.com/microsoft/Tutel',
+        'Tracker': 'https://github.com/microsoft/Tutel/issues',
+    },
+)

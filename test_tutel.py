@@ -72,7 +72,7 @@ class ExampleModel(torch.nn.Module):
         super().__init__()
         gate_type = 'Top1Gate' if top_value == 1 else 'Top2Gate'
 
-        from tutel_moe.moe_layer import MOELayer
+        from tutel.moe_layer import MOELayer
         self._moe_layer = MOELayer(
             gate_type,
             model_dim,
