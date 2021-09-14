@@ -1,14 +1,44 @@
-# Project
+# Project Tutel
 
-> This repo has been populated by an initial template to help get you started. Please
-> make sure to update the content to build a great experience for community-building.
+Tutel MoE: An Optimized Mixture-of-Experts Implementation.
 
-As the maintainer of this project, please make a few updates:
+- Supported Framework: Pytorch
+- Supported GPUs: CUDA(fp32 + fp16), ROCm(fp32)
 
-- Improving this README.MD file to provide a great experience
-- Updating SUPPORT.MD with content about this project's support experience
-- Understanding the security reporting process in SECURITY.MD
-- Remove this section from the README
+How to setup Tutel MoE for Pytorch:
+```
+* Install Online:
+
+        $ python3 -m pip install --user https://github.com/microsoft/tutel/releases/download/v0.1.0/tutel-0.1.0.tar.gz
+
+* Build from Source:
+
+        $ git clone https://github.com/microsoft/tutel
+        $ python3 ./tutel/setup.py install --user
+```
+
+How to use Tutel-optimized MoE in Pytorch:
+```
+* Tutel MoE Example:
+
+        moe_layer = MOELayer('Top2Gate', model_dim, experts={'type': 'ffn', 'hidden_size_per_expert': 1024})
+        y = moe_layer(x)
+
+* Usage of MOELayer Args:
+
+        gate             : the string type of MOE gate, e.g: Top1Gate, Top2Gate
+        model_dim        : the number of channels for MOE's input tensor
+        experts          : a dict-type config for builtin expert network, or a torch.nn.Module-type custom expert network
+        fp32_gate        : option of enabling mixed precision for gate network
+        scan_expert_func : allow users to specify a lambda function to iterate each experts param, e.g. `scan_expert_func = lambda name, param: setattr(param, 'expert', True)`
+        result_func      : allow users to specify a lambda function to format the MoE output and aux_loss, e.g. `result_func = lambda output: (output, output.l_aux)`
+        group            : specify the explicit communication group of all_to_all
+        seeds            : a tuple containing a pair of int to specify manual seed of (shared params, local params)
+
+* Running MoE Hello World Model:
+
+        $ python3 -m torch.distributed.launch --nproc_per_node=1 ./examples/helloworld.py
+```
 
 ## Contributing
 
