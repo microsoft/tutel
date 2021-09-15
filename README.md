@@ -21,7 +21,10 @@ How to use Tutel-optimized MoE in Pytorch:
 ```
 * Tutel MoE Example:
 
-        moe_layer = MOELayer('Top2Gate', model_dim, experts={'type': 'ffn', 'hidden_size_per_expert': 1024})
+        moe_layer = MOELayer('Top2Gate', model_dim, experts={
+            'count_per_node': 2,
+            'type': 'ffn', 'hidden_size_per_expert': 1024, 'activation_fn': lambda x: F.relu(x), ..
+        })
         y = moe_layer(x)
 
 * Usage of MOELayer Args:
@@ -34,6 +37,13 @@ How to use Tutel-optimized MoE in Pytorch:
         result_func      : allow users to specify a lambda function to format the MoE output and aux_loss, e.g. `result_func = lambda output: (output, output.l_aux)`
         group            : specify the explicit communication group of all_to_all
         seeds            : a tuple containing a pair of int to specify manual seed of (shared params, local params)
+
+* Usage of dict-type Experts Config:
+
+        count_per_node   : the number of local experts per device (by default, the value is 1 if not specified)
+        type             : available built-in experts implementation, e.g: ffn
+        hidden_size_per_expert : the hidden size between two linear layers for each expert (used for type == 'ffn' only)
+        activation_fn    : the custom-defined activation function between two linear layers (used for type == 'ffn' only)
 
 * Running MoE Hello World Model by torch.distributed.all_reduce:
 
