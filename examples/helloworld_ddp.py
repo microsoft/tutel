@@ -94,9 +94,9 @@ model = ExampleModel()
 for name, param in model.named_parameters():
     if hasattr(param, 'expert'):
         model.add_param_to_skip_allreduce(name)
-
 if torch.distributed.is_initialized():
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank])
+
 dist_print(model)
 
 optimizer = torch.optim.SGD(model.parameters(), lr=1e-5)
@@ -108,8 +108,6 @@ tuples = (dist_world_size, args.dtype, model_dim, hidden_size, batch_size * num_
 dist_print('[Benchmark] world_size = %s, dtype = %s, model_dim = %s, hidden_size = %s, samples = %s, num_local_experts = %s, topK = %s, device = `%s`' % tuples)
 
 average_time, num_steps = 0, 100
-
-params_for_all_reduce = [p for p in model.parameters() if not hasattr(p, 'expert') and getattr(p, 'requires_grad', False)]
 
 for i in range(num_steps):
 
