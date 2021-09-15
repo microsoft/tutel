@@ -70,7 +70,7 @@ class ExampleModel(torch.nn.Module):
             model_dim = model_dim,
             experts = {'type': 'ffn', 'count_per_node': num_local_experts, 'hidden_size_per_expert': hidden_size},
             fp32_gate = args.fp32_gate,
-            scan_expert_func = lambda name, param: setattr(param, 'expert', True),
+            scan_expert_func = lambda name, param: setattr(param, 'skip_allreduce', True),
             seeds = (1, dist_rank + 1),
         ).to(device)
 
@@ -97,7 +97,7 @@ dist_print('[Benchmark] world_size = %s, dtype = %s, model_dim = %s, hidden_size
 
 average_time, num_steps = 0, 100
 
-params_for_all_reduce = [p for p in model.parameters() if not hasattr(p, 'expert') and getattr(p, 'requires_grad', False)]
+params_for_all_reduce = [p for p in model.parameters() if not hasattr(p, 'skip_allreduce') and getattr(p, 'requires_grad', False)]
 
 for i in range(num_steps):
 

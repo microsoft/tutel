@@ -71,7 +71,7 @@ class ExampleModel(torch.nn.Module):
             model_dim = model_dim,
             experts = {'type': 'ffn', 'count_per_node': num_local_experts, 'hidden_size_per_expert': hidden_size},
             fp32_gate = args.fp32_gate,
-            scan_expert_func = lambda name, param: setattr(param, 'expert', True),
+            scan_expert_func = lambda name, param: setattr(param, 'skip_allreduce', True),
             seeds = (1, dist_rank + 1),
         ).to(device)
 
@@ -92,7 +92,7 @@ class ExampleModel(torch.nn.Module):
 model = ExampleModel()
 
 for name, param in model.named_parameters():
-    if hasattr(param, 'expert'):
+    if hasattr(param, 'skip_allreduce'):
         model.add_param_to_skip_allreduce(name)
 if torch.distributed.is_initialized():
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank])
