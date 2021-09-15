@@ -203,7 +203,7 @@ class MOELayer(torch.nn.Module):
                     hidden[E, W, C, V]  =  activation_fn(hidden[E, W, C, V])
                     hidden[E, W, C, M] +=! hidden[E, W, C, V] x expert_fc2[0, E, V, M]
                     hidden[E, W, C, M]  =  hidden[E, W, C, M] + bias_fc2[E, M]
-                    output[E, W, C, M]  =  hidden[E, W, C, M]
+                    output[W, E, C, M]  =  hidden[E, W, C, M]
                 '''
 
                 self.num_local_experts = experts.get('count_per_node', 1)
