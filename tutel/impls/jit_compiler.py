@@ -16,11 +16,6 @@ try:
 except:
     IS_HIP_EXTENSION = False
 
-try:
-	local_rank = int(os.environ.get('LOCAL_RANK', '0'))
-except:
-	local_rank = 0
-
 class JitCompiler:
     @staticmethod
     def create_raw(source):
@@ -30,7 +25,7 @@ class JitCompiler:
         __ctx__ = JitCompiler.__CTX__
         JitCompiler.__CTX__ += 1
 
-        key = local_rank
+        key = int(os.environ.get('LOCAL_RANK', '0'))
         temp_loc = '%s-%s.MoE' % (tempfile.mktemp(), __ctx__)
         with open(temp_loc, 'w') as fp:
             if IS_HIP_EXTENSION:
