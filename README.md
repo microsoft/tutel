@@ -35,9 +35,13 @@ How to use Tutel-optimized MoE in Pytorch:
         group            : specify the explicit communication group of all_to_all
         seeds            : a tuple containing a pair of int to specify manual seed of (shared params, local params)
 
-* Running MoE Hello World Model:
+* Running MoE Hello World Model by torch.distributed.all_reduce:
 
         $ python3 -m torch.distributed.launch --nproc_per_node=1 ./examples/helloworld.py
+
+* Running MoE Hello World Model by torch.nn.parallel.DistributedDataParallel(torch>=1.8.0):
+
+        $ python3 -m torch.distributed.launch --nproc_per_node=1 ./examples/helloworld_ddp.py
 ```
 
 ## Contributing

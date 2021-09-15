@@ -64,6 +64,7 @@ else:
 class ExampleModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
+        self._ddp_params_and_buffers_to_ignore = list()
 
         self._moe_layer = tutel_moe.moe_layer(
             gate_type = 'Top%dGate' % top_value,
@@ -84,7 +85,18 @@ class ExampleModel(torch.nn.Module):
         result = F.log_softmax(torch.sum(result, dim=2), dim=1)
         return result
 
+    def add_param_to_skip_allreduce(self, param_name):
+        self._ddp_params_and_buffers_to_ignore.append(param_name)
+
+
 model = ExampleModel()
+
+for name, param in model.named_parameters():
+    if hasattr(param, 'skip_allreduce'):
+        model.add_param_to_skip_allreduce(name)
+if torch.distributed.is_initialized():
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank])
+
 dist_print(model)
 
 optimizer = torch.optim.SGD(model.parameters(), lr=1e-5)
@@ -97,8 +109,6 @@ dist_print('[Benchmark] world_size = %s, dtype = %s, model_dim = %s, hidden_size
 
 average_time, num_steps = 0, 100
 
-params_for_all_reduce = [p for p in model.parameters() if not hasattr(p, 'skip_allreduce') and getattr(p, 'requires_grad', False)]
-
 for i in range(num_steps):
 
     torch.cuda.synchronize()
@@ -108,10 +118,6 @@ for i in range(num_steps):
     output = model(x)
     loss = F.nll_loss(output, y)
     loss.backward()
-    if dist_world_size > 1:
-        for p in params_for_all_reduce:
-            p.grad /= dist_world_size
-            dist.all_reduce(p.grad)
     optimizer.step()
 
     torch.cuda.synchronize()
