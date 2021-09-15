@@ -24,6 +24,7 @@ parser.add_argument('--num_local_experts', type=int, default=2)
 parser.add_argument('--dtype', type=str, default='float32')
 parser.add_argument('--fp32_gate', default=False, action='store_true')
 parser.add_argument('--top', type=int, default=2)
+parser.add_argument('--l_aux_wt', type=float, default=0.0)
 args = parser.parse_args()
 
 torch.cuda.set_device(args.local_rank)
@@ -107,6 +108,8 @@ for i in range(num_steps):
 
     output = model(x)
     loss = F.nll_loss(output, y)
+    if args.l_aux_wt:
+        loss += args.l_aux_wt * model._moe_layer.l_aux
     loss.backward()
     if dist_world_size > 1:
         for p in params_for_all_reduce:
