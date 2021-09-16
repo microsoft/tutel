@@ -22,21 +22,23 @@ class JitCompiler:
         if not hasattr(JitCompiler, '__CTX__'):
             torch.cuda.init()
             JitCompiler.__CTX__ = 0
+            JitCompiler.__JITTED_SET__ = set()
+
         __ctx__ = JitCompiler.__CTX__
         JitCompiler.__CTX__ += 1
 
-        key = int(os.environ.get('LOCAL_RANK', '0'))
-        temp_loc = '%s-%s.MoE' % (tempfile.mktemp(), __ctx__)
-        with open(temp_loc, 'w') as fp:
-            if IS_HIP_EXTENSION:
-              fp.write('#include <hip/hip_runtime.h>\n#include <hip/hip_fp16.h>\n')
-            else:
-              fp.write('#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n')
-            fp.write(source)
-        os.rename(temp_loc, '/tmp/%s-%s.cu' % (__ctx__, key))
+        no_nvrtc = 1 if int(os.environ.get('NO_NVRTC', '0')) else 0
+        if not IS_HIP_EXTENSION:
+            source = '#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n' + source
+        else:
+            source = '#include <hip/hip_runtime.h>\n#include <hip/hip_fp16.h>\n' + source
 
         def func(*inputs):
-            tutel_custom_kernel.invoke(inputs, __ctx__ * 256 + key)
+            if __ctx__ not in JitCompiler.__JITTED_SET__:
+                JitCompiler.__JITTED_SET__.add(__ctx__)
+                tutel_custom_kernel.invoke_with_source(inputs, __ctx__, no_nvrtc, source)
+            else:
+                tutel_custom_kernel.invoke(inputs, __ctx__)
         return func
 
     @staticmethod

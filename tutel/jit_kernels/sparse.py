@@ -92,9 +92,9 @@ def create_backward_gate(samples, global_experts, capacity, aligned_dim, param_d
       for (int i = threadIdx.x; i < hidden; i += 32)
         grad_gates1_s_rf += dispatched_input[indice * (hidden) + i] * reshaped_input[((int)blockIdx.x) * (hidden) + i];
 
-#if !defined(__HIPCC__)
+    #if !defined(__HIPCC__)
       __dtype red_buf0[1];
-      uint mask[1];
+      unsigned int mask[1];
       __dtype t0[1];
       red_buf0[(0)] = grad_gates1_s_rf;
       mask[(0)] = __activemask();
@@ -109,7 +109,7 @@ def create_backward_gate(samples, global_experts, capacity, aligned_dim, param_d
       t0[(0)] = __shfl_down_sync(mask[(0)], red_buf0[(0)], 1, 32);
       red_buf0[(0)] = (red_buf0[(0)] + t0[(0)]);
       red_buf0[(0)] = __shfl_sync(mask[(0)], red_buf0[(0)], 0, 32);
-#else
+    #else
       __shared__ __dtype red_buf0[32];
       __syncthreads();
       ((volatile __dtype*)red_buf0)[(((int)threadIdx.x))] = grad_gates1_s_rf;
@@ -121,7 +121,7 @@ def create_backward_gate(samples, global_experts, capacity, aligned_dim, param_d
         ((volatile __dtype*)red_buf0)[(((int)threadIdx.x))] = ((__dtype)(((volatile __dtype*)red_buf0)[(((int)threadIdx.x))]) + (__dtype)(((volatile __dtype*)red_buf0)[((((int)threadIdx.x) + 1))]));
       }
       __syncthreads();
-#endif
+    #endif
       if (((int)threadIdx.x) == 0)
     #if @IS_FLOAT@
         ((float*)grad_gates1_s)[(((int)blockIdx.x))] = red_buf0[(0)];
