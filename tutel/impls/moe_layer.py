@@ -246,7 +246,7 @@ class MOELayer(torch.nn.Module):
                         self.register_parameter(name='fc2_bias', param=torch.nn.Parameter(fc2_bias))
 
                     def extra_repr(self):
-                        return 'model_dim=%d, hidden_size=%d, local_experts=%d' % (self.model_dim, self.hidden_size, self.local_experts)
+                        return 'model_dim=%d, hidden_size=%d, local_experts=%d, bias=%s' % (self.model_dim, self.hidden_size, self.local_experts, self.fc1_bias is not None)
 
                     def forward(self, x):
                         if self.skip_expert:
@@ -277,7 +277,7 @@ class MOELayer(torch.nn.Module):
                         self.fc2_bias = self.fc2_bias.to(*args, **kwargs)
                         return self
 
-                if seeds is not None:
+                if seeds is not None and seeds[1] is not None:
                     torch.manual_seed(seeds[1])
                 self.experts = ModuleList([FusedExpertsNetwork(model_dim, experts['hidden_size_per_expert'], self.num_local_experts)])
             else:
@@ -298,7 +298,7 @@ class MOELayer(torch.nn.Module):
         else:
             raise Exception("Unrecognized gate_type: %s" % gate_type)
 
-        if seeds is not None:
+        if seeds is not None and seeds[0] is not None:
             torch.manual_seed(seeds[0])
         self.gate = gating(model_dim=model_dim, num_global_experts=self.num_global_experts, use_fp32=fp32_gate)
 
