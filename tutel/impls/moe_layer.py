@@ -357,6 +357,7 @@ class MOELayer(torch.nn.Module):
             expert_outputs = [expert(chunk) for chunk, expert in zip(chunks, self.experts)]
             expert_output = torch.cat(expert_outputs, dim=1)
 
+        expert_output = expert_output.to(reshaped_input.dtype)
         expert_output = AllToAll.apply(self.expert_group, expert_output)
 
         expert_output = expert_output.reshape(self.world_size * self.num_local_experts, -1, M)
