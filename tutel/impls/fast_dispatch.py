@@ -68,22 +68,23 @@ class TutelMoeFastDispatcher:
         self.dtype = dispatch_dtype
         self.aligned_dim = model_dim // (2 if self.dtype == torch.float16 else 1)
 
-    def update(self, indices_, locations_, gates_):
+    def update(self, indices_, locations_, gates_, capacity=None):
         self.indices_ = [x.to(torch.int32).view(-1) for x in indices_]
         self.locations_ = [x.to(torch.int32) for x in locations_]
         self.gates_ = [x.to(self.dtype) for x in gates_]
         sample_size = self.indices_[0].size(0)
+        capacity = capacity or self.capacity
 
-        if sample_size != self.expected_sample_size:
-            self.expected_sample_size = sample_size
-            if sample_size not in self.kernel_pool:
+        if sample_size != self.expected_sample_size or capacity != self.capacity:
+            self.expected_sample_size, self.capacity = sample_size, capacity
+            if tuple((sample_size, capacity)) not in self.kernel_pool:
                 self.func_fwd = jit_kernel.create_forward(sample_size, self.num_global_experts, self.capacity, self.aligned_dim, self.dtype)
                 self.func_bwd_data = jit_kernel.create_backward_data(sample_size, self.num_global_experts, self.capacity, self.aligned_dim, self.dtype)
                 self.func_bwd_gate = jit_kernel.create_backward_gate(sample_size, self.num_global_experts, self.capacity, self.aligned_dim, self.dtype)
                 self.ones_helper = torch.ones([sample_size, 2], dtype=self.dtype, device=self.indices_[0].device)
-                self.kernel_pool[sample_size] = self.func_fwd, self.func_bwd_data, self.func_bwd_gate, self.ones_helper
+                self.kernel_pool[tuple((sample_size, capacity))] = self.func_fwd, self.func_bwd_data, self.func_bwd_gate, self.ones_helper
             else:
-                self.func_fwd, self.func_bwd_data, self.func_bwd_gate, self.ones_helper = self.kernel_pool[sample_size]
+                self.func_fwd, self.func_bwd_data, self.func_bwd_gate, self.ones_helper = self.kernel_pool[tuple((sample_size, capacity))]
 
     def encode(self, data):
         return GatingEncoder.apply(self, data)

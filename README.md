@@ -9,7 +9,7 @@ How to setup Tutel MoE for Pytorch:
 ```
 * Install Online:
 
-        $ python3 -m pip install --user https://github.com/microsoft/tutel/releases/download/v0.1.0/tutel-0.1.0.tar.gz
+        $ python3 -m pip install --user --upgrade git+https://github.com/microsoft/tutel@v0.1.x
 
 * Build from Source:
 
