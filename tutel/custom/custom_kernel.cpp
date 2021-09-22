@@ -58,7 +58,7 @@ static std::string nvcc_compile(const char* code, const std::string &arch, int c
 static std::string nvrtc_compile(const char* code, const std::string &arch) {
   std::string arch_option = "--gpu-architecture=" + arch;
 #if !defined(__HIP_PLATFORM_HCC__)
-  std::vector<const char*> param_cstrings = {"--restrict", "--include-path=/usr/local/cuda/include", arch_option.c_str(), "--use_fast_math", "--extra-device-vectorization"};
+  std::vector<const char*> param_cstrings = {"--include-path=/usr/local/cuda/include", arch_option.c_str(), "--use_fast_math", "--extra-device-vectorization"};
 #else
   std::vector<const char*> param_cstrings = {arch_option.c_str(), "-O4"};
 #endif
