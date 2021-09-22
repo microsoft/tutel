@@ -20,8 +20,8 @@ def get_cumsum_kernel(samples, global_experts):
     return torch_cumsum
 
   global cumsum_kernels
-  if samples in cumsum_kernels:
-    return cumsum_kernels[samples]
+  if (samples, global_experts) in cumsum_kernels:
+    return cumsum_kernels[(samples, global_experts)]
 
   base_kernel = JitCompiler.generate_kernel({'batch_num': global_experts, 'num_samples': samples}, '''
     #define thread_num  1024
@@ -70,7 +70,7 @@ def get_cumsum_kernel(samples, global_experts):
     base_kernel(mask1.to(torch.int32), locations1)
     return locations1
 
-  cumsum_kernels[samples] = optimized_cumsum
+  cumsum_kernels[(samples, global_experts)] = optimized_cumsum
   return optimized_cumsum
 
 def fast_cumsum_sub_one(data, dim=0):
