@@ -99,8 +99,10 @@ static std::vector<ModuleConfig> gpuModules;
 static void invoke(const std::vector<torch::Tensor> &ts, int code_id) {
   auto &gm = gpuModules[code_id];
   std::vector<void*> pargs(ts.size()), ppargs(ts.size());
-  for (int i = 0; i < (int)ts.size(); ++i)
+  for (int i = 0; i < (int)ts.size(); ++i) {
+    CHECK_CUDA(ts[i]);
     pargs[i] = (void*)ts[i].data_ptr(), ppargs[i] = &pargs[i];
+  }
   CHECK_EQ(0, cuLaunchKernel(gm.hFunc, gm.blocks.x, gm.blocks.y, gm.blocks.z, gm.threads.x, gm.threads.y, gm.threads.z, 0, nullptr, ppargs.data(), nullptr));
 }
 
@@ -137,6 +139,7 @@ static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id
 
   auto &gm = gpuModules[code_id];
   if (gm.hFunc == nullptr) {
+    CHECK_CUDA(ts[0]);
     int dev = int(ts[0].device().index());
     CHECK_EQ(0, cudaSetDevice(dev));
 
