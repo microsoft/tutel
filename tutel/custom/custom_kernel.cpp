@@ -3,6 +3,7 @@
 
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
+#include <nccl.h>
 
 #include <vector>
 
@@ -184,6 +185,51 @@ static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id
   return invoke(ts, code_id);
 }
 
+
+static torch::Tensor external_all2all(const torch::Tensor &tensor, int stage) {
+  // Designed for older Pytorch without dist.alltoall() support
+  static ncclComm_t comm;
+  static int world_size, world_rank, local_rank;
+  auto tensor_ptr = (char*)tensor.data_ptr();
+
+  if (~stage) {
+    ncclUniqueId id;
+    if (stage == 0) {
+      CHECK_EQ(0, ncclGetUniqueId(&id));
+      memcpy(tensor_ptr, &id, sizeof(id));
+    } else {
+      world_size = getenv("WORLD_SIZE") ? std::atoi(getenv("WORLD_SIZE")) : 1;
+      world_rank = getenv("RANK") ? std::atoi(getenv("RANK")) : 0;
+      local_rank = getenv("LOCAL_RANK") ? std::atoi(getenv("LOCAL_RANK")) : 0;
+
+      memcpy(&id, tensor_ptr, sizeof(id));
+
+      CHECK_EQ(0, ncclGroupStart());
+      CHECK_EQ(0, ncclCommInitRank(&comm, world_size, id, world_rank));
+      CHECK_EQ(0, ncclGroupEnd());
+    }
+    return tensor;
+  }
+
+  CHECK_CUDA(tensor);
+  // CHECK_EQ(0, cudaStreamSynchronize(nullptr));
+
+  size_t length = tensor.nbytes(), slice_size = length / world_size;
+  CHECK_EQ(0, length % world_size);
+
+  auto output = torch::empty_like(tensor, torch::MemoryFormat::Contiguous);
+
+  CHECK_EQ(0, ncclGroupStart());
+  for (int r = 0; r < world_size; r++) {
+    CHECK_EQ(0, ncclSend(tensor_ptr + r * slice_size, slice_size, ncclInt8, r, comm, nullptr));
+    CHECK_EQ(0, ncclRecv(((char*)output.data_ptr()) + r * slice_size, slice_size, ncclInt8, r, comm, nullptr));
+  }
+  CHECK_EQ(0, ncclGroupEnd());
+
+  // CHECK_EQ(0, cudaStreamSynchronize(nullptr));
+  return output;
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("invoke",
         &invoke,
@@ -192,5 +238,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("invoke_with_source",
         &invoke_with_source,
         "Generic Invoke with Source (CUDA)"
+    );
+    m.def("external_all2all",
+        &external_all2all,
+        "External AllToAll for Pytorch without builtin dist.alltoall (CUDA)"
     );
 }
