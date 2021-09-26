@@ -28,7 +28,7 @@ os.chdir(root_path)
 
 setup(
     name='tutel',
-    version='0.1.x',
+    version='0.1',
     description='An Optimized Mixture-of-Experts Implementation.',
     url='https://github.com/microsoft/Tutel',
     author='Microsoft',

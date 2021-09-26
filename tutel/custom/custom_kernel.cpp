@@ -73,8 +73,8 @@ static std::string nvrtc_compile(const char* code, const std::string &arch) {
   log.resize(log_size);
   CHECK_EQ(0, nvrtcGetProgramLog(prog, &log[0]));
   if (0 != res) {
-    LOG(ERROR) << log;
-    CHECK_EQ(0, res);
+    LOG(ERROR) << log << " Failed to use NVRTC for JIT compilation in this Pytorch version, try another approach by external CUDA compiler..";
+    return "";
   }
 
   size_t ptx_size;
@@ -156,7 +156,9 @@ static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id
     const char *source = code.data(), *pos, *tail;
 
     int no_nvrtc = flags & 1;
-    auto image = (!no_nvrtc) ? nvrtc_compile(source, arch) : nvcc_compile(source, arch, code_id, dev);
+    std::string image;
+    if (no_nvrtc || (image = nvrtc_compile(source, arch)) == "")
+        image = nvcc_compile(source, arch, code_id, dev);
 
     long launch_bound;
     { char tag[] = " __launch_bounds__(";  pos = strstr(source, tag); launch_bound = pos ? std::atol(pos + sizeof(tag) - 1) : 1024L; }
