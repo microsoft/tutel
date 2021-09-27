@@ -13,50 +13,13 @@ import torch.nn.functional as F
 
 from ..impls.fast_dispatch import fast_dispatcher
 from ..jit_kernels.gating import fast_cumsum_sub_one
+from ..impls.communicate import AllToAll, get_world_size, get_world_rank
 
-
-def get_world_size(group):
-    try:
-        return dist.get_world_size(group)
-    except:
-        return 1
-
-def get_world_rank(group):
-    try:
-        return dist.get_rank(group)
-    except:
-        return 0
 
 def one_hot_with_dtype(data, num_classes, dtype):
     result = torch.zeros([data.size(0), num_classes], device=data.device, dtype=dtype)
     result.scatter_(1, data.unsqueeze(-1), 1)
     return result
-
-
-class AllToAll(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor):
-        ctx.group = group
-        ctx.world_size = get_world_size(group)
-        if ctx.world_size <= 1 or AllToAll.a2a_type == 0:
-            return input
-        input = input.contiguous()
-        if (AllToAll.a2a_type & 8) == 8:
-            torch.cuda.synchronize(input.device)
-            t_start = time.time()
-        output = torch.empty_like(input)
-        dist.all_to_all_single(output, input, group=group)
-        if (AllToAll.a2a_type & 8) == 8:
-            torch.cuda.synchronize(input.device)
-            t_stop = time.time()
-            if group.rank() == 0:
-                print('[INFO] AllToAll on message size (%d x %s) costs %g sec.' % (torch.numel(input), input.dtype, t_stop - t_start))
-        return output
-
-    @staticmethod
-    def backward(ctx: Any, grad_output: Tensor):
-        return (None, AllToAll.apply(ctx.group, grad_output))
-
 
 def load_balance(gates, mask1, num_global_experts, use_fp32):
     if gates.dtype == torch.float32 or use_fp32:
@@ -187,8 +150,6 @@ class MOELayer(torch.nn.Module):
         self.result_func = result_func
 
         self.skip_moe = (int(os.environ.get('SKIP_MOE', '0')) != 0)
-        # A2A_TYPE: 0 for skip AllToAll, 1 for standard Pytorch AllToAll, 9 for standard Pytorch AllToAll with Timing
-        AllToAll.a2a_type = int(os.environ.get('A2A_TYPE', '1'))
 
         if not isinstance(experts, dict):
             self.experts = cast(ModuleList, experts) if type(experts) == ModuleList else ModuleList(experts)
@@ -335,7 +296,7 @@ class MOELayer(torch.nn.Module):
             if reshaped_input.size(0) > self.expected_sample_size:
                 raise Exception('MoE JIT is designed to work on sample size = %s, while receiving sample size = %s (> %s)' % (self.expected_sample_size, reshaped_input.size(0), self.expected_sample_size))
             else:
-                if self.expert_group.rank() == 0:
+                if get_world_rank(expert_group) == 0:
                     print('[WARN] MoE is initialized to keep working on sample size = %s, while receiving sample size = %s (will slow down this forward step)' % (self.expected_sample_size, reshaped_input.size(0)))
                 pad_input = torch.zeros([self.expected_sample_size, self.model_dim], dtype=reshaped_input.dtype, layout=reshaped_input.layout, device=reshaped_input.device)
                 pad_input[:reshaped_input.size(0)] = reshaped_input
