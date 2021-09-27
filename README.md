@@ -29,7 +29,7 @@ How to use Tutel-optimized MoE in Pytorch:
 
 * Usage of MOELayer Args:
 
-        gate             : the string type of MOE gate, e.g: Top1Gate, Top2Gate
+        gate             : the string type of MOE gate, e.g: Top1Gate, Top2Gate, Top3Gate, Top4Gate
         model_dim        : the number of channels for MOE's input tensor
         experts          : a dict-type config for builtin expert network, or a torch.nn.Module-type custom expert network
         fp32_gate        : option of enabling mixed precision for gate network
