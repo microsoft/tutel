@@ -41,7 +41,7 @@ class AllToAll(torch.autograd.Function):
             AllToAll.__prepared__ = True
             if not hasattr(dist, 'all_to_all_single') and (AllToAll.a2a_type & 1) == 1:
                 AllToAll.a2a_type ^= 3
-            if (AllToAll.a2a_type & 2) == 2:
+            if (AllToAll.a2a_type & 2) == 2 and get_world_size(group) > 1:
                 host_unique_id = torch.zeros([256], dtype=torch.int32).cpu()
                 if get_world_rank(group) == 0:
                     tutel_custom_kernel.external_all2all(host_unique_id, 0)

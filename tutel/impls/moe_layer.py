@@ -33,44 +33,7 @@ def load_balance(gates, mask1, num_global_experts, use_fp32):
     return l_loss
 
 
-class Top1Gate(torch.nn.Module):
-
-    def __init__(
-        self,
-        model_dim,
-        num_global_experts,
-        capacity_factor=1.0,
-        use_fp32=False,
-    ):
-        super().__init__()
-        self.wg = torch.nn.Linear(model_dim, num_global_experts, bias=False)
-        self.capacity_factor = capacity_factor
-        self.use_fp32 = use_fp32
-        self.num_global_experts = num_global_experts
-
-    def capacity(self, expected_sample_size):
-        if not hasattr(self, 'capacity_int'):
-            self.capacity_int = int(self.capacity_factor * ((expected_sample_size + self.num_global_experts - 1) // self.num_global_experts))
-        return self.capacity_int
-
-    def forward(self, input: torch.Tensor):
-        logits = self.wg(input)
-
-        indices1_s = torch.argmax(logits, dim=1)
-        mask1 = one_hot_with_dtype(indices1_s, num_classes=self.num_global_experts, dtype=indices1_s.dtype)
-
-        mask1_ = mask1.to(logits.dtype)
-        gates = F.softmax(logits, dim=1)
-        gates1_s = (gates * mask1_).sum(dim=1)
-        l_loss = load_balance(gates, mask1_, self.num_global_experts, self.use_fp32)
-
-        locations1 = fast_cumsum_sub_one(mask1)
-        locations1_s = torch.sum(locations1 * mask1, dim=1).to(torch.int32)
-
-        return l_loss, [gates1_s, ], [indices1_s.to(torch.int32), ], [locations1_s.to(torch.int32), ]
-
-
-class Top2Gate(torch.nn.Module):
+class TopKGate(torch.nn.Module):
  
     def __init__(
         self,
@@ -78,47 +41,49 @@ class Top2Gate(torch.nn.Module):
         num_global_experts,
         capacity_factor=1.0,
         use_fp32=False,
+        top_k=2,
     ):
         super().__init__()
+        top_k = min(top_k, num_global_experts)
+        self.top_k = top_k
+        assert self.top_k > 0 and self.top_k <= 2, "Top-k value (%d) is not implemented." % self.top_k
+
         self.wg = torch.nn.Linear(model_dim, num_global_experts, bias=False)
         self.capacity_factor = capacity_factor
         self.use_fp32 = use_fp32
         self.num_global_experts = num_global_experts
-        assert self.num_global_experts >= 2, "You have only 1 expert, while you are using a top-2 gate."
 
     def capacity(self, expected_sample_size):
         if not hasattr(self, 'capacity_int'):
-            self.capacity_int = 2 * int(self.capacity_factor * ((expected_sample_size + self.num_global_experts - 1) // self.num_global_experts))
+            self.capacity_int = self.top_k * int(self.capacity_factor * ((expected_sample_size + self.num_global_experts - 1) // self.num_global_experts))
         return self.capacity_int
 
     def forward(self, input: torch.Tensor):
         logits = self.wg(input)
 
-        top2_indices = torch.topk(logits, 2, dim=1).indices
-        indices1_s, indices2_s = top2_indices.chunk(2, dim=1)
-        indices1_s, indices2_s = indices1_s.view(-1), indices2_s.view(-1)
+        topk_indices = torch.topk(logits, self.top_k, dim=1).indices
 
-        mask1 = one_hot_with_dtype(indices1_s, num_classes=self.num_global_experts, dtype=indices1_s.dtype)
-        mask2 = one_hot_with_dtype(indices2_s, num_classes=self.num_global_experts, dtype=indices2_s.dtype)
+        indices_s = [x.view(-1) for x in topk_indices.chunk(self.top_k, dim=1)]
+        masks_se = [one_hot_with_dtype(x, num_classes=self.num_global_experts, dtype=x.dtype) for x in indices_s]
 
         gates = F.softmax(logits, dim=1)
-        gates1_s = (gates * mask1).sum(dim=1)
-        gates2_s = (gates * mask2).sum(dim=1)
-        l_loss = load_balance(gates, mask1, self.num_global_experts, self.use_fp32)
+        gates_s = [(gates * x).sum(dim=1) for x in masks_se]
 
-        locations1 = fast_cumsum_sub_one(mask1)
-        locations1_s = torch.sum(locations1 * mask1, dim=1).to(torch.int32)
+        l_loss = load_balance(gates, masks_se[0], self.num_global_experts, self.use_fp32)
 
-        locations2 = fast_cumsum_sub_one(mask2)
-        locations2 += torch.sum(mask1, dim=0, keepdim=True)
-        locations2_s = torch.sum(locations2 * mask2, dim=1)
+        locations1 = fast_cumsum_sub_one(masks_se[0])
+        locations_s = [torch.sum(locations1 * masks_se[0], dim=1).to(torch.int32)]
 
-        # Normalize Gate
-        denom_s = torch.clamp(gates1_s + gates2_s, min=torch.finfo(gates2_s.dtype).eps)
-        gates1_s /= denom_s
-        gates2_s /= denom_s
+        if self.top_k >= 2:
+          locations2 = fast_cumsum_sub_one(masks_se[1])
+          locations2 += torch.sum(masks_se[0], dim=0, keepdim=True)
+          locations_s.append(torch.sum(locations2 * masks_se[1], dim=1).to(torch.int32))
 
-        return l_loss, [gates1_s, gates2_s], [indices1_s.to(torch.int32), indices2_s.to(torch.int32)], [locations1_s.to(torch.int32), locations2_s.to(torch.int32)]
+          # Normalize Gate
+          denom_s = torch.clamp(sum(gates_s), min=torch.finfo(gates_s[0].dtype).eps)
+          gates_s = [x / denom_s for x in gates_s]
+
+        return l_loss, gates_s, [x.to(torch.int32) for x in indices_s], locations_s
 
 
 class MOELayer(torch.nn.Module):
@@ -261,16 +226,15 @@ class MOELayer(torch.nn.Module):
         self.num_global_experts = self.world_size * self.num_local_experts
         self.model_dim = model_dim
 
-        if gate_type == 'Top1Gate' or (gate_type == 'Top2Gate' and self.num_global_experts == 1):
-            gating = Top1Gate
-        elif gate_type == 'Top2Gate':
-            gating = Top2Gate
+        if gate_type in ('Top1Gate', 'Top2Gate'):
+            gating = TopKGate
+            top_k = int(gate_type[3])
         else:
             raise Exception("Unrecognized gate_type: %s" % gate_type)
 
         if seeds is not None and seeds[0] is not None:
             torch.manual_seed(seeds[0])
-        self.gate = gating(model_dim=model_dim, num_global_experts=self.num_global_experts, use_fp32=fp32_gate)
+        self.gate = gating(model_dim=model_dim, top_k=top_k, num_global_experts=self.num_global_experts, use_fp32=fp32_gate)
 
     def get_parameter_iterator(self, param_type):
         if param_type == 'gate':
