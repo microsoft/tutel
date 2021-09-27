@@ -74,7 +74,7 @@ static std::string nvrtc_compile(const char* code, const std::string &arch) {
   log.resize(log_size);
   CHECK_EQ(0, nvrtcGetProgramLog(prog, &log[0]));
   if (0 != res) {
-    LOG(ERROR) << log << " Failed to use NVRTC for JIT compilation in this Pytorch version, try another approach by external CUDA compiler..";
+    LOG(ERROR) << log << " Failed to use NVRTC for JIT compilation in this Pytorch version, try another approach using CUDA compiler.. (To always disable NVRTC, please: export NO_NVRTC=1)";
     return "";
   }
 
