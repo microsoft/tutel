@@ -46,7 +46,7 @@ class TopKGate(torch.nn.Module):
         super().__init__()
         top_k = min(top_k, num_global_experts)
         self.top_k = top_k
-        assert self.top_k > 0 and self.top_k <= 2, "Top-k value (%d) is not implemented." % self.top_k
+        assert self.top_k > 0, "Top-k value %d is not valid." % self.top_k
 
         self.wg = torch.nn.Linear(model_dim, num_global_experts, bias=False)
         self.capacity_factor = capacity_factor
@@ -74,10 +74,14 @@ class TopKGate(torch.nn.Module):
         locations1 = fast_cumsum_sub_one(masks_se[0])
         locations_s = [torch.sum(locations1 * masks_se[0], dim=1).to(torch.int32)]
 
-        if self.top_k >= 2:
-          locations2 = fast_cumsum_sub_one(masks_se[1])
-          locations2 += torch.sum(masks_se[0], dim=0, keepdim=True)
-          locations_s.append(torch.sum(locations2 * masks_se[1], dim=1).to(torch.int32))
+        if self.top_k > 1:
+          acc_base = None
+
+          for k in range(1, self.top_k):
+            acc_base = torch.sum(masks_se[k - 1], dim=0, keepdim=True) if acc_base is None else acc_base + torch.sum(masks_se[k - 1], dim=0, keepdim=True)
+            locations2 = fast_cumsum_sub_one(masks_se[k])
+            locations2 += acc_base
+            locations_s.append(torch.sum(locations2 * masks_se[k], dim=1).to(torch.int32))
 
           # Normalize Gate
           denom_s = torch.clamp(sum(gates_s), min=torch.finfo(gates_s[0].dtype).eps)
@@ -95,7 +99,7 @@ class MOELayer(torch.nn.Module):
             y = moe_layer(x)
 
     Args:
-        gate             : the string type of MOE gate, e.g: Top1Gate, Top2Gate
+        gate             : the string type of MOE gate, e.g: Top1Gate, Top2Gate, Top3Gate, Top4Gate
         model_dim        : the number of channels for MOE's input tensor
         experts          : a dict-type config for builtin expert network, or a torch.nn.Module-type custom expert network
         fp32_gate        : option of enabling mixed precision for gate network
@@ -226,7 +230,7 @@ class MOELayer(torch.nn.Module):
         self.num_global_experts = self.world_size * self.num_local_experts
         self.model_dim = model_dim
 
-        if gate_type in ('Top1Gate', 'Top2Gate'):
+        if gate_type in ('Top1Gate', 'Top2Gate', 'Top3Gate', 'Top4Gate'):
             gating = TopKGate
             top_k = int(gate_type[3])
         else:
