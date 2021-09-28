@@ -3,6 +3,10 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
+# Recommend to initialize NUMA status at the most program begining (before any other imports)
+from tutel import system_init
+system_init.init_affinity_at_program_beginning()
+
 import time
 import torch
 import torch.optim as optim

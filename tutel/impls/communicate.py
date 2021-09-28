@@ -24,15 +24,6 @@ def get_world_rank(group):
     except:
         return 0
 
-def set_numa_affinity(group_rank):
-    try:
-        nodes = sorted([int(x[4:]) for x in os.listdir('/sys/devices/system/node') if re.match('node[0-9]+', x)])
-        cpus = [sorted([int(x[3:]) for x in os.listdir('/sys/devices/system/node/node%d' % node_id) if re.match('cpu[0-9]+', x)]) for node_id in nodes]
-        sel_node = group_rank % len(nodes)
-        os.sched_setaffinity(0, cpus[sel_node])
-    except Exception as ex:
-        if group_rank == 0:
-            print('[WARN] Failed to set NUMA status: %s' % ex)
 
 class AllToAll(torch.autograd.Function):
     @staticmethod
@@ -48,8 +39,6 @@ class AllToAll(torch.autograd.Function):
                 host_unique_id = host_unique_id.to(input.device)
                 dist.broadcast(host_unique_id, 0, group, async_op=True).wait()
                 tutel_custom_kernel.external_all2all(host_unique_id.cpu(), 1)
-            if int(os.environ.get('AUTO_NUMA', '1')) != 0:
-                set_numa_affinity(get_world_rank(group))
 
         ctx.group = group
         ctx.world_size = get_world_size(group)
