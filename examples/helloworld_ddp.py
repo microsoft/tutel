@@ -7,6 +7,7 @@
 from tutel import system_init
 system_init.init_affinity_at_program_beginning()
 
+import os
 import time
 import torch
 import torch.optim as optim
@@ -21,7 +22,7 @@ assert torch.__version__ >= '1.8.0', "DDP-based MoE requires Pytorch >= 1.8.0"
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--local_rank', type=int, default=0)
+parser.add_argument('--local_rank', type=int, default=-1)
 parser.add_argument('--batch_size', type=int, default=8)
 parser.add_argument('--num_tokens', type=int, default=1024)
 parser.add_argument('--model_dim', type=int, default=2048)
@@ -31,6 +32,9 @@ parser.add_argument('--dtype', type=str, default='float32')
 parser.add_argument('--fp32_gate', default=False, action='store_true')
 parser.add_argument('--top', type=int, default=2)
 args = parser.parse_args()
+
+if args.local_rank < 0:
+    args.local_rank = int(os.environ['LOCAL_RANK'])
 
 torch.cuda.set_device(args.local_rank)
 
