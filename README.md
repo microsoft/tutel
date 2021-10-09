@@ -19,12 +19,34 @@ How to setup Tutel MoE for Pytorch:
 
 How to use Tutel-optimized MoE in Pytorch:
 ```
-* Tutel MoE Example:
+* Running MoE Hello World Model by torch.distributed.all_reduce:
 
-        moe_layer = MOELayer('Top2Gate', model_dim, experts={
+        $ python3 -m torch.distributed.launch --nproc_per_node=1 ./examples/helloworld.py
+        (or)
+        $ python3 -m torch.distributed.launch --use_env --nproc_per_node=1 ./examples/helloworld.py
+
+        (For New Pytorch)
+        $ python3 -m torch.distributed.run --nproc_per_node=1 ./examples/helloworld.py
+
+* Running MoE Hello World Model by torch.nn.parallel.DistributedDataParallel (requires torch >= 1.8.0):
+
+        $ python3 -m torch.distributed.launch --nproc_per_node=1 ./examples/helloworld_ddp.py
+        (or)
+        $ python3 -m torch.distributed.launch --use_env --nproc_per_node=1 ./examples/helloworld_ddp.py
+
+        (For New Pytorch)
+        $ python3 -m torch.distributed.run --nproc_per_node=1 ./examples/helloworld_ddp.py
+
+* How to import Tutel MoE in Pytorch Models:
+
+        # Create MoE:
+        from tutel import moe as tutel_moe
+        moe_layer = tutel_moe.moe_layer('Top2Gate', model_dim, experts={
             'count_per_node': 2,
             'type': 'ffn', 'hidden_size_per_expert': 1024, 'activation_fn': lambda x: F.relu(x), ..
         })
+
+        # Forward MoE:
         y = moe_layer(x)
 
 * Usage of MOELayer Args:
@@ -44,14 +66,6 @@ How to use Tutel-optimized MoE in Pytorch:
         type             : available built-in experts implementation, e.g: ffn
         hidden_size_per_expert : the hidden size between two linear layers for each expert (used for type == 'ffn' only)
         activation_fn    : the custom-defined activation function between two linear layers (used for type == 'ffn' only)
-
-* Running MoE Hello World Model by torch.distributed.all_reduce:
-
-        $ python3 -m torch.distributed.launch --nproc_per_node=1 ./examples/helloworld.py
-
-* Running MoE Hello World Model by torch.nn.parallel.DistributedDataParallel (requires torch >= 1.8.0):
-
-        $ python3 -m torch.distributed.launch --nproc_per_node=1 ./examples/helloworld_ddp.py
 ```
 
 ## Contributing
