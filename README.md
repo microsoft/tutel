@@ -1,4 +1,4 @@
-# Project Tutel
+# Tutel
 
 Tutel MoE: An Optimized Mixture-of-Experts Implementation.
 
