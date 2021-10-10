@@ -34,7 +34,7 @@ parser.add_argument('--top', type=int, default=2)
 args = parser.parse_args()
 
 if args.local_rank < 0:
-    args.local_rank = int(os.environ['LOCAL_RANK'])
+    args.local_rank = int(os.environ.get('LOCAL_RANK', 0))
 
 torch.cuda.set_device(args.local_rank)
 

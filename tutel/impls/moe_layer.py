@@ -149,6 +149,7 @@ class MOELayer(torch.nn.Module):
                 fused_custom_fn = experts.get('fused_custom_fn')
                 if fused_custom_fn is None:
                     activation_fn = experts.get('activation_fn', lambda x: F.relu(x))
+                implicit_dropout_p = experts.get('implicit_dropout_p', 0)
 
                 class FusedExpertsNetwork(torch.nn.Module):
                     def __init__(self, model_dim, hidden_size, local_experts):
@@ -184,6 +185,12 @@ class MOELayer(torch.nn.Module):
                         self.register_parameter(name='fc1_bias', param=torch.nn.Parameter(fc1_bias))
                         self.register_parameter(name='fc2_bias', param=torch.nn.Parameter(fc2_bias))
 
+                        if implicit_dropout_p:
+                            self.dropout_fc1 = torch.nn.Dropout(p=implicit_dropout_p)
+                            self.dropout_fc2 = torch.nn.Dropout(p=implicit_dropout_p)
+                        else:
+                            self.dropout_fc1 = self.dropout_fc2 = lambda x: x
+
                     def extra_repr(self):
                         return 'model_dim=%d, hidden_size=%d, local_experts=%d, bias=%s' % (self.model_dim, self.hidden_size, self.local_experts, self.fc1_bias is not None)
 
@@ -196,14 +203,18 @@ class MOELayer(torch.nn.Module):
                             original_shape, x = x.shape, x.view(-1, self.model_dim)
                             x = torch.addmm(self.fc1_bias, x, self.fc1_weight)
                             x = activation_fn(x)
+                            x = self.dropout_fc1(x)
                             x = torch.addmm(self.fc2_bias, x, self.fc2_weight)
+                            x = self.dropout_fc2(x)
                             x = x.view(original_shape)
                         else:
                             x = x.permute(1, 0, 2, 3)
                             original_shape, x = x.shape, x.reshape(self.local_experts, -1, self.model_dim)
                             x = torch.matmul(x, self.fc1_weight) + self.fc1_bias
                             x = activation_fn(x)
+                            x = self.dropout_fc1(x)
                             x = torch.matmul(x, self.fc2_weight) + self.fc2_bias
+                            x = self.dropout_fc2(x)
                             x = x.reshape(self.local_experts, original_shape[1], original_shape[2], self.model_dim)
                             x = x.permute(1, 0, 2, 3)
                         return x
