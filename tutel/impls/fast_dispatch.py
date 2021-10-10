@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Optional, Tuple, Union, cast
 import torch
 from torch import Tensor
 
+from .jit_compiler import IS_HIP_EXTENSION
 from ..jit_kernels import sparse as jit_kernel
 
 class GatingEncoder(torch.autograd.Function):
@@ -65,7 +66,8 @@ class TutelMoeFastDispatcher:
         self.capacity = capacity
         self.model_dim = model_dim
         self.kernel_pool = dict()
-        self.dtype = dispatch_dtype
+        self.dtype = dispatch_dtype if not IS_HIP_EXTENSION else torch.float32
+        self.original_dtype = dispatch_dtype
         self.aligned_dim = model_dim // (2 if self.dtype == torch.float16 else 1)
 
     def update(self, indices_, locations_, gates_, capacity=None):
@@ -87,9 +89,9 @@ class TutelMoeFastDispatcher:
                 self.func_fwd, self.func_bwd_data, self.func_bwd_gate, self.ones_helper = self.kernel_pool[tuple((sample_size, capacity))]
 
     def encode(self, data):
-        return GatingEncoder.apply(self, data)
+        return GatingEncoder.apply(self, data.to(self.dtype)).to(self.original_dtype)
 
     def decode(self, data):
-        return GatingDecoder.apply(self, data, *self.gates_)
+        return GatingDecoder.apply(self, data.to(self.dtype), *self.gates_).to(self.original_dtype)
 
 fast_dispatcher = TutelMoeFastDispatcher

@@ -3,7 +3,7 @@
 Tutel MoE: An Optimized Mixture-of-Experts Implementation.
 
 - Supported Framework: Pytorch
-- Supported GPUs: CUDA(fp32 + fp16), ROCm(fp32)
+- Supported GPUs: CUDA(fp32 + fp16), ROCm(fp32 + fp16)
 
 How to setup Tutel MoE for Pytorch:
 ```
