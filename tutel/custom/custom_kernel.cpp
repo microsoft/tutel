@@ -20,7 +20,7 @@
 
 #define CHECK_EQ(x, y) AT_ASSERTM((x) == (y), "CHECK_EQ fails.")
 #define CHECK_NE(x, y) AT_ASSERTM((x) != (y), "CHECK_NE fails.")
-#define CHECK_CUDA(x) AT_ASSERTM(x.type().is_cuda(), #x " must be a CUDA tensor")
+#define CHECK_CUDA(x) AT_ASSERTM(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) AT_ASSERTM(x.is_contiguous(), #x " must be contiguous")
 
 static std::string file_read(const char *path) {
