@@ -49,7 +49,7 @@ class TopKGate(torch.nn.Module):
         assert self.top_k > 0, "Top-k value %d is not valid." % self.top_k
 
         self.wg = torch.nn.Linear(model_dim, num_global_experts, bias=False)
-        self.capacity_factor = capacity_factor
+        self.capacity_factor = float(os.environ.get('CAP_FACTOR', capacity_factor))
         self.use_fp32 = use_fp32
         self.num_global_experts = num_global_experts
 
@@ -106,7 +106,7 @@ class MOELayer(torch.nn.Module):
         scan_expert_func : allow users to specify a lambda function to iterate each experts param, e.g. `scan_expert_func = lambda name, param: setattr(param, 'expert', True)`
         result_func      : allow users to specify a lambda function to format the MoE output and aux_loss, e.g. `result_func = lambda output: (output, output.l_aux)`
         group            : specify the explicit communication group of all_to_all
-        seeds            : a tuple containing a pair of int to specify manual seed of (shared params, local params)
+        seeds            : a tuple containing a tripple of int to specify manual seed of (shared params, local params, others params after MoE's)
     """
 
     def __init__(self, gate_type, model_dim: int, experts = None, fp32_gate = False, scan_expert_func = None, result_func = None, group: Optional[Any] = None, seeds = None):
@@ -250,6 +250,8 @@ class MOELayer(torch.nn.Module):
         if seeds is not None and seeds[0] is not None:
             torch.manual_seed(seeds[0])
         self.gate = gating(model_dim=model_dim, top_k=top_k, num_global_experts=self.num_global_experts, use_fp32=fp32_gate)
+        if seeds is not None and len(seeds) > 2 and seeds[2] is not None:
+            torch.manual_seed(seeds[2])
 
     def get_parameter_iterator(self, param_type):
         if param_type == 'gate':
