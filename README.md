@@ -58,7 +58,7 @@ How to use Tutel-optimized MoE in Pytorch:
         scan_expert_func : allow users to specify a lambda function to iterate each experts param, e.g. `scan_expert_func = lambda name, param: setattr(param, 'expert', True)`
         result_func      : allow users to specify a lambda function to format the MoE output and aux_loss, e.g. `result_func = lambda output: (output, output.l_aux)`
         group            : specify the explicit communication group of all_to_all
-        seeds            : a tuple containing a pair of int to specify manual seed of (shared params, local params)
+        seeds            : a tuple containing a tripple of int to specify manual seed of (shared params, local params, others params after MoE's)
 
 * Usage of dict-type Experts Config:
 
