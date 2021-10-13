@@ -4,6 +4,7 @@
 from typing import TYPE_CHECKING, Any, Optional, Tuple, Union, cast
 
 import os
+import re
 import time
 import torch
 from torch import Tensor
@@ -42,6 +43,7 @@ class TopKGate(torch.nn.Module):
         capacity_factor=1.0,
         use_fp32=False,
         top_k=2,
+        **kwargs,
     ):
         super().__init__()
         top_k = min(top_k, num_global_experts)
@@ -53,12 +55,18 @@ class TopKGate(torch.nn.Module):
         self.use_fp32 = use_fp32
         self.num_global_experts = num_global_experts
 
+        input_dropout_p = kwargs.get('input_dropout_p', 0)
+        self.input_dropout = torch.nn.Dropout(p=input_dropout_p) if input_dropout_p else None
+
     def capacity(self, expected_sample_size):
         if not hasattr(self, 'capacity_int'):
             self.capacity_int = self.top_k * int(self.capacity_factor * ((expected_sample_size + self.num_global_experts - 1) // self.num_global_experts))
         return self.capacity_int
 
     def forward(self, input: torch.Tensor):
+        if self.input_dropout:
+            input = self.input_dropout(input)
+
         logits = self.wg(input)
 
         topk_indices = torch.topk(logits, self.top_k, dim=1).indices
@@ -95,11 +103,11 @@ class MOELayer(torch.nn.Module):
 
         e.g.
 
-            moe_layer = MOELayer('Top2Gate', model_dim, experts={'type': 'ffn', 'hidden_size_per_expert': 1024})
+            moe_layer = MOELayer({'type': 'top', 'k': 2}, model_dim, experts={'type': 'ffn', 'hidden_size_per_expert': 1024})
             y = moe_layer(x)
 
     Args:
-        gate             : the string type of MOE gate, e.g: Top1Gate, Top2Gate, Top3Gate, Top4Gate
+        gate_type        : the string type of MOE gate, e.g: Top1Gate, Top2Gate. Or. dict-type gate description, e.g. {'type': 'top', 'k': 2}
         model_dim        : the number of channels for MOE's input tensor
         experts          : a dict-type config for builtin expert network, or a torch.nn.Module-type custom expert network
         fp32_gate        : option of enabling mixed precision for gate network
@@ -241,15 +249,19 @@ class MOELayer(torch.nn.Module):
         self.num_global_experts = self.world_size * self.num_local_experts
         self.model_dim = model_dim
 
-        if gate_type in ('Top1Gate', 'Top2Gate', 'Top3Gate', 'Top4Gate'):
+        if isinstance(gate_type, str):
+            assert re.match(r'^Top[0-9]+Gate$', gate_type), "Unrecognized gate_type: %s" % gate_type
+            gate_type = {'type': 'top', 'k': int(gate_type[3:-4])}
+
+        if gate_type['type'] == 'top':
             gating = TopKGate
-            top_k = int(gate_type[3])
+            top_k = gate_type['k']
         else:
             raise Exception("Unrecognized gate_type: %s" % gate_type)
 
         if seeds is not None and seeds[0] is not None:
             torch.manual_seed(seeds[0])
-        self.gate = gating(model_dim=model_dim, top_k=top_k, num_global_experts=self.num_global_experts, use_fp32=fp32_gate)
+        self.gate = gating(model_dim=model_dim, top_k=top_k, num_global_experts=self.num_global_experts, use_fp32=fp32_gate, **gate_type)
         if seeds is not None and len(seeds) > 2 and seeds[2] is not None:
             torch.manual_seed(seeds[2])
 
