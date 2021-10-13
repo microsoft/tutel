@@ -13,7 +13,8 @@ How to setup Tutel MoE for Pytorch:
 
 * Build from Source:
 
-        $ git clone https://github.com/microsoft/tutel
+        $ git clone https://github.com/microsoft/tutel --branch v0.1.x
+
         $ python3 ./tutel/setup.py install --user
 ```
 
@@ -35,12 +36,23 @@ How to use Tutel-optimized MoE in Pytorch:
 
 * How to import Tutel MoE in Pytorch Models:
 
+        # Input Example:
+        import torch
+        x = torch.ones([6, 1024], device='cuda:0')
+
         # Create MoE:
         from tutel import moe as tutel_moe
-        moe_layer = tutel_moe.moe_layer({'type': 'top', 'k': 2}, model_dim, experts={
-            'count_per_node': 2,
-            'type': 'ffn', 'hidden_size_per_expert': 1024, 'activation_fn': lambda x: F.relu(x), ..
-        })
+        moe_layer = tutel_moe.moe_layer(
+            gate_type={'type': 'top', 'k': 2},
+            model_dim=x.shape[-1],
+            experts={
+                'count_per_node': 2,
+                'type': 'ffn', 'hidden_size_per_expert': 1024, 'activation_fn': lambda x: torch.nn.functional.relu(x)
+            }
+        )
+
+        # Cast to GPU if necessary
+        moe_layer = moe_layer.to('cuda:0')
 
         # Forward MoE:
         y = moe_layer(x)
