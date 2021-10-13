@@ -101,11 +101,6 @@ class TopKGate(torch.nn.Module):
 class MOELayer(torch.nn.Module):
     """Tutel optimized MOELayer
 
-        e.g.
-
-            moe_layer = MOELayer({'type': 'top', 'k': 2}, model_dim, experts={'type': 'ffn', 'hidden_size_per_expert': 1024})
-            y = moe_layer(x)
-
     Args:
         gate_type        : the string type of MOE gate, e.g: Top1Gate, Top2Gate. Or. dict-type gate description, e.g. {'type': 'top', 'k': 2}
         model_dim        : the number of channels for MOE's input tensor
