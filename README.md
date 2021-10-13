@@ -22,8 +22,6 @@ How to use Tutel-optimized MoE in Pytorch:
 * Running MoE Hello World Model by torch.distributed.all_reduce:
 
         $ python3 -m torch.distributed.launch --nproc_per_node=1 ./examples/helloworld.py
-        (or)
-        $ python3 -m torch.distributed.launch --use_env --nproc_per_node=1 ./examples/helloworld.py
 
         (For New Pytorch)
         $ python3 -m torch.distributed.run --nproc_per_node=1 ./examples/helloworld.py
@@ -31,8 +29,6 @@ How to use Tutel-optimized MoE in Pytorch:
 * Running MoE Hello World Model by torch.nn.parallel.DistributedDataParallel (requires torch >= 1.8.0):
 
         $ python3 -m torch.distributed.launch --nproc_per_node=1 ./examples/helloworld_ddp.py
-        (or)
-        $ python3 -m torch.distributed.launch --use_env --nproc_per_node=1 ./examples/helloworld_ddp.py
 
         (For New Pytorch)
         $ python3 -m torch.distributed.run --nproc_per_node=1 ./examples/helloworld_ddp.py
@@ -41,7 +37,7 @@ How to use Tutel-optimized MoE in Pytorch:
 
         # Create MoE:
         from tutel import moe as tutel_moe
-        moe_layer = tutel_moe.moe_layer('Top2Gate', model_dim, experts={
+        moe_layer = tutel_moe.moe_layer({'type': 'top', 'k': 2}, model_dim, experts={
             'count_per_node': 2,
             'type': 'ffn', 'hidden_size_per_expert': 1024, 'activation_fn': lambda x: F.relu(x), ..
         })
@@ -51,7 +47,7 @@ How to use Tutel-optimized MoE in Pytorch:
 
 * Usage of MOELayer Args:
 
-        gate             : the string type of MOE gate, e.g: Top1Gate, Top2Gate, Top3Gate, Top4Gate
+        gate_type        : the string type of MOE gate, e.g: Top1Gate, Top2Gate. Or. dict-type gate description, e.g. {'type': 'top', 'k': 2}
         model_dim        : the number of channels for MOE's input tensor
         experts          : a dict-type config for builtin expert network, or a torch.nn.Module-type custom expert network
         fp32_gate        : option of enabling mixed precision for gate network
