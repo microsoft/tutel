@@ -60,6 +60,7 @@ def get_cumsum_kernel(samples, global_experts):
             __syncthreads();
             if (S + thid < @num_samples@)
                     output0[thid * batch_num + bid] = temp[thid + 1] + last_sum;
+            __syncthreads();
             last_sum += temp[thread_num];
         }
     }
