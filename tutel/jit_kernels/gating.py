@@ -6,12 +6,12 @@ import torch
 from ..impls.jit_compiler import JitCompiler
 
 
-disable_gate_opt = int(os.environ.get('GATE', '1')) == 0
+disable_fast_cumsum = int(os.environ.get('FAST_CUMSUM', '1')) == 0
 cumsum_kernels = dict()
 
 def get_cumsum_kernel(samples, global_experts):
 
-  if disable_gate_opt:
+  if disable_fast_cumsum:
     print('[WARN]', "Optimized cumsum is disabled, and may result in big performance regression.")
 
     def torch_cumsum(mask1):

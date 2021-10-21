@@ -43,6 +43,7 @@ class TopKGate(torch.nn.Module):
         capacity_factor=1.0,
         use_fp32=False,
         top_k=2,
+        batch_prioritized_routing=False,
         **kwargs,
     ):
         super().__init__()
@@ -55,6 +56,10 @@ class TopKGate(torch.nn.Module):
         self.use_fp32 = use_fp32
         self.num_global_experts = num_global_experts
 
+        self.batch_prioritized_routing = batch_prioritized_routing
+        if int(os.environ.get('BATCH_PRIO', 0)) != 0:
+            self.batch_prioritized_routing = True
+
         input_dropout_p = kwargs.get('input_dropout_p', 0)
         self.input_dropout = torch.nn.Dropout(p=input_dropout_p) if input_dropout_p else None
 
@@ -62,6 +67,11 @@ class TopKGate(torch.nn.Module):
         if not hasattr(self, 'capacity_int'):
             self.capacity_int = self.top_k * int(self.capacity_factor * ((expected_sample_size + self.num_global_experts - 1) // self.num_global_experts))
         return self.capacity_int
+
+    def compute_sorted_location(self, x, importance_scores):
+        sorted_x = x[importance_scores.argsort(dim=0)]
+        sorted_cumsum = fast_cumsum_sub_one(sorted_x) * sorted_x
+        return sorted_cumsum[importance_scores.argsort(dim=0).argsort(dim=0)]
 
     def forward(self, input: torch.Tensor):
         if self.input_dropout:
@@ -79,7 +89,14 @@ class TopKGate(torch.nn.Module):
 
         l_loss = load_balance(gates, masks_se[0], self.num_global_experts, self.use_fp32)
 
-        locations1 = fast_cumsum_sub_one(masks_se[0])
+        if self.batch_prioritized_routing:
+            importance_scores = -1 * gates.max(dim=1)[0]
+            self.compute_location = lambda x: self.compute_sorted_location(x, importance_scores)
+        else:
+            self.compute_location = fast_cumsum_sub_one
+
+        locations1 = self.compute_location(masks_se[0])
+
         locations_s = [torch.sum(locations1 * masks_se[0], dim=1).to(torch.int32)]
 
         if self.top_k > 1:
@@ -87,7 +104,7 @@ class TopKGate(torch.nn.Module):
 
           for k in range(1, self.top_k):
             acc_base = torch.sum(masks_se[k - 1], dim=0, keepdim=True) if acc_base is None else acc_base + torch.sum(masks_se[k - 1], dim=0, keepdim=True)
-            locations2 = fast_cumsum_sub_one(masks_se[k])
+            locations2 = self.compute_location(masks_se[k])
             locations2 += acc_base
             locations_s.append(torch.sum(locations2 * masks_se[k], dim=1).to(torch.int32))
 
