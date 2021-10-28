@@ -77,12 +77,11 @@ class ExampleModel(torch.nn.Module):
         self._ddp_params_and_buffers_to_ignore = list()
 
         self._moe_layer = tutel_moe.moe_layer(
-            gate_type = {'type': 'top', 'k': top_value},
+            gate_type = {'type': 'top', 'k': top_value, 'fp32_gate': args.fp32_gate},
             experts = {'type': 'ffn', 'count_per_node': num_local_experts, 'hidden_size_per_expert': hidden_size, 'activation_fn': lambda x: F.relu(x)},
             model_dim = model_dim,
-            fp32_gate = args.fp32_gate,
             scan_expert_func = lambda name, param: setattr(param, 'skip_allreduce', True),
-            seeds = (1, dist_rank + 1),
+            seeds = (1, dist_rank + 1, 1),
         ).to(device)
 
         # Distinguish different parameter types: gate, local_experts

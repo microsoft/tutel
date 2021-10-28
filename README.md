@@ -62,10 +62,9 @@ Full Examples & Usage:
 
 * Usage of MOELayer Args:
 
-        gate_type        : the string type of MOE gate, e.g: Top1Gate, Top2Gate. Or. dict-type gate description, e.g. {'type': 'top', 'k': 2}
+        gate_type        : dict-type gate description, e.g. {'type': 'top', 'k': 2, ..}
         model_dim        : the number of channels for MOE's input tensor
         experts          : a dict-type config for builtin expert network, or a torch.nn.Module-type custom expert network
-        fp32_gate        : option of enabling mixed precision for gate network
         scan_expert_func : allow users to specify a lambda function to iterate each experts param, e.g. `scan_expert_func = lambda name, param: setattr(param, 'expert', True)`
         result_func      : allow users to specify a lambda function to format the MoE output and aux_loss, e.g. `result_func = lambda output: (output, output.l_aux)`
         group            : specify the explicit communication group of all_to_all
