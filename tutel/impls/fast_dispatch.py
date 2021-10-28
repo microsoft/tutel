@@ -66,7 +66,9 @@ class TutelMoeFastDispatcher:
         self.capacity = capacity
         self.model_dim = model_dim
         self.kernel_pool = dict()
-        self.dtype = dispatch_dtype if not IS_HIP_EXTENSION else torch.float32
+        self.dtype = dispatch_dtype
+        if IS_HIP_EXTENSION or dispatch_dtype != torch.float16:
+            self.dtype = torch.float32
         self.original_dtype = dispatch_dtype
         self.aligned_dim = model_dim // (2 if self.dtype == torch.float16 else 1)
 

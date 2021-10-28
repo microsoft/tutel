@@ -82,7 +82,7 @@ class TopKGate(torch.nn.Module):
         if self.input_dropout:
             input = self.input_dropout(input)
 
-        logits = self.wg(input.to(next(iter(self.wg.parameters())).dtype)).to(input.dtype)
+        logits = self.wg(input.to(next(iter(self.wg.parameters())).dtype))
 
         topk_indices = torch.topk(logits, self.top_k, dim=1).indices
 
