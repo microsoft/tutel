@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any, Optional, Tuple, Union, cast
 import os
 import re
 import time
+import warnings
+
 import torch
 from torch import Tensor
 import torch.distributed as dist
@@ -22,8 +24,8 @@ def one_hot_with_dtype(data, num_classes, dtype):
     result.scatter_(1, data.unsqueeze(-1), 1)
     return result
 
-def load_balance(gates, mask1, num_global_experts, use_fp32):
-    if gates.dtype == torch.float32 or use_fp32:
+def load_balance(gates, mask1, num_global_experts, fp32_gate):
+    if gates.dtype == torch.float32 or fp32_gate:
         me = torch.sum(gates.float(), dim=0)
         ce = torch.sum(mask1.to(me.dtype), dim=0)
         l_loss = torch.sum(me * ce) * (num_global_experts / (gates.size(0) * gates.size(0)))
@@ -41,7 +43,6 @@ class TopKGate(torch.nn.Module):
         model_dim,
         num_global_experts,
         capacity_factor=1.0,
-        use_fp32=False,
         top_k=2,
         batch_prioritized_routing=False,
         **kwargs,
@@ -51,9 +52,11 @@ class TopKGate(torch.nn.Module):
         self.top_k = top_k
         assert self.top_k > 0, "Top-k value %d is not valid." % self.top_k
 
-        self.wg = torch.nn.Linear(model_dim, num_global_experts, bias=False)
+        self.fp32_gate = kwargs.get('fp32_gate', False)
+        extra_params = {'dtype': torch.float32} if self.fp32_gate else {}
+
+        self.wg = torch.nn.Linear(model_dim, num_global_experts, bias=False, **extra_params)
         self.capacity_factor = float(os.environ.get('CAP_FACTOR', capacity_factor))
-        self.use_fp32 = use_fp32
         self.num_global_experts = num_global_experts
 
         self.batch_prioritized_routing = batch_prioritized_routing
@@ -77,7 +80,7 @@ class TopKGate(torch.nn.Module):
         if self.input_dropout:
             input = self.input_dropout(input)
 
-        logits = self.wg(input)
+        logits = self.wg(input.to(next(iter(self.wg.parameters())).dtype)).to(input.dtype)
 
         topk_indices = torch.topk(logits, self.top_k, dim=1).indices
 
@@ -87,7 +90,7 @@ class TopKGate(torch.nn.Module):
         gates = F.softmax(logits, dim=1)
         gates_s = [(gates * x).sum(dim=1) for x in masks_se]
 
-        l_loss = load_balance(gates, masks_se[0], self.num_global_experts, self.use_fp32)
+        l_loss = load_balance(gates, masks_se[0], self.num_global_experts, self.fp32_gate)
 
         if self.batch_prioritized_routing:
             importance_scores = -1 * gates.max(dim=1)[0]
@@ -119,17 +122,16 @@ class MOELayer(torch.nn.Module):
     """Tutel optimized MOELayer
 
     Args:
-        gate_type        : the string type of MOE gate, e.g: Top1Gate, Top2Gate. Or. dict-type gate description, e.g. {'type': 'top', 'k': 2}
+        gate_type        : dict-type gate description, e.g. {'type': 'top', 'k': 2, ..}
         model_dim        : the number of channels for MOE's input tensor
         experts          : a dict-type config for builtin expert network, or a torch.nn.Module-type custom expert network
-        fp32_gate        : option of enabling mixed precision for gate network
         scan_expert_func : allow users to specify a lambda function to iterate each experts param, e.g. `scan_expert_func = lambda name, param: setattr(param, 'expert', True)`
         result_func      : allow users to specify a lambda function to format the MoE output and aux_loss, e.g. `result_func = lambda output: (output, output.l_aux)`
         group            : specify the explicit communication group of all_to_all
         seeds            : a tuple containing a tripple of int to specify manual seed of (shared params, local params, others params after MoE's)
     """
 
-    def __init__(self, gate_type, model_dim: int, experts = None, fp32_gate = False, scan_expert_func = None, result_func = None, group: Optional[Any] = None, seeds = None):
+    def __init__(self, gate_type, model_dim: int, experts = None, scan_expert_func = None, result_func = None, group: Optional[Any] = None, seeds = None, **kwargs):
         super().__init__()
 
         assert model_dim % 2 == 0, "Model_dim (%s) must be even value, while this Model_dim mod 2 > 0." % model_dim
@@ -273,7 +275,12 @@ class MOELayer(torch.nn.Module):
 
         if seeds is not None and seeds[0] is not None:
             torch.manual_seed(seeds[0])
-        self.gate = gating(model_dim=model_dim, top_k=top_k, num_global_experts=self.num_global_experts, use_fp32=fp32_gate, **gate_type)
+
+        if "fp32_gate" in kwargs:
+            warnings.warn(f'`fp32_gate` option in tutel.moe_layer has been deprecated, please move this option to gate_type = {{.., "fp32_gate": {kwargs["fp32_gate"]}}}.')
+            gate_type["fp32_gate"] = kwargs["fp32_gate"]
+
+        self.gate = gating(model_dim=model_dim, top_k=top_k, num_global_experts=self.num_global_experts, **gate_type)
         if seeds is not None and len(seeds) > 2 and seeds[2] is not None:
             torch.manual_seed(seeds[2])
 
