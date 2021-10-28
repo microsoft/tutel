@@ -67,6 +67,8 @@ if args.dtype == 'float32':
     torch.set_default_dtype(torch.float32)
 elif args.dtype == 'float16':
     torch.set_default_dtype(torch.float16)
+elif args.dtype == 'bfloat16':
+    torch.set_default_dtype(torch.bfloat16)
 else:
     raise Exception('Unrecognized data type specified: %s' % args.dtype)
 
