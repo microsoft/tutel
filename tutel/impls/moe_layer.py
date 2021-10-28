@@ -52,10 +52,12 @@ class TopKGate(torch.nn.Module):
         self.top_k = top_k
         assert self.top_k > 0, "Top-k value %d is not valid." % self.top_k
 
-        self.fp32_gate = kwargs.get('fp32_gate', False)
-        extra_params = {'dtype': torch.float32} if self.fp32_gate else {}
+        self.wg = torch.nn.Linear(model_dim, num_global_experts, bias=False)
 
-        self.wg = torch.nn.Linear(model_dim, num_global_experts, bias=False, **extra_params)
+        self.fp32_gate = kwargs.get('fp32_gate', False)
+        if self.fp32_gate:
+          self.wg = self.wg.float()
+
         self.capacity_factor = float(os.environ.get('CAP_FACTOR', capacity_factor))
         self.num_global_experts = num_global_experts
 
