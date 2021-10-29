@@ -154,7 +154,6 @@ class MOELayer(torch.nn.Module):
                 experts['type'] = 'ffn'
                 experts['fc1_copies'] = experts.get('fc1_copies', 3)
                 experts['activation_fn'] = experts['attention_fn']
-                experts['count_per_node'] = experts.get('num_heads_per_node', 1)
                 experts['hidden_size_per_expert'] = model_dim
 
             if experts['type'] == 'ffn':

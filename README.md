@@ -46,19 +46,26 @@ print(y)
 
 Full Examples & Usage:
 ```
+* Single-GPU Test:
+
+        $ python3 -m tutel.examples.helloworld
+
+        (If full source code exists:)
+        $ python3 ./tutel/examples/helloworld.py
+
 * Running MoE Hello World Model by torch.distributed.all_reduce:
 
-        $ python3 -m torch.distributed.launch --nproc_per_node=1 ./examples/helloworld.py
+        $ python3 -m torch.distributed.launch --nproc_per_node=2 -m tutel.examples.helloworld
 
-        (For New Pytorch)
-        $ python3 -m torch.distributed.run --nproc_per_node=1 ./examples/helloworld.py
+        (For New Pytorch:)
+        $ python3 -m torch.distributed.run --nproc_per_node=2 -m tutel.examples.helloworld
 
 * Running MoE Hello World Model by torch.nn.parallel.DistributedDataParallel (requires torch >= 1.8.0):
 
-        $ python3 -m torch.distributed.launch --nproc_per_node=1 ./examples/helloworld_ddp.py
+        $ python3 -m torch.distributed.launch --nproc_per_node=2 -m tutel.examples.helloworld_ddp
 
-        (For New Pytorch)
-        $ python3 -m torch.distributed.run --nproc_per_node=1 ./examples/helloworld_ddp.py
+        (For New Pytorch:)
+        $ python3 -m torch.distributed.run --nproc_per_node=2 -m tutel.examples.helloworld_ddp
 
 * Usage of MOELayer Args:
 
