@@ -3,6 +3,7 @@
 
 from typing import TYPE_CHECKING, Any, Optional, Tuple, Union, cast
 
+import copy
 import os
 import re
 import time
@@ -148,8 +149,15 @@ class MOELayer(torch.nn.Module):
             self.experts = cast(ModuleList, experts) if type(experts) == ModuleList else ModuleList(experts)
             self.num_local_experts = len(self.experts)
         else:
-            network_type = experts['type']
-            if network_type == 'ffn':
+            experts = copy.deepcopy(experts)
+            if experts['type'] == 'attention':
+                experts['type'] = 'ffn'
+                experts['fc1_copies'] = experts.get('fc1_copies', 3)
+                experts['activation_fn'] = experts['attention_fn']
+                experts['count_per_node'] = experts.get('num_heads_per_node', 1)
+                experts['hidden_size_per_expert'] = model_dim
+
+            if experts['type'] == 'ffn':
                 ''' << Fused FFN Experts V1 >> (kernels = 5)
 
                     hidden[W, E, C, V] +=! input[W, E, C, M] x expert_fc1[0, E, M, V]
@@ -174,19 +182,20 @@ class MOELayer(torch.nn.Module):
                 if fused_custom_fn is None:
                     activation_fn = experts.get('activation_fn', lambda x: F.relu(x))
                 implicit_dropout_p = experts.get('implicit_dropout_p', 0)
+                fc1_copies = experts.get('fc1_copies', 1)
 
                 class FusedExpertsNetwork(torch.nn.Module):
                     def __init__(self, model_dim, hidden_size, local_experts):
                         super().__init__()
                         self.skip_expert = (int(os.environ.get('SKIP_EXPERT', '0')) != 0)
 
-                        fc1_weight = torch.empty(1, local_experts, model_dim, hidden_size)
+                        fc1_weight = torch.empty(1, local_experts, model_dim, hidden_size * fc1_copies)
                         fc2_weight = torch.empty(1, local_experts, hidden_size, model_dim)
-                        fc1_bias = torch.empty(1, local_experts, 1, hidden_size)
+                        fc1_bias = torch.empty(1, local_experts, 1, hidden_size * fc1_copies)
                         fc2_bias = torch.empty(1, local_experts, 1, model_dim)
 
                         for i in range(local_experts):
-                            fc1 = torch.nn.Linear(model_dim, hidden_size)
+                            fc1 = torch.nn.Linear(model_dim, hidden_size * fc1_copies)
                             fc2 = torch.nn.Linear(hidden_size, model_dim)
                             fc1_weight[0, i, :, :], fc1_bias[0, i, :, :] = fc1.weight.t(), fc1.bias
                             fc2_weight[0, i, :, :], fc2_bias[0, i, :, :] = fc2.weight.t(), fc2.bias
@@ -194,14 +203,14 @@ class MOELayer(torch.nn.Module):
                         self.model_dim, self.hidden_size, self.local_experts = model_dim, hidden_size, local_experts
 
                         if self.local_experts == 1:
-                            fc1_weight = fc1_weight.view(self.model_dim, self.hidden_size)
+                            fc1_weight = fc1_weight.view(self.model_dim, self.hidden_size * fc1_copies)
                             fc2_weight = fc2_weight.view(self.hidden_size, self.model_dim)
-                            fc1_bias = fc1_bias.view(-1, self.hidden_size)
-                            fc2_bias = fc2_bias.view(-1, self.model_dim)
+                            fc1_bias = fc1_bias.view(1, self.hidden_size * fc1_copies)
+                            fc2_bias = fc2_bias.view(1, self.model_dim)
                         else:
-                            fc1_weight = fc1_weight.view(self.local_experts, self.model_dim, self.hidden_size)
+                            fc1_weight = fc1_weight.view(self.local_experts, self.model_dim, self.hidden_size * fc1_copies)
                             fc2_weight = fc2_weight.view(self.local_experts, self.hidden_size, self.model_dim)
-                            fc1_bias = fc1_bias.view(self.local_experts, 1, self.hidden_size)
+                            fc1_bias = fc1_bias.view(self.local_experts, 1, self.hidden_size * fc1_copies)
                             fc2_bias = fc2_bias.view(self.local_experts, 1, self.model_dim)
 
                         self.register_parameter(name='fc1_weight', param=torch.nn.Parameter(fc1_weight))
@@ -216,7 +225,7 @@ class MOELayer(torch.nn.Module):
                             self.dropout_fc1 = self.dropout_fc2 = lambda x: x
 
                     def extra_repr(self):
-                        return 'model_dim=%d, hidden_size=%d, local_experts=%d, bias=%s' % (self.model_dim, self.hidden_size, self.local_experts, self.fc1_bias is not None)
+                        return 'model_dim=%d, hidden_size=%d, local_experts=%d, bias=%s, fc1_copies=%d' % (self.model_dim, self.hidden_size, self.local_experts, self.fc1_bias is not None, fc1_copies)
 
                     def forward(self, x):
                         if self.skip_expert:
@@ -226,7 +235,7 @@ class MOELayer(torch.nn.Module):
                         elif self.local_experts == 1:
                             original_shape, x = x.shape, x.view(-1, self.model_dim)
                             x = torch.addmm(self.fc1_bias, x, self.fc1_weight)
-                            x = activation_fn(x)
+                            x = activation_fn(x.unsqueeze(0)).squeeze(0)
                             x = self.dropout_fc1(x)
                             x = torch.addmm(self.fc2_bias, x, self.fc2_weight)
                             x = self.dropout_fc2(x)
@@ -255,7 +264,7 @@ class MOELayer(torch.nn.Module):
                     torch.manual_seed(seeds[1])
                 self.experts = ModuleList([FusedExpertsNetwork(model_dim, experts['hidden_size_per_expert'], self.num_local_experts)])
             else:
-                raise Exception('Builtin expert type is not recognized: %s' % network_type)
+                raise Exception('Builtin expert type is not recognized: %s' % experts['type'])
 
         if scan_expert_func is not None:
             for expert in self.experts:
@@ -267,7 +276,9 @@ class MOELayer(torch.nn.Module):
 
         if isinstance(gate_type, str):
             assert re.match(r'^Top[0-9]+Gate$', gate_type), "Unrecognized gate_type: %s" % gate_type
-            gate_type = {'type': 'top', 'k': int(gate_type[3:-4])}
+            top_k = int(gate_type[3:-4])
+            warnings.warn(f"gate_type value `{gate_type}` in tutel.moe_layer has been deprecated, please use gate_type = {{'type': 'top', 'k': {top_k}}} instead.")
+            gate_type = {'type': 'top', 'k': top_k}
 
         if gate_type['type'] == 'top':
             gating = TopKGate
@@ -279,7 +290,7 @@ class MOELayer(torch.nn.Module):
             torch.manual_seed(seeds[0])
 
         if "fp32_gate" in kwargs:
-            warnings.warn(f'`fp32_gate` option in tutel.moe_layer has been deprecated, please move this option to gate_type = {{.., "fp32_gate": {kwargs["fp32_gate"]}}}.')
+            warnings.warn(f'`fp32_gate` option in tutel.moe_layer has been deprecated, please move this option to gate_type = {{.., "fp32_gate": {kwargs["fp32_gate"]}}} instead.')
             gate_type["fp32_gate"] = kwargs["fp32_gate"]
 
         self.gate = gating(model_dim=model_dim, top_k=top_k, num_global_experts=self.num_global_experts, **gate_type)
