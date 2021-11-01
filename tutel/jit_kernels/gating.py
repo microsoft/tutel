@@ -3,7 +3,7 @@
 
 import os
 import torch
-import warnings
+import logging
 from ..impls.jit_compiler import JitCompiler
 
 
@@ -13,7 +13,7 @@ cumsum_kernels = dict()
 def get_cumsum_kernel(samples, global_experts):
 
   if disable_fast_cumsum:
-    warnings.warn("Optimized cumsum is disabled, and may result in big performance regression.")
+    logging.warning("Optimized cumsum is disabled, and may result in big performance regression.")
 
     def torch_cumsum(mask1):
         locations1 = torch.cumsum(mask1, dim=0) - 1

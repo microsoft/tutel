@@ -4,7 +4,6 @@
 import os
 import re
 import logging
-import warnings
 
 def init_affinity_at_program_beginning():
     try:
@@ -19,4 +18,4 @@ def init_affinity_at_program_beginning():
         logging.info('LOCAL_RANK %d is to set NUMA node: %d (total NUMA nodes = %d)' % (group_rank, sel_node, len(nodes)))
     except Exception as ex:
         if group_rank == 0:
-            warnings.warn('Failed to set NUMA status: %s' % ex)
+            logging.warning('Failed to set NUMA status: %s' % ex)
