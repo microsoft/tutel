@@ -321,7 +321,7 @@ class MOELayer(torch.nn.Module):
                 raise Exception('MoE JIT is designed to work on sample size = %s, while receiving sample size = %s (> %s)' % (self.expected_sample_size, reshaped_input.size(0), self.expected_sample_size))
             else:
                 if get_world_rank(self.expert_group) == 0:
-                    print('[WARN] MoE is initialized to keep working on sample size = %s, while receiving sample size = %s (will slow down this forward step)' % (self.expected_sample_size, reshaped_input.size(0)))
+                    warnings.warn('MoE is initialized to keep working on sample size = %s, while receiving sample size = %s (will slow down this forward step)' % (self.expected_sample_size, reshaped_input.size(0)))
                 pad_input = torch.zeros([self.expected_sample_size, self.model_dim], dtype=reshaped_input.dtype, layout=reshaped_input.layout, device=reshaped_input.device)
                 pad_input[:reshaped_input.size(0)] = reshaped_input
                 reshaped_input = pad_input
