@@ -3,6 +3,7 @@
 
 import os
 import re
+import logging
 
 def init_affinity_at_program_beginning():
     try:
@@ -14,7 +15,7 @@ def init_affinity_at_program_beginning():
         cpus = [sorted([int(x[3:]) for x in os.listdir('/sys/devices/system/node/node%d' % node_id) if re.match('cpu[0-9]+', x)]) for node_id in nodes]
         sel_node = (group_rank // numa_type) % len(nodes)
         os.sched_setaffinity(0, cpus[sel_node])
-        print('[INFO] LOCAL_RANK %d is to set NUMA node: %d (total NUMA nodes = %d)' % (group_rank, sel_node, len(nodes)))
+        logging.info('LOCAL_RANK %d is to set NUMA node: %d (total NUMA nodes = %d)' % (group_rank, sel_node, len(nodes)))
     except Exception as ex:
         if group_rank == 0:
-            print('[WARN] Failed to set NUMA status: %s' % ex)
+            logging.warning('Failed to set NUMA status: %s' % ex)

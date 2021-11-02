@@ -7,6 +7,7 @@ import os
 import re
 import time
 import torch
+import logging 
 from torch import Tensor
 import torch.distributed as dist
 
@@ -57,7 +58,7 @@ class AllToAll(torch.autograd.Function):
             torch.cuda.synchronize(input.device)
             t_stop = time.time()
             if get_world_rank(group) == 0:
-                print('[INFO] AllToAll on message size (%d x %s) costs %g sec.' % (torch.numel(input), input.dtype, t_stop - t_start))
+                logging.info('AllToAll on message size (%d x %s) costs %g sec.' % (torch.numel(input), input.dtype, t_stop - t_start))
         return output
 
     @staticmethod
