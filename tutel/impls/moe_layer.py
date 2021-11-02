@@ -7,7 +7,7 @@ import copy
 import os
 import re
 import time
-import warnings
+import logging 
 
 import torch
 from torch import Tensor
@@ -276,7 +276,7 @@ class MOELayer(torch.nn.Module):
         if isinstance(gate_type, str):
             assert re.match(r'^Top[0-9]+Gate$', gate_type), "Unrecognized gate_type: %s" % gate_type
             top_k = int(gate_type[3:-4])
-            warnings.warn(f"gate_type value `{gate_type}` in tutel.moe_layer has been deprecated, please use gate_type = {{'type': 'top', 'k': {top_k}}} instead.")
+            logging.warning(f"gate_type value `{gate_type}` in tutel.moe_layer has been deprecated, please use gate_type = {{'type': 'top', 'k': {top_k}}} instead.")
             gate_type = {'type': 'top', 'k': top_k}
 
         if gate_type['type'] == 'top':
@@ -289,7 +289,7 @@ class MOELayer(torch.nn.Module):
             torch.manual_seed(seeds[0])
 
         if "fp32_gate" in kwargs:
-            warnings.warn(f'`fp32_gate` option in tutel.moe_layer has been deprecated, please move this option to gate_type = {{.., "fp32_gate": {kwargs["fp32_gate"]}}} instead.')
+            logging.warning(f'`fp32_gate` option in tutel.moe_layer has been deprecated, please move this option to gate_type = {{.., "fp32_gate": {kwargs["fp32_gate"]}}} instead.')
             gate_type["fp32_gate"] = kwargs["fp32_gate"]
 
         self.gate = gating(model_dim=model_dim, top_k=top_k, num_global_experts=self.num_global_experts, **gate_type)
@@ -321,7 +321,7 @@ class MOELayer(torch.nn.Module):
                 raise Exception('MoE JIT is designed to work on sample size = %s, while receiving sample size = %s (> %s)' % (self.expected_sample_size, reshaped_input.size(0), self.expected_sample_size))
             else:
                 if get_world_rank(self.expert_group) == 0:
-                    print('[WARN] MoE is initialized to keep working on sample size = %s, while receiving sample size = %s (will slow down this forward step)' % (self.expected_sample_size, reshaped_input.size(0)))
+                    logging.warning('MoE is initialized to keep working on sample size = %s, while receiving sample size = %s (will slow down this forward step)' % (self.expected_sample_size, reshaped_input.size(0)))
                 pad_input = torch.zeros([self.expected_sample_size, self.model_dim], dtype=reshaped_input.dtype, layout=reshaped_input.layout, device=reshaped_input.device)
                 pad_input[:reshaped_input.size(0)] = reshaped_input
                 reshaped_input = pad_input
