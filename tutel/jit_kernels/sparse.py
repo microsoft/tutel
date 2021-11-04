@@ -26,7 +26,7 @@ def create_forward(samples, global_experts, capacity, aligned_dim, param_dtype):
       // [thread_extent] threadIdx.x = 1024
 
       for (int i = blockIdx.x; i < samples; i += gridDim.x)
-          if (locations1_s[i] < capacity) {
+          if (locations1_s[i] < capacity && indices1_s[i] >= 0) {
               #pragma unroll
               for (int j = threadIdx.x; j < hidden; j += 1024)
                   atomicAdd(&dispatched_input[(indices1_s[i] * capacity + locations1_s[i]) * (hidden) + j], gates1_s[i] * reshaped_input[i * (hidden) + j]);
@@ -47,7 +47,7 @@ def create_backward_data(samples, global_experts, capacity, aligned_dim, param_d
       // [thread_extent] threadIdx.x = 1024
 
       for (int i = blockIdx.x; i < samples; i += gridDim.x)
-          if (locations1_s[i] < capacity) {
+          if (locations1_s[i] < capacity && indices1_s[i] >= 0) {
               #pragma unroll
               for (int j = threadIdx.x; j < hidden; j += 1024)
                   grad_reshaped_input[i * hidden + j] = gates1_s[i] * dispatched_input[(indices1_s[i] * capacity + locations1_s[i]) * (hidden) + j];
@@ -74,7 +74,7 @@ def create_backward_gate(samples, global_experts, capacity, aligned_dim, param_d
     extern "C" __global__ __launch_bounds__(32) void execute(__dtype* __restrict__ dispatched_input, int* __restrict__ indices1_s, int* __restrict__ locations1_s, __dtype* __restrict__ reshaped_input, void* __restrict__ grad_gates1_s) {
       // [thread_extent] blockIdx.x = @samples@
       // [thread_extent] threadIdx.x = 32
-      if (locations1_s[blockIdx.x] >= capacity) {
+      if (locations1_s[(int)blockIdx.x] >= capacity || indices1_s[(int)blockIdx.x] < 0) {
         if (((int)threadIdx.x) == 0)
     #if @IS_FLOAT@
           ((float*)grad_gates1_s)[(((int)blockIdx.x))] = 0;
