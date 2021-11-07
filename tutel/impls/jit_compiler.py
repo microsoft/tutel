@@ -27,7 +27,7 @@ class JitCompiler:
         __ctx__ = JitCompiler.__CTX__
         JitCompiler.__CTX__ += 1
 
-        no_nvrtc = 1 if int(os.environ.get('NO_NVRTC', '0')) else 0
+        no_nvrtc = 1 if int(os.environ.get('NO_NVRTC', '1')) else 0
         if not IS_HIP_EXTENSION:
             source = '#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n' + source
         else:

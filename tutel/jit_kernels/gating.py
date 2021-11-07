@@ -69,7 +69,7 @@ def get_cumsum_kernel(samples, global_experts):
 
   def optimized_cumsum(mask1):
     locations1 = torch.empty(mask1.shape, dtype=torch.int32, device=mask1.device).contiguous()
-    base_kernel(mask1.to(torch.int32), locations1)
+    base_kernel(mask1.to(torch.int32).contiguous(), locations1)
     return locations1
 
   cumsum_kernels[(samples, global_experts)] = optimized_cumsum
