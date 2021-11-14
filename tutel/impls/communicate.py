@@ -65,5 +65,34 @@ class AllToAll(torch.autograd.Function):
     def backward(ctx: Any, grad_output: Tensor):
         return (None, AllToAll.apply(ctx.group, grad_output))
 
+
+class PreAllreduceSum(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor):
+        ctx.group = group
+        return input
+
+    @staticmethod
+    def backward(ctx: Any, grad_output: Tensor):
+        if get_world_size(ctx.group) <= 1:
+            return (None, grad_output)
+        dinput = torch.clone(grad_output).contiguous()
+        dist.all_reduce(dinput, op=torch.distributed.ReduceOp.SUM)
+        return (None, dinput)
+
+class PostAllreduceSum(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor):
+        if get_world_size(group) <= 1:
+            return input
+        output = torch.clone(input).contiguous()
+        dist.all_reduce(output, op=torch.distributed.ReduceOp.SUM)
+        return output
+
+    @staticmethod
+    def backward(ctx: Any, grad_output: Tensor):
+        return (None, grad_output)
+
+
 # A2A_TYPE: 0 for skip AllToAll, 1 for standard Pytorch AllToAll, 9 for standard Pytorch AllToAll with Timing
 AllToAll.a2a_type = int(os.environ.get('A2A_TYPE', '1'))
