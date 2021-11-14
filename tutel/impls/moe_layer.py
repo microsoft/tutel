@@ -8,6 +8,7 @@ import os
 import re
 import time
 import logging 
+import collections
 
 import torch
 from torch import Tensor
@@ -17,7 +18,7 @@ import torch.nn.functional as F
 
 from ..impls.fast_dispatch import fast_dispatcher
 from ..jit_kernels.gating import fast_cumsum_sub_one
-from ..impls.communicate import AllToAll, get_world_size, get_world_rank
+from ..impls.communicate import AllToAll, PreAllreduceSum, PostAllreduceSum, get_world_size, get_world_rank
 
 
 def one_hot_with_dtype(data, num_classes, dtype):
@@ -38,6 +39,8 @@ def load_balance(gates, mask1, num_global_experts, fp32_gate):
 
 
 class TopKGate(torch.nn.Module):
+    """General-purpose Top-K Gate for MoE
+    """
  
     def __init__(
         self,
@@ -69,17 +72,12 @@ class TopKGate(torch.nn.Module):
         input_dropout_p = kwargs.get('input_dropout_p', 0)
         self.input_dropout = torch.nn.Dropout(p=input_dropout_p) if input_dropout_p else None
 
-    def capacity(self, expected_sample_size):
-        if not hasattr(self, 'capacity_int'):
-            self.capacity_int = self.top_k * int(self.capacity_factor * ((expected_sample_size + self.num_global_experts - 1) // self.num_global_experts))
-        return self.capacity_int
-
     def compute_sorted_location(self, x, importance_scores):
         sorted_x = x[importance_scores.argsort(dim=0)]
         sorted_cumsum = fast_cumsum_sub_one(sorted_x) * sorted_x
         return sorted_cumsum[importance_scores.argsort(dim=0).argsort(dim=0)]
 
-    def forward(self, input: torch.Tensor):
+    def apply_on_expert_fn(self, input, expert_fn, group):
         if self.input_dropout:
             input = self.input_dropout(input)
 
@@ -118,7 +116,50 @@ class TopKGate(torch.nn.Module):
           denom_s = torch.clamp(sum(gates_s), min=torch.finfo(gates_s[0].dtype).eps)
           gates_s = [x / denom_s for x in gates_s]
 
-        return l_loss, gates_s, [x.to(torch.int32) for x in indices_s], locations_s
+        indices_s = [x.to(torch.int32) for x in indices_s]
+
+        S, M, GE = input.size(0), input.size(1), self.num_global_experts
+        world_size = get_world_size(group)
+
+        if not hasattr(self, '_fdr'):
+            capacity = self.top_k * int(self.capacity_factor * ((S + self.num_global_experts - 1) // self.num_global_experts))
+            self._fdr = fast_dispatcher(num_global_experts=GE, capacity=capacity, model_dim=M, dispatch_dtype=input.dtype)
+
+        self._fdr.update(indices_s, locations_s, gates_s)
+
+        dispatched_input = self._fdr.encode(input)
+        dispatched_input = AllToAll.apply(group, dispatched_input)
+        dispatched_input = dispatched_input.reshape(world_size, self.num_global_experts // world_size, -1, M)
+
+        expert_output = expert_fn(dispatched_input)
+        expert_output = expert_output.to(input.dtype)
+
+        expert_output = AllToAll.apply(group, expert_output)
+        expert_output = expert_output.reshape(GE, -1, M)
+
+        result_output = self._fdr.decode(expert_output.view(GE * self._fdr.capacity, M))
+        return result_output, l_loss
+
+
+class MegatronLMGate():
+    """Megatron-LM Tensor Parallel over MoE Gate Type
+    """
+
+    def __init__(
+        self,
+        **kwargs,
+    ):
+        self.l_zero = None
+
+    def named_parameters(self):
+        return []
+
+    def apply_on_expert_fn(self, input, expert_fn, group):
+        if self.l_zero is None:
+            self.l_zero = torch.tensor(0, dtype=input.dtype, device=input.device)
+        result_output = expert_fn(PreAllreduceSum.apply(group, input))
+        result_output = PostAllreduceSum.apply(group, result_output)
+        return result_output, self.l_zero
 
 
 class MOELayer(torch.nn.Module):
@@ -136,13 +177,11 @@ class MOELayer(torch.nn.Module):
 
     def __init__(self, gate_type, model_dim: int, experts = None, scan_expert_func = None, result_func = None, group: Optional[Any] = None, seeds = None, **kwargs):
         super().__init__()
-
         assert model_dim % 2 == 0, "Model_dim (%s) must be even value, while this Model_dim mod 2 > 0." % model_dim
-        group = group if group is not None else dist.group.WORLD
-        self.expert_group = group
-        self.world_size = get_world_size(self.expert_group)
-        self.result_func = result_func
+        group = group or dist.group.WORLD
 
+        self.group = group
+        self.result_func = result_func
         self.skip_moe = (int(os.environ.get('SKIP_MOE', '0')) != 0)
 
         if not isinstance(experts, dict):
@@ -270,7 +309,7 @@ class MOELayer(torch.nn.Module):
                 for n, p in expert.named_parameters():
                     scan_expert_func(n, p)
 
-        self.num_global_experts = self.world_size * self.num_local_experts
+        self.num_global_experts = get_world_size(self.group) * self.num_local_experts
         self.model_dim = model_dim
 
         if isinstance(gate_type, str):
@@ -280,21 +319,35 @@ class MOELayer(torch.nn.Module):
             gate_type = {'type': 'top', 'k': top_k}
 
         if gate_type['type'] == 'top':
-            gating = TopKGate
-            top_k = gate_type['k']
+            if seeds is not None and seeds[0] is not None:
+                torch.manual_seed(seeds[0])
+
+            if "fp32_gate" in kwargs:
+                logging.warning(f'`fp32_gate` option in tutel.moe_layer has been deprecated, please move this option to gate_type = {{.., "fp32_gate": {kwargs["fp32_gate"]}}} instead.')
+                gate_type["fp32_gate"] = kwargs["fp32_gate"]
+
+            self.gate = TopKGate(model_dim=model_dim, top_k=gate_type['k'], num_global_experts=self.num_global_experts, **gate_type)
+        elif gate_type['type'] == 'megatron':
+            self.gate = MegatronLMGate(**gate_type)
+            assert isinstance(experts, dict), "Gate type `megatron` requires dict-type expert description."
+            assert self.num_local_experts == 1, "Gate type `megatron` requires `count_per_node` == 1 in expert attributions."
+            assert experts['type'] == 'ffn', "Gate type `megatron` requires `type` == `ffn` in expert attributions."
         else:
             raise Exception("Unrecognized gate_type: %s" % gate_type)
 
-        if seeds is not None and seeds[0] is not None:
-            torch.manual_seed(seeds[0])
-
-        if "fp32_gate" in kwargs:
-            logging.warning(f'`fp32_gate` option in tutel.moe_layer has been deprecated, please move this option to gate_type = {{.., "fp32_gate": {kwargs["fp32_gate"]}}} instead.')
-            gate_type["fp32_gate"] = kwargs["fp32_gate"]
-
-        self.gate = gating(model_dim=model_dim, top_k=top_k, num_global_experts=self.num_global_experts, **gate_type)
         if seeds is not None and len(seeds) > 2 and seeds[2] is not None:
             torch.manual_seed(seeds[2])
+
+        def expert_fn(dispatched_input):
+            if len(self.experts) == 1:
+                expert_output = self.experts[0](dispatched_input)
+            else:
+                chunks = dispatched_input.chunk(self.num_local_experts, dim=1)
+                expert_output = torch.cat([expert(chunk) for chunk, expert in zip(chunks, self.experts)], dim=1)
+            return expert_output
+
+        self.expert_fn = expert_fn
+        self.expected_sample_size = 0
 
     def get_parameter_iterator(self, param_type):
         if param_type == 'gate':
@@ -315,50 +368,20 @@ class MOELayer(torch.nn.Module):
         reshaped_input = input.reshape(-1, input.shape[-1])
         reshaped_input_samples = reshaped_input.shape[0]
 
-        self.expected_sample_size = getattr(self, 'expected_sample_size', 0) or reshaped_input.size(0)
+        self.expected_sample_size = self.expected_sample_size or reshaped_input.size(0)
         if reshaped_input.size(0) != self.expected_sample_size:
             if reshaped_input.size(0) > self.expected_sample_size:
                 raise Exception('MoE JIT is designed to work on sample size = %s, while receiving sample size = %s (> %s)' % (self.expected_sample_size, reshaped_input.size(0), self.expected_sample_size))
             else:
-                if get_world_rank(self.expert_group) == 0:
+                if get_world_rank(self.group) == 0:
                     logging.warning('MoE is initialized to keep working on sample size = %s, while receiving sample size = %s (will slow down this forward step)' % (self.expected_sample_size, reshaped_input.size(0)))
                 pad_input = torch.zeros([self.expected_sample_size, self.model_dim], dtype=reshaped_input.dtype, layout=reshaped_input.layout, device=reshaped_input.device)
                 pad_input[:reshaped_input.size(0)] = reshaped_input
                 reshaped_input = pad_input
 
-        if not hasattr(self, 'param_dtype'):
-            self.param_dtype = next(iter(self.experts.parameters())).dtype
-            self.capacity = self.gate.capacity(self.expected_sample_size)
+        reshaped_input = reshaped_input.to(next(iter(self.experts.parameters())).dtype)
+        result_output, l_aux = self.gate.apply_on_expert_fn(reshaped_input, self.expert_fn, self.group)
 
-        reshaped_input = reshaped_input.to(self.param_dtype)
-        l_aux, gates_, indices_, locations_ = self.gate(reshaped_input)
-
-        if not hasattr(self, '_tutel_dispatcher'):
-            self._tutel_dispatcher = fast_dispatcher(num_global_experts=self.num_global_experts, capacity=self.capacity, model_dim=self.model_dim, dispatch_dtype=reshaped_input.dtype)
-
-        self._tutel_dispatcher.update(indices_, locations_, gates_)
-
-        S, M, GE, C = self.expected_sample_size, self.model_dim, self.num_global_experts, self.capacity
-
-        dispatched_input = self._tutel_dispatcher.encode(reshaped_input)
-        dispatched_input = AllToAll.apply(self.expert_group, dispatched_input)
-        
-        dispatched_input = dispatched_input.reshape(self.world_size, self.num_local_experts, -1, M)
-
-        if len(self.experts) == 1:
-            expert_output = self.experts[0](dispatched_input)
-        else:
-            chunks = dispatched_input.chunk(self.num_local_experts, dim=1)
-            expert_outputs = [expert(chunk) for chunk, expert in zip(chunks, self.experts)]
-            expert_output = torch.cat(expert_outputs, dim=1)
-
-        expert_output = expert_output.to(reshaped_input.dtype)
-        expert_output = AllToAll.apply(self.expert_group, expert_output)
-
-        expert_output = expert_output.reshape(self.world_size * self.num_local_experts, -1, M)
-
-        result_output = self._tutel_dispatcher.decode(expert_output.view(GE * C, M))
-        
         result_output = result_output[:reshaped_input_samples, :]
         result_output = result_output.view(original_shape).to(original_dtype)
         self.l_aux = result_output.l_aux = l_aux
