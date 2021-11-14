@@ -166,7 +166,7 @@ class MOELayer(torch.nn.Module):
     """Tutel optimized MOELayer
 
     Args:
-        gate_type        : dict-type gate description, e.g. {'type': 'top', 'k': 2, ..}
+        gate_type        : dict-type gate description, e.g. {'type': 'top', 'k': 2, ..}, or {'type': 'megatron'}
         model_dim        : the number of channels for MOE's input tensor
         experts          : a dict-type config for builtin expert network, or a torch.nn.Module-type custom expert network
         scan_expert_func : allow users to specify a lambda function to iterate each experts param, e.g. `scan_expert_func = lambda name, param: setattr(param, 'expert', True)`

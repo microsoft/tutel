@@ -48,28 +48,28 @@ Full Examples & Usage:
 ```
 * Single-GPU Test:
 
-        $ python3 -m tutel.examples.helloworld
+        $ python3 -m tutel.examples.helloworld --batch_size=32               # To Test Tutel-optimized MoE + manual distribution
+        $ python3 -m tutel.examples.helloworld_ddp --batch_size=32           # To Test Tutel-optimized MoE + Pytorch DDP distribution (requires: Pytorch >= 1.8.0)
+        $ python3 -m tutel.examples.helloworld_megatron --batch_size=32      # To Test Tutel using Megatron Gating (Tensor Parallel on Experts) + manual distribution
+        $ python3 -m tutel.examples.helloworld_deepspeed --batch_size=32     # To Test Deepspeed MoE + manual distribution
 
-        (If full source code exists:)
-        $ python3 ./tutel/examples/helloworld.py
+        (If full source code exists, the following also works:)
+        $ python3 ./tutel/examples/helloworld.py --batch_size=32
+        ..
 
 * Running MoE Hello World Model by torch.distributed.all_reduce:
 
-        $ python3 -m torch.distributed.launch --nproc_per_node=2 -m tutel.examples.helloworld
+        $ python3 -m torch.distributed.launch --nproc_per_node=2 -m tutel.examples.helloworld --batch_size=32
+        $ python3 -m torch.distributed.launch --nproc_per_node=2 -m tutel.examples.helloworld_ddp --batch_size=32
+        ..
 
         (For New Pytorch:)
         $ python3 -m torch.distributed.run --nproc_per_node=2 -m tutel.examples.helloworld
-
-* Running MoE Hello World Model by torch.nn.parallel.DistributedDataParallel (requires torch >= 1.8.0):
-
-        $ python3 -m torch.distributed.launch --nproc_per_node=2 -m tutel.examples.helloworld_ddp
-
-        (For New Pytorch:)
-        $ python3 -m torch.distributed.run --nproc_per_node=2 -m tutel.examples.helloworld_ddp
+        ..
 
 * Usage of MOELayer Args:
 
-        gate_type        : dict-type gate description, e.g. {'type': 'top', 'k': 2, ..}
+        gate_type        : dict-type gate description, e.g. {'type': 'top', 'k': 2, ..}, or {'type': 'megatron'}
         model_dim        : the number of channels for MOE's input tensor
         experts          : a dict-type config for builtin expert network, or a torch.nn.Module-type custom expert network
         scan_expert_func : allow users to specify a lambda function to iterate each experts param, e.g. `scan_expert_func = lambda name, param: setattr(param, 'expert', True)`
