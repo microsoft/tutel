@@ -3,10 +3,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
-# Recommend to initialize NUMA status at the most program begining (before any other imports)
-from tutel import system_init
-system_init.init_affinity_at_program_beginning()
-
 import os
 import time
 import torch
@@ -15,11 +11,9 @@ import torch.nn.functional as F
 import torch.distributed as dist
 from torch import nn
 import argparse
+import deepspeed
 
 import logging
-
-from tutel import moe as tutel_moe
-
 logging.basicConfig(level=logging.INFO)
 
 parser = argparse.ArgumentParser()
@@ -31,7 +25,8 @@ parser.add_argument('--model_dim', type=int, default=2048)
 parser.add_argument('--hidden_size', type=int, default=2048)
 parser.add_argument('--num_local_experts', type=int, default=2)
 parser.add_argument('--dtype', type=str, default='float32')
-parser.add_argument('--l_aux_wt', type=float, default=0.0)
+parser.add_argument('--fp32_gate', default=False, action='store_true')
+parser.add_argument('--top', type=int, default=2)
 args = parser.parse_args()
 
 if args.local_rank < 0:
@@ -58,6 +53,7 @@ num_tokens = args.num_tokens
 model_dim = args.model_dim
 hidden_size = args.hidden_size
 num_local_experts = args.num_local_experts
+top_value = args.top
 local_rank = args.local_rank
 
 
@@ -72,26 +68,43 @@ elif args.dtype == 'bfloat16':
 else:
     raise Exception('Unrecognized data type specified: %s' % args.dtype)
 
+deepspeed.init_distributed()
+deepspeed.utils.groups.initialize(ep_size=dist_world_size)
+
+class ExpertModel(torch.nn.Module):
+    def __init__(self, model_dim, hidden_size, activation_fn):
+        super().__init__()
+        self.fc1 = torch.nn.Linear(model_dim, hidden_size, bias=True)
+        self.fc2 = torch.nn.Linear(hidden_size, model_dim, bias=True)
+        self.activation_fn = activation_fn
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.activation_fn(x)
+        x = self.fc2(x)
+        return x
 
 class ExampleModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
 
-        self._moe_layer = tutel_moe.moe_layer(
-            gate_type = {'type': 'megatron'},
-            experts = {'type': 'ffn', 'hidden_size_per_expert': hidden_size * num_local_experts, 'activation_fn': lambda x: F.relu(x)},
-            model_dim = model_dim,
-            scan_expert_func = lambda name, param: setattr(param, 'skip_allreduce', True),
-            seeds = (1, dist_rank + 1, 1),
+        self._moe_layer = deepspeed.moe.layer.MoE(
+                hidden_size = hidden_size,
+                expert = ExpertModel(model_dim, hidden_size, lambda x: F.relu(x)),
+                num_experts = num_local_experts * dist_world_size,
+                k = top_value
         ).to(device)
 
+        for name, param in self._moe_layer.named_parameters():
+            if '.experts.' in name:
+                setattr(param, 'skip_allreduce', True)
+
         # Distinguish different parameter types: gate, local_experts
-        local_count = sum([torch.numel(param) for name, param in self._moe_layer.get_parameter_iterator(param_type='local_experts')])
-        shared_count = sum([torch.numel(param) for name, param in self._moe_layer.get_parameter_iterator(param_type='gate')])
+        local_count = sum([torch.numel(param) for name, param in self._moe_layer.named_parameters() if '.experts.' in name])
+        shared_count = sum([torch.numel(param) for name, param in self._moe_layer.named_parameters() if '.gate.' in name])
         dist_print('[Statistics] param count for MoE local_experts = %s, param count for MoE gate = %s.\n' % (local_count, shared_count))
 
     def forward(self, input):
-        result = self._moe_layer(input)
+        result, _, _ = self._moe_layer(input)
         result = F.log_softmax(torch.sum(result, dim=2), dim=1)
         return result
 
@@ -103,8 +116,8 @@ optimizer = torch.optim.SGD(model.parameters(), lr=1e-5)
 x = torch.randn([batch_size, num_tokens, model_dim], device=device, requires_grad=True)
 y = torch.LongTensor(batch_size).random_(1).to(device)
 
-tuples = (dist_world_size, args.dtype, model_dim, hidden_size, batch_size * num_tokens, num_local_experts, device)
-dist_print('[Benchmark] world_size = %s, dtype = %s, model_dim = %s, hidden_size = %s, samples = %s, num_local_experts = %s, gate = megatron, device = `%s`' % tuples)
+tuples = (dist_world_size, args.dtype, model_dim, hidden_size, batch_size * num_tokens, num_local_experts, top_value, device)
+dist_print('[Benchmark] world_size = %s, dtype = %s, model_dim = %s, hidden_size = %s, samples = %s, num_local_experts = %s, topK = %s, device = `%s`' % tuples)
 
 average_time, num_steps = 0, 100
 
@@ -118,8 +131,6 @@ for i in range(num_steps):
 
     output = model(x)
     loss = F.nll_loss(output, y)
-    if args.l_aux_wt:
-        loss += args.l_aux_wt * model._moe_layer.l_aux
     loss.backward()
     if dist_world_size > 1:
         for p in params_for_all_reduce:
