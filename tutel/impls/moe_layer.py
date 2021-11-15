@@ -157,7 +157,8 @@ class MegatronLMGate():
     def apply_on_expert_fn(self, input, expert_fn, group):
         if self.l_zero is None:
             self.l_zero = torch.tensor(0, dtype=input.dtype, device=input.device)
-        result_output = expert_fn(PreAllreduceSum.apply(group, input))
+        gathered_input = PreAllreduceSum.apply(group, input)
+        result_output = expert_fn(gathered_input)
         result_output = PostAllreduceSum.apply(group, result_output)
         return result_output, self.l_zero
 
