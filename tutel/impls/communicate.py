@@ -68,30 +68,48 @@ class AllToAll(torch.autograd.Function):
 
 class PreAllreduceSum(torch.autograd.Function):
     @staticmethod
-    def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor):
+    def forward(ctx, group, input):
         ctx.group = group
-        return input
-
+        ctx.num_nodes = get_world_size(ctx.group)
+        if ctx.num_nodes <= 1:
+            return input
+        ctx.input_shape = input.shape
+        output = torch.empty([ctx.num_nodes, input.numel()], device=input.device, dtype=input.dtype)
+        tensor_list = [x.contiguous() for x in torch.chunk(output, chunks=ctx.num_nodes, dim=0)]
+        dist.all_gather(tensor_list=tensor_list, tensor=input.contiguous())
+        output = output.view(list(input.shape[:0]) + [input.shape[0] * ctx.num_nodes] + list(input.shape[1:]))
+        return output
     @staticmethod
-    def backward(ctx: Any, grad_output: Tensor):
+    def backward(ctx, doutput):
         if get_world_size(ctx.group) <= 1:
-            return (None, grad_output)
-        dinput = torch.clone(grad_output).contiguous()
-        dist.all_reduce(dinput, op=torch.distributed.ReduceOp.SUM)
+            return (None, doutput)
+        dinput = torch.empty(ctx.input_shape, device=doutput.device, dtype=doutput.dtype)
+        chunks = [x.contiguous() for x in torch.chunk(doutput.view(ctx.num_nodes, -1), chunks=ctx.num_nodes, dim=0)]
+        dist.reduce_scatter(output=dinput, input_list=chunks)
         return (None, dinput)
 
 class PostAllreduceSum(torch.autograd.Function):
     @staticmethod
-    def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor):
-        if get_world_size(group) <= 1:
+    def forward(ctx, group, input):
+        ctx.group = group
+        ctx.num_nodes = get_world_size(ctx.group)
+        if ctx.num_nodes <= 1:
             return input
-        output = torch.clone(input).contiguous()
-        dist.all_reduce(output, op=torch.distributed.ReduceOp.SUM)
+        ctx.input_shape = input.shape
+        ctx.leading_dim = 0
+        chunks = [x.contiguous() for x in torch.chunk(input, chunks=ctx.num_nodes, dim=ctx.leading_dim)]
+        assert len(chunks) == ctx.num_nodes
+        output = torch.empty_like(chunks[0])
+        dist.reduce_scatter(output=output, input_list=list(chunks))
         return output
-
     @staticmethod
-    def backward(ctx: Any, grad_output: Tensor):
-        return (None, grad_output)
+    def backward(ctx, doutput):
+        if ctx.num_nodes <= 1:
+            return (None, doutput)
+        dinput = torch.empty(ctx.input_shape, device=doutput.device, dtype=doutput.dtype)
+        tensor_list = [x.contiguous() for x in torch.chunk(dinput, chunks=ctx.num_nodes, dim=ctx.leading_dim)]
+        dist.all_gather(tensor_list=tensor_list, tensor=doutput)
+        return (None, dinput)
 
 
 # A2A_TYPE: 0 for skip AllToAll, 1 for standard Pytorch AllToAll, 9 for standard Pytorch AllToAll with Timing
