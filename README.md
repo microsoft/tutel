@@ -85,6 +85,17 @@ Full Examples & Usage:
         activation_fn    : the custom-defined activation function between two linear layers (used for type == 'ffn' only)
 ```
 
+### Throughput comparision under one NVIDIA A100-SXM4-40GB with default heeloworld settings:
+| batch-size | helloworld | helloworld_ddp | helloworld_megatron | helloworld_deepspeed |
+| :--------: | :--------: | :------------: | :-----------------: | :------------------: |
+| 8  | 672.75 | 672.24 | 970.446 | 188.27 |
+| 16 | 715.86 | 714.95 | 1024.15 | 115.43 |
+| 24 | 725.95 | 725.04 | 1041.89 | 81.02 |
+| 32 | 729.02 | 729.02 | 1058.11 | OOM |
+| 64 | 687.92 | 686.31 | 1056.00 | OOM |
+| 128 | 619.75 | 619.03 | 1059.59 | OOM |
+| 256 | 577.08 | 577.49 | 1053.93 | OOM |
+
 ## Contributing
 
 This project welcomes contributions and suggestions.  Most contributions require you to agree to a
