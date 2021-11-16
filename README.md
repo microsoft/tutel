@@ -85,7 +85,14 @@ Full Examples & Usage:
         activation_fn    : the custom-defined activation function between two linear layers (used for type == 'ffn' only)
 ```
 
-### Throughput comparision under one NVIDIA A100-SXM4-40GB with default heeloworld settings:
+### Throughput (batches/sec) comparision under one NVIDIA A100-SXM4-40GB with default helloworld settings with top-2 gate:
+How to reproduce these results:
+```shell
+        $ python3 -m torch.distributed.launch --nproc_per_node=1 -m tutel.examples.helloworld --batch_size=<batch_size>
+        $ python3 -m torch.distributed.launch --nproc_per_node=1 -m tutel.examples.helloworld_ddp --batch_size=<batch_size>
+        $ python3 -m torch.distributed.launch --nproc_per_node=1 -m tutel.examples.helloworld_megatron --batch_size=<batch_size>
+        $ python3 -m torch.distributed.launch --nproc_per_node=1 -m tutel.examples.helloworld_deepspeed --batch_size=<batch_size>
+```
 | batch-size | helloworld | helloworld_ddp | helloworld_megatron | helloworld_deepspeed |
 | :--------: | :--------: | :------------: | :-----------------: | :------------------: |
 | 8  | 672.75 | 672.24 | 970.446 | 188.27 |
