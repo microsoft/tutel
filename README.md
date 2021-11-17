@@ -86,13 +86,6 @@ Full Examples & Usage:
 ```
 
 ### Throughput (batches/sec) comparision under one NVIDIA A100-SXM4-40GB with default helloworld settings with top-2 gate:
-How to reproduce these results:
-```shell
-        $ python3 -m torch.distributed.launch --nproc_per_node=1 -m tutel.examples.helloworld --batch_size=<batch_size>
-        $ python3 -m torch.distributed.launch --nproc_per_node=1 -m tutel.examples.helloworld_ddp --batch_size=<batch_size>
-        $ python3 -m torch.distributed.launch --nproc_per_node=1 -m tutel.examples.helloworld_megatron --batch_size=<batch_size>
-        $ python3 -m torch.distributed.launch --nproc_per_node=1 -m tutel.examples.helloworld_deepspeed --batch_size=<batch_size>
-```
 | batch-size | helloworld | helloworld_ddp | helloworld_megatron | helloworld_deepspeed |
 | :--------: | :--------: | :------------: | :-----------------: | :------------------: |
 | 8  | 672.75 | 672.24 | 970.446 | 188.27 |
@@ -102,6 +95,13 @@ How to reproduce these results:
 | 64 | 687.92 | 686.31 | 1056.00 | OOM |
 | 128 | 619.75 | 619.03 | 1059.59 | OOM |
 | 256 | 577.08 | 577.49 | 1053.93 | OOM |
+How to reproduce these results:
+```shell
+        $ python3 -m torch.distributed.launch --nproc_per_node=1 -m tutel.examples.helloworld --batch_size=<batch_size>
+        $ python3 -m torch.distributed.launch --nproc_per_node=1 -m tutel.examples.helloworld_ddp --batch_size=<batch_size>
+        $ python3 -m torch.distributed.launch --nproc_per_node=1 -m tutel.examples.helloworld_megatron --batch_size=<batch_size>
+        $ python3 -m torch.distributed.launch --nproc_per_node=1 -m tutel.examples.helloworld_deepspeed --batch_size=<batch_size>
+```
 
 ## Contributing
 
