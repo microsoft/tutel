@@ -95,6 +95,7 @@ Full Examples & Usage:
 | 64 | 687.92 | 686.31 | 1056.00 | OOM |
 | 128 | 619.75 | 619.03 | 1059.59 | OOM |
 | 256 | 577.08 | 577.49 | 1053.93 | OOM |
+
 How to reproduce these results:
 ```shell
         $ python3 -m torch.distributed.launch --nproc_per_node=1 -m tutel.examples.helloworld --batch_size=<batch_size>
