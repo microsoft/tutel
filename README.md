@@ -118,10 +118,10 @@ Full Examples in Distributed Mode & Usage:
 
 How to reproduce these results:
 ```shell
-        $ python3 -m torch.distributed.launch --nproc_per_node=<num_of_gpus> -m tutel.examples.helloworld --batch_size=<batch_size>
-        $ python3 -m torch.distributed.launch --nproc_per_node=<num_of_gpus> -m tutel.examples.helloworld_ddp --batch_size=<batch_size>
-        $ python3 -m torch.distributed.launch --nproc_per_node=<num_of_gpus> -m tutel.examples.helloworld_megatron --batch_size=<batch_size>
-        $ python3 -m torch.distributed.launch --nproc_per_node=<num_of_gpus> -m tutel.examples.helloworld_deepspeed --batch_size=<batch_size>
+$ python3 -m torch.distributed.launch --nproc_per_node=<num_of_gpus> -m tutel.examples.helloworld --batch_size=<batch_size>
+$ python3 -m torch.distributed.launch --nproc_per_node=<num_of_gpus> -m tutel.examples.helloworld_ddp --batch_size=<batch_size>
+$ python3 -m torch.distributed.launch --nproc_per_node=<num_of_gpus> -m tutel.examples.helloworld_megatron --batch_size=<batch_size>
+$ python3 -m torch.distributed.launch --nproc_per_node=<num_of_gpus> -m tutel.examples.helloworld_deepspeed --batch_size=<batch_size>
 ```
 
 ## Contributing
