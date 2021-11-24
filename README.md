@@ -95,7 +95,7 @@ Full Examples in Distributed Mode & Usage:
         activation_fn    : the custom-defined activation function between two linear layers (used for type == 'ffn' only)
 ```
 
-### Single-GPU Throughput (batches/sec) comparision under 1 x NVIDIA A100-SXM4-40GB with default helloworld settings with top-2 gate:
+### Single-GPU Throughput (batches/sec) with default settings on NVIDIA A100 (40GB):
 | batch-size | helloworld | helloworld_ddp | helloworld_megatron | helloworld_deepspeed |
 | :--------: | :--------: | :------------: | :-----------------: | :------------------: |
 | 8  | 672.75 | 672.24 | 970.446 | 188.27 |
@@ -106,22 +106,12 @@ Full Examples in Distributed Mode & Usage:
 | 128 | 619.75 | 619.03 | 1059.59 | OOM |
 | 256 | 577.08 | 577.49 | 1053.93 | OOM |
 
-### Multi-GPUs Throughput (batches/sec) comparision under 8 x NVIDIA A100-SXM4-40GBs with default helloworld settings with top-2 gate:
-| batch-size | helloworld | helloworld_ddp | helloworld_megatron | helloworld_deepspeed |
-| :--------: | :--------: | :------------: | :-----------------: | :------------------: |
-| 8  | 511.05 | 514.65 | 115.22 | 180.82 |
-| 16 | 547.82 | 545.52 | 116.12 | 115.95 |
-| 24 | 554.06 | 554.76 | 114.77 | 82.91 |
-| 32 | 557.79 | 559.93 | 114.60 | OOM |
-| 64 | 522.10 | 520.91 | OOM | OOM |
-| 128 | 487.56 | 488.26 | OOM | OOM |
-
 How to reproduce these results:
 ```shell
-$ python3 -m torch.distributed.launch --nproc_per_node=<num_of_gpus> -m tutel.examples.helloworld --batch_size=<batch_size>
-$ python3 -m torch.distributed.launch --nproc_per_node=<num_of_gpus> -m tutel.examples.helloworld_ddp --batch_size=<batch_size>
-$ python3 -m torch.distributed.launch --nproc_per_node=<num_of_gpus> -m tutel.examples.helloworld_megatron --batch_size=<batch_size>
-$ python3 -m torch.distributed.launch --nproc_per_node=<num_of_gpus> -m tutel.examples.helloworld_deepspeed --batch_size=<batch_size>
+$ python3 -m torch.distributed.launch --nproc_per_node=1 -m tutel.examples.helloworld --batch_size=<batch_size>
+$ python3 -m torch.distributed.launch --nproc_per_node=1 -m tutel.examples.helloworld_ddp --batch_size=<batch_size>
+$ python3 -m torch.distributed.launch --nproc_per_node=1 -m tutel.examples.helloworld_megatron --batch_size=<batch_size>
+$ python3 -m torch.distributed.launch --nproc_per_node=1 -m tutel.examples.helloworld_deepspeed --batch_size=<batch_size>
 ```
 
 ## Contributing
