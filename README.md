@@ -96,7 +96,7 @@ Full Examples in Distributed Mode & Usage:
 ```
 
 ### Single-GPU Throughput (batches/sec) with default settings on NVIDIA A100 (40GB):
-| batch-size | helloworld | helloworld_ddp | helloworld_megatron | helloworld_deepspeed |
+| batch-size | helloworld (top2) | helloworld_ddp (top2) | helloworld_megatron (fc) | helloworld_deepspeed (top2) |
 | :--------: | :--------: | :------------: | :-----------------: | :------------------: |
 | 8  | 672.75 | 672.24 | 970.446 | 188.27 |
 | 16 | 715.86 | 714.95 | 1024.15 | 115.43 |
