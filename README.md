@@ -95,7 +95,7 @@ Full Examples in Distributed Mode & Usage:
         activation_fn    : the custom-defined activation function between two linear layers (used for type == 'ffn' only)
 ```
 
-### Throughput (batches/sec) comparision under one NVIDIA A100-SXM4-40GB with default helloworld settings with top-2 gate:
+### Single-GPU Throughput (batches/sec) comparision under 1 x NVIDIA A100-SXM4-40GB with default helloworld settings with top-2 gate:
 | batch-size | helloworld | helloworld_ddp | helloworld_megatron | helloworld_deepspeed |
 | :--------: | :--------: | :------------: | :-----------------: | :------------------: |
 | 8  | 672.75 | 672.24 | 970.446 | 188.27 |
@@ -106,7 +106,7 @@ Full Examples in Distributed Mode & Usage:
 | 128 | 619.75 | 619.03 | 1059.59 | OOM |
 | 256 | 577.08 | 577.49 | 1053.93 | OOM |
 
-### Throughput (batches/sec) comparision under eight NVIDIA A100-SXM4-40GBs with default helloworld settings with top-2 gate:
+### Multi-GPUs Throughput (batches/sec) comparision under 8 x NVIDIA A100-SXM4-40GBs with default helloworld settings with top-2 gate:
 | batch-size | helloworld | helloworld_ddp | helloworld_megatron | helloworld_deepspeed |
 | :--------: | :--------: | :------------: | :-----------------: | :------------------: |
 | 8  | 511.05 | 514.65 | 115.22 | 180.82 |
