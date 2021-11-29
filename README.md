@@ -25,6 +25,7 @@ How to setup Tutel MoE for Pytorch:
         $ python3 -m tutel.examples.helloworld_ddp --batch_size=16           # To Test Tutel-optimized MoE + Pytorch DDP distribution (requires: Pytorch >= 1.8.0)
         $ python3 -m tutel.examples.helloworld_megatron --batch_size=16      # To Test Tutel using Megatron Gating (Tensor Parallel on Experts) + manual distribution
         $ python3 -m tutel.examples.helloworld_deepspeed --batch_size=16     # To Test Deepspeed MoE + manual distribution
+        $ python3 -m tutel.examples.helloworld_fastmoe --batch_size=16       # To Test FastMoE + manual distribution
 
         (If building from source, the following method also works:)
         $ python3 ./tutel/examples/helloworld.py --batch_size=32
