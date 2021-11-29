@@ -103,7 +103,7 @@ class ExampleModel(torch.nn.Module):
         dist_print('[Statistics] param count for MoE local_experts = %s, param count for MoE gate = %s.\n' % (local_count, shared_count))
 
     def forward(self, input):
-        result, _, _ = self._moe_layer(input)
+        result = self._moe_layer(input)
         result = F.log_softmax(torch.sum(result, dim=2), dim=1)
         return result
 
