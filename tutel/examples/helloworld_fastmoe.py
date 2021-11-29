@@ -86,11 +86,12 @@ class ExampleModel(torch.nn.Module):
         super().__init__()
 
         self._moe_layer = FMoETransformerMLP(
-            num_expert = num_local_experts * dist_world_size,
+            num_expert = num_local_experts,
             d_model = model_dim,
             d_hidden = hidden_size,
             top_k = top_value,
-            activation = lambda x: F.relu(x)
+            activation = lambda x: F.relu(x),
+            expert_rank = dist_rank
         ).to(device)
 
         for name, param in self._moe_layer.named_parameters():
