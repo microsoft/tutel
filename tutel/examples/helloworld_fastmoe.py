@@ -96,9 +96,7 @@ class _Expert(nn.Module):
     
 class ExampleModel(FMoE):
     def __init__(self):
-        super().__init__(num_expert=num_local_experts, 
-                         d_model=model_dim, 
-                         gate=GShardGate)
+        super().__init__(num_expert=num_local_experts, d_model=model_dim, gate=GShardGate)
         
         self.experts = _Expert(
             num_expert = num_local_experts, 
@@ -107,21 +105,21 @@ class ExampleModel(FMoE):
             activation = lambda x: F.relu(x), 
             rank=dist_rank
         )
-        self.mark_parallel_comm(expert_dp_comm)
-
-        for name, param in self._moe_layer.named_parameters():
-            if '.experts.' in name:
+        self.mark_parallel_comm("none")
+        self = self.to(device)
+        for name, param in self.named_parameters():
+            if 'expert' in name:
                 setattr(param, 'skip_allreduce', True)
 
         # Distinguish different parameter types: gate, local_experts
-        local_count = sum([torch.numel(param) for name, param in self._moe_layer.named_parameters() if 'expert' in name])
-        shared_count = sum([torch.numel(param) for name, param in self._moe_layer.named_parameters() if 'gate' in name])
+        local_count = sum([torch.numel(param) for name, param in self.named_parameters() if 'expert' in name])
+        shared_count = sum([torch.numel(param) for name, param in self.named_parameters() if 'gate' in name])
         dist_print('[Statistics] param count for MoE local_experts = %s, param count for MoE gate = %s.\n' % (local_count, shared_count))
 
     def forward(self, input):
-        original_shape = inp.shape
-        inp = inp.reshape(-1, self.d_model)
-        result = super().forward(inp).reshape(original_shape)
+        original_shape = input.shape
+        input = input.reshape(-1, self.d_model)
+        result = super().forward(input).reshape(original_shape)
         result = F.log_softmax(torch.sum(result, dim=2), dim=1)
         return result
 
