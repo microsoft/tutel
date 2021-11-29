@@ -93,53 +93,22 @@ class _Expert(nn.Module):
         x = self.activation(x)
         x = self.h4toh(x, fwd_expert_count)
         return x
-
-
-class FMoETransformerMLP(FMoE):
-    r"""
-    A complete MoE MLP module in a Transformer block.
-    * `activation` is the activation function to be used in MLP in each expert.
-    * `d_hidden` is the dimension of the MLP layer.
-    """
-
-    def __init__(
-        self,
-        num_expert=32,
-        d_model=1024,
-        d_hidden=4096,
-        activation=torch.nn.GELU(),
-        expert_dp_comm="none",
-        expert_rank=0,
-        **kwargs
-    ):
-        super().__init__(num_expert=num_expert, d_model=d_model, gate=GShardGate, **kwargs)
+    
+class ExampleModel(FMoE):
+    def __init__(self):
+        super().__init__(num_expert=num_local_experts, 
+                         d_model=model_dim, 
+                         gate=GShardGate, 
+                         **kwargs)
+        
         self.experts = _Expert(
-            num_expert, d_model, d_hidden, activation, rank=expert_rank
+            num_expert = num_local_experts, 
+            d_model = model_dim, 
+            d_hidden = hidden_size, 
+            activation = lambda x: F.relu(x), 
+            rank=dist_rank
         )
         self.mark_parallel_comm(expert_dp_comm)
-
-    def forward(self, inp: torch.Tensor):
-        r"""
-        This module wraps up the FMoE module with reshape, residual and layer
-        normalization.
-        """
-        original_shape = inp.shape
-        inp = inp.reshape(-1, self.d_model)
-        output = super().forward(inp)
-        return output.reshape(original_shape)
-    
-class ExampleModel(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-
-        self._moe_layer = FMoETransformerMLP(
-            num_expert = num_local_experts,
-            d_model = model_dim,
-            d_hidden = hidden_size,
-            top_k = top_value,
-            activation = lambda x: F.relu(x),
-            expert_rank = dist_rank
-        ).to(device)
 
         for name, param in self._moe_layer.named_parameters():
             if '.experts.' in name:
@@ -151,7 +120,9 @@ class ExampleModel(torch.nn.Module):
         dist_print('[Statistics] param count for MoE local_experts = %s, param count for MoE gate = %s.\n' % (local_count, shared_count))
 
     def forward(self, input):
-        result = self._moe_layer(input)
+        original_shape = inp.shape
+        inp = inp.reshape(-1, self.d_model)
+        result = super().forward(inp).reshape(original_shape)
         result = F.log_softmax(torch.sum(result, dim=2), dim=1)
         return result
 
