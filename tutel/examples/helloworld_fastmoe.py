@@ -99,8 +99,8 @@ class ExampleModel(torch.nn.Module):
                 setattr(param, 'skip_allreduce', True)
 
         # Distinguish different parameter types: gate, local_experts
-        local_count = sum([torch.numel(param) for name, param in self._moe_layer.named_parameters() if '.experts.' in name])
-        shared_count = sum([torch.numel(param) for name, param in self._moe_layer.named_parameters() if '.gate.' in name])
+        local_count = sum([torch.numel(param) for name, param in self._moe_layer.named_parameters() if 'expert' in name])
+        shared_count = sum([torch.numel(param) for name, param in self._moe_layer.named_parameters() if 'gate' in name])
         dist_print('[Statistics] param count for MoE local_experts = %s, param count for MoE gate = %s.\n' % (local_count, shared_count))
 
     def forward(self, input):
