@@ -90,7 +90,7 @@ class ExampleModel(torch.nn.Module):
             d_model = model_dim,
             d_hidden = hidden_size,
             top_k = top_value,
-            activation = lambda x: F.relu(x))
+            activation = lambda x: F.relu(x)
         ).to(device)
 
         for name, param in self._moe_layer.named_parameters():
