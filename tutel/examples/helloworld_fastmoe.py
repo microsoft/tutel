@@ -11,7 +11,8 @@ import torch.nn.functional as F
 import torch.distributed as dist
 from torch import nn
 import argparse
-import deepspeed
+
+from fmoe import FMoETransformerMLP
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -68,9 +69,6 @@ elif args.dtype == 'bfloat16':
 else:
     raise Exception('Unrecognized data type specified: %s' % args.dtype)
 
-deepspeed.init_distributed()
-deepspeed.utils.groups.initialize(ep_size=dist_world_size)
-
 class ExpertModel(torch.nn.Module):
     def __init__(self, model_dim, hidden_size, activation_fn):
         super().__init__()
@@ -82,16 +80,17 @@ class ExpertModel(torch.nn.Module):
         x = self.activation_fn(x)
         x = self.fc2(x)
         return x
-
+    
 class ExampleModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
 
-        self._moe_layer = deepspeed.moe.layer.MoE(
-                hidden_size = hidden_size,
-                expert = ExpertModel(model_dim, hidden_size, lambda x: F.relu(x)),
-                num_experts = num_local_experts * dist_world_size,
-                k = top_value
+        self._moe_layer = FMoETransformerMLP(
+            num_expert = num_local_experts * dist_world_size,
+            d_model = model_dim,
+            d_hidden = hidden_size,
+            top_k = top_value,
+            activation = lambda x: F.relu(x))
         ).to(device)
 
         for name, param in self._moe_layer.named_parameters():
