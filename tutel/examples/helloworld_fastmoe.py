@@ -98,8 +98,7 @@ class ExampleModel(FMoE):
     def __init__(self):
         super().__init__(num_expert=num_local_experts, 
                          d_model=model_dim, 
-                         gate=GShardGate, 
-                         **kwargs)
+                         gate=GShardGate)
         
         self.experts = _Expert(
             num_expert = num_local_experts, 
