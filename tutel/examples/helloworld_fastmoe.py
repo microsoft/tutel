@@ -14,7 +14,7 @@ import argparse
 
 from fmoe import FMoE
 from fmoe import FMoELinear
-from fmoe import GShardGate
+from fmoe.gates import GShardGate
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -112,9 +112,9 @@ class FMoETransformerMLP(FMoE):
         expert_rank=0,
         **kwargs
     ):
-        super().__init__(num_expert=num_expert, d_model=d_model, **kwargs)
+        super().__init__(num_expert=num_expert, d_model=d_model, gate=GShardGate, **kwargs)
         self.experts = _Expert(
-            num_expert, d_model, d_hidden, activation, rank=expert_rank, gate=GShardGate
+            num_expert, d_model, d_hidden, activation, rank=expert_rank
         )
         self.mark_parallel_comm(expert_dp_comm)
 
