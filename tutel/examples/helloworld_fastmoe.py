@@ -72,7 +72,7 @@ else:
     raise Exception('Unrecognized data type specified: %s' % args.dtype)
 
     
-class _Expert(nn.Module):
+class FMoEExpert(nn.Module):
     r"""
     An expert using 2 FMoELinear modules to speed up the computation of experts
     within one worker.
@@ -98,7 +98,7 @@ class ExampleModel(FMoE):
     def __init__(self):
         super().__init__(num_expert=num_local_experts, d_model=model_dim, gate=GShardGate)
         
-        self.experts = _Expert(
+        self.experts = FMoEExpert(
             num_expert = num_local_experts, 
             d_model = model_dim, 
             d_hidden = hidden_size, 
