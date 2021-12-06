@@ -27,6 +27,7 @@ parser.add_argument('--num_local_experts', type=int, default=2)
 parser.add_argument('--dtype', type=str, default='float32')
 parser.add_argument('--fp32_gate', default=False, action='store_true')
 parser.add_argument('--top', type=int, default=2)
+parser.add_argument('--use_tutel', default=False, action='store_true')
 args = parser.parse_args()
 
 if args.local_rank < 0:
@@ -68,6 +69,7 @@ elif args.dtype == 'bfloat16':
 else:
     raise Exception('Unrecognized data type specified: %s' % args.dtype)
 
+torch.manual_seed(1)
 deepspeed.init_distributed()
 deepspeed.utils.groups.initialize(ep_size=dist_world_size)
 
@@ -91,7 +93,8 @@ class ExampleModel(torch.nn.Module):
                 hidden_size = hidden_size,
                 expert = ExpertModel(model_dim, hidden_size, lambda x: F.relu(x)),
                 num_experts = num_local_experts * dist_world_size,
-                k = top_value
+                k = top_value,
+                use_tutel = args.use_tutel
         ).to(device)
 
         for name, param in self._moe_layer.named_parameters():
