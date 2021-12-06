@@ -95,6 +95,16 @@ Full Examples in Distributed Mode & Usage:
         activation_fn    : the custom-defined activation function between two linear layers (used for type == 'ffn' only)
 ```
 
+For Deepspeed MoE Acceleration (Deepspeed MoE Top-1 Gate has integrated Tutel acceleration):
+```sh
+# Without Tutel optimization:
+python3 -m tutel.examples.helloworld_deepspeed --top=1
+
+# With Tutel optimization:
+python3 -m tutel.examples.helloworld_deepspeed --top=1 --use_tutel
+```
+
+
 ### Single-GPU Throughput (batches/sec) with default settings on NVIDIA A100 (40GB):
 | batch-size | helloworld (top2) | helloworld_ddp (top2) | helloworld_megatron (fc) | helloworld_deepspeed (top2) |
 | :--------: | :--------: | :------------: | :-----------------: | :------------------: |
