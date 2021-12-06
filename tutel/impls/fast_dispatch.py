@@ -22,6 +22,7 @@ class GatingEncoder(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx: Any, dispatched_input: Tensor):
+        dispatched_input = dispatched_input.contiguous()
         last_result = None
         for i in range(len(ctx.config.indices_)):
           grad_data = torch.empty(ctx.reshaped_input.shape, dtype=dispatched_input.dtype, device=dispatched_input.device)
@@ -46,6 +47,7 @@ class GatingDecoder(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx: Any, combined_output: Tensor):
+        combined_output = combined_output.contiguous()
         grad_expert_output = torch.zeros(ctx.expert_output.shape, dtype=combined_output.dtype, device=combined_output.device)
         for i in range(len(ctx.config.indices_)):
           ctx.config.func_fwd(ctx.gates_h2[i], ctx.config.indices_[i], ctx.config.locations_[i], combined_output, grad_expert_output)
