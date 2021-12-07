@@ -6,7 +6,7 @@
 #include <nccl.h>
 
 #include <vector>
-#include <dirent.h>
+#include <pwd.h>
 
 #include <dlfcn.h>
 #include <cuda_runtime.h>
