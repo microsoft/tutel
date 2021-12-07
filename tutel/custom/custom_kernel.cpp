@@ -6,6 +6,7 @@
 #include <nccl.h>
 
 #include <vector>
+#include <dirent.h>
 
 #include <dlfcn.h>
 #include <cuda_runtime.h>
@@ -44,7 +45,11 @@ static void file_write(const char *path, const std::string &code) {
 }
 
 static std::string nvcc_compile(const char* code, const std::string &arch, int code_id, int dev_id) {
-  std::string code_path = "/tmp/" + std::to_string(code_id) + "-" + std::to_string(dev_id) + ".cu";
+  std::string home_path = getenv("HOME");
+  if (opendir((home_path + "/.cache/tutel/kernels").c_str()) == nullptr) {
+    system(("mkdir -p " + home_path + "/.cache/tutel/kernels").c_str());
+  }
+  std::string code_path = home_path + "/.cache/tutel/kernels" + std::to_string(code_id) + "-" + std::to_string(dev_id) + ".cu";
   file_write(code_path.data(), code);
 #if !defined(__HIP_PLATFORM_HCC__)
   CHECK_EQ(0, system(("/usr/local/cuda/bin/nvcc " + code_path + " -o " + code_path + ".fatbin --fatbin -O4 -gencode arch=compute_" + arch.substr(3) + ",code=" + arch).c_str()));
