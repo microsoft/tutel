@@ -46,13 +46,14 @@ static void file_write(const char *path, const std::string &code) {
 
 static std::string nvcc_compile(const char* code, const std::string &arch, int code_id, int dev_id) {
   std::string home_path = getenv("HOME");
-  if (opendir((home_path + "/.cache").c_str()) == nullptr) {
+  struct stat st = {0};
+  if (stat((home_path + "/.cache").c_str(), &st) == -1) {
     mkdir((home_path + "/.cache").c_str(), 0755);  
   }
-  if (opendir((home_path + "/.cache/tutel").c_str()) == nullptr) {
+  if (stat((home_path + "/.cache/tutel").c_str(), &st) == -1) {
     mkdir((home_path + "/.cache/tutel").c_str(), 0755);
   }
-  if (opendir((home_path + "/.cache/tutel/kernels").c_str()) == nullptr) {
+  if (stat((home_path + "/.cache/tutel/kernels").c_str(), &st) == -1) {
     mkdir((home_path + "/.cache/tutel/kernels").c_str(), 0755);
   }
   std::string code_path = home_path + "/.cache/tutel/kernels/" + std::to_string(code_id) + "-" + std::to_string(dev_id) + ".cu";
