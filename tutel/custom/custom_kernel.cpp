@@ -44,19 +44,31 @@ static void file_write(const char *path, const std::string &code) {
   fclose(fp);
 }
 
-static std::string nvcc_compile(const char* code, const std::string &arch, int code_id, int dev_id) {
-  std::string home_path = getenv("HOME");
+static std::string get_cache_path() {
+  char *home_path;
   struct stat st = {0};
-  if (stat((home_path + "/.cache").c_str(), &st) == -1) {
-    mkdir((home_path + "/.cache").c_str(), 0755);  
+  if ((home_path = getenv("HOME")) == NULL) {
+    home_path = getpwuid(getuid())->pw_dir;
   }
-  if (stat((home_path + "/.cache/tutel").c_str(), &st) == -1) {
-    mkdir((home_path + "/.cache/tutel").c_str(), 0755);
+  std::string cache_path(home_path);
+  cache_path += "/.cache/";
+  if (stat(cache_path.c_str(), &st) == -1) {
+    mkdir(cache_path.c_str(), 0755);
   }
-  if (stat((home_path + "/.cache/tutel/kernels").c_str(), &st) == -1) {
-    mkdir((home_path + "/.cache/tutel/kernels").c_str(), 0755);
+  cache_path += "tutel/";
+  if (stat(cache_path.c_str(), &st) == -1) {
+    mkdir(cache_path.c_str(), 0755);
   }
-  std::string code_path = home_path + "/.cache/tutel/kernels/" + std::to_string(code_id) + "-" + std::to_string(dev_id) + ".cu";
+  cache_path += "kernels/";
+  if (stat(cache_path.c_str(), &st) == -1) {
+    mkdir(cache_path.c_str(), 0755);
+  }
+
+  return cache_path;
+}
+
+static std::string nvcc_compile(const char* code, const std::string &arch, int code_id, int dev_id) {
+  std::string code_path = get_cache_path() + std::to_string(code_id) + "-" + std::to_string(dev_id) + ".cu";
   file_write(code_path.data(), code);
 #if !defined(__HIP_PLATFORM_HCC__)
   CHECK_EQ(0, system(("/usr/local/cuda/bin/nvcc " + code_path + " -o " + code_path + ".fatbin --fatbin -O4 -gencode arch=compute_" + arch.substr(3) + ",code=" + arch).c_str()));
