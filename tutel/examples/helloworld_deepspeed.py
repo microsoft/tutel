@@ -116,6 +116,7 @@ dist_print(model)
 
 optimizer = torch.optim.SGD(model.parameters(), lr=1e-5)
 
+torch.manual_seed(dist_rank)
 x = torch.randn([batch_size, num_tokens, model_dim], device=device, requires_grad=True)
 y = torch.LongTensor(batch_size).random_(1).to(device)
 
@@ -124,7 +125,7 @@ dist_print('[Benchmark] world_size = %s, dtype = %s, model_dim = %s, hidden_size
 
 average_time, num_steps = 0, 100
 
-params_for_all_reduce = [p for p in model.parameters() if not hasattr(p, 'skip_allreduce') and getattr(p, 'requires_grad', False)]
+params_for_all_reduce = [p for p in model.parameters() if not hasattr(p, 'skip_allreduce') and getattr(p, 'requires_grad', False) and p.grad is not None]
 
 for i in range(num_steps):
 
