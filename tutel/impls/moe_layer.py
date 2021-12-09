@@ -63,6 +63,7 @@ class TopKGate(torch.nn.Module):
           self.wg = self.wg.float()
 
         self.capacity_factor = float(os.environ.get('CAP_FACTOR', capacity_factor))
+        self.is_ones_gate = (int(os.environ.get('ONES_GATE', 0)) == 1)
         self.num_global_experts = num_global_experts
 
         self.batch_prioritized_routing = batch_prioritized_routing
@@ -125,6 +126,8 @@ class TopKGate(torch.nn.Module):
             capacity = self.top_k * int(self.capacity_factor * ((S + self.num_global_experts - 1) // self.num_global_experts))
             self._fdr = fast_dispatcher(num_global_experts=GE, capacity=capacity, model_dim=M, dispatch_dtype=input.dtype)
 
+        if self.is_ones_gate:
+            gates_s = [torch.ones_like(x) for x in gates_s]
         self._fdr.update(indices_s, locations_s, gates_s)
 
         dispatched_input = self._fdr.encode(input)
