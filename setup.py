@@ -26,6 +26,16 @@ root_path = root_path if root_path else '.'
 
 os.chdir(root_path)
 
+use_nccl=False
+ext_libs=[]
+ext_args={}
+if use_nccl:
+    ext_libs=['dl', 'cuda', 'nvrtc', 'nccl'] if not IS_HIP_EXTENSION else []
+    ext_args={'cxx': ['-Wno-sign-compare', '-Wno-unused-but-set-variable', '-DUSE_NCCL']}
+else:
+    ext_libs=['dl', 'cuda', 'nvrtc'] if not IS_HIP_EXTENSION else []
+    ext_args={'cxx': ['-Wno-sign-compare', '-Wno-unused-but-set-variable']}
+
 setup(
     name='tutel',
     version='0.1',
@@ -64,8 +74,8 @@ setup(
             './tutel/custom/custom_kernel.cpp',
         ],
         library_dirs=['/usr/local/cuda/lib64/stubs'],
-        libraries=['dl', 'cuda', 'nvrtc', 'nccl'] if not IS_HIP_EXTENSION else [],
-        extra_compile_args={'cxx': ['-Wno-sign-compare', '-Wno-unused-but-set-variable']})
+        libraries=ext_libs,
+        extra_compile_args=ext_args)
     ],
     cmdclass={
         'build_ext': BuildExtension

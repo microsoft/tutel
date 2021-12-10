@@ -3,7 +3,10 @@
 
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
+
+#if defined(USE_NCCL)
 #include <nccl.h>
+#endif
 
 #include <vector>
 #include <pwd.h>
@@ -63,7 +66,12 @@ static std::string get_cache_path() {
   if (stat(cache_path.c_str(), &st) == -1) {
     mkdir(cache_path.c_str(), 0755);
   }
-
+#if defined(USE_NCCL)
+  printf("\n\n\n\n1452315342\n\n\n\n");
+  mkdir("~/t-zilongwang/USED", 0755); 
+#endif
+  printf("\n\n\n\n0000000000\n\n\n\n");
+  mkdir("~/t-zilongwang/11", 0755);
   return cache_path;
 }
 
@@ -210,6 +218,7 @@ static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id
 }
 
 
+#if defined(USE_NCCL)
 static torch::Tensor external_all2all(const torch::Tensor &tensor, int stage) {
   // Designed for older Pytorch without dist.alltoall() support
   static ncclComm_t comm;
@@ -253,6 +262,7 @@ static torch::Tensor external_all2all(const torch::Tensor &tensor, int stage) {
   // CHECK_EQ(0, cudaStreamSynchronize(nullptr));
   return output;
 }
+#endif
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("invoke",
@@ -263,8 +273,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         &invoke_with_source,
         "Generic Invoke with Source (CUDA)"
     );
+    printf("\n\n\n\n\nOUTSIDE\n\n\n\n\n");
+#if defined(USE_NCCL)
+    printf("\n\n\n\n\n\nNCCL USED!\n\n\n\n\n\n");
     m.def("external_all2all",
         &external_all2all,
         "External AllToAll for Pytorch without builtin dist.alltoall (CUDA)"
     );
+#endif
 }
