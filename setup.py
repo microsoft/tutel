@@ -86,4 +86,5 @@ def install(use_nccl):
 try:
     install(use_nccl=True)
 except:
+    print('Try installing without NCCL extension..')
     install(use_nccl=False)
