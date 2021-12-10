@@ -268,7 +268,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         &invoke_with_source,
         "Generic Invoke with Source (CUDA)"
     );
-    printf("\n\n\n\n\nOUTSIDE\n\n\n\n\n");
     m.def("external_all2all",
         &external_all2all,
         "External AllToAll for Pytorch without builtin dist.alltoall (CUDA)"
