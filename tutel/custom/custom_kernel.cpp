@@ -66,7 +66,7 @@ static std::string get_cache_path() {
   if (stat(cache_path.c_str(), &st) == -1) {
     mkdir(cache_path.c_str(), 0755);
   }
-  
+
   return cache_path;
 }
 
@@ -268,10 +268,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         &invoke_with_source,
         "Generic Invoke with Source (CUDA)"
     );
-    #if defined(USE_NCCL)
+#if defined(USE_NCCL)
     m.def("external_all2all",
         &external_all2all,
         "External AllToAll for Pytorch without builtin dist.alltoall (CUDA)"
     );
-    #endif
+#endif
 }
