@@ -3,7 +3,10 @@
 
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
+
+#if defined(USE_NCCL)
 #include <nccl.h>
+#endif
 
 #include <vector>
 #include <pwd.h>
@@ -210,6 +213,7 @@ static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id
 }
 
 
+#if defined(USE_NCCL)
 static torch::Tensor external_all2all(const torch::Tensor &tensor, int stage) {
   // Designed for older Pytorch without dist.alltoall() support
   static ncclComm_t comm;
@@ -253,6 +257,7 @@ static torch::Tensor external_all2all(const torch::Tensor &tensor, int stage) {
   // CHECK_EQ(0, cudaStreamSynchronize(nullptr));
   return output;
 }
+#endif
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("invoke",
@@ -263,8 +268,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         &invoke_with_source,
         "Generic Invoke with Source (CUDA)"
     );
+#if defined(USE_NCCL)
     m.def("external_all2all",
         &external_all2all,
         "External AllToAll for Pytorch without builtin dist.alltoall (CUDA)"
     );
+#endif
 }

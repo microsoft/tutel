@@ -26,52 +26,65 @@ root_path = root_path if root_path else '.'
 
 os.chdir(root_path)
 
-setup(
-    name='tutel',
-    version='0.1',
-    description='An Optimized Mixture-of-Experts Implementation.',
-    url='https://github.com/microsoft/Tutel',
-    author='Microsoft',
-    author_email='tutel@microsoft.com',
-    license='MIT',
-    classifiers=[
-        'Development Status :: 2 - Pre-Alpha',
-        'Environment :: GPU',
-        'Intended Audience :: Developers',
-        'Intended Audience :: Education',
-        'Intended Audience :: Science/Research',
-        'License :: OSI Approved :: MIT License',
-        'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3 :: Only',
-        'Programming Language :: Python :: 3.5',
-        'Programming Language :: Python :: 3.6',
-        'Programming Language :: Python :: 3.7',
-        'Programming Language :: Python :: 3.8',
-        'Programming Language :: Python :: 3.9',
-        'Topic :: Scientific/Engineering',
-        'Topic :: Scientific/Engineering :: Artificial Intelligence',
-        'Topic :: Software Development',
-        'Topic :: Software Development :: Libraries',
-        'Topic :: Software Development :: Libraries :: Python Modules',
-    ],
-    keywords=['Mixture of Experts', 'MoE', 'Optimization'],
-    packages=find_packages(),
-    python_requires='>=3.6, <4',
-    install_requires=[
-    ],
-    ext_modules=[
-        CUDAExtension('tutel_custom_kernel', [
-            './tutel/custom/custom_kernel.cpp',
+def install(use_nccl):
+    ext_libs = ['dl', 'cuda', 'nvrtc'] if not IS_HIP_EXTENSION else []
+    ext_args = {'cxx': ['-Wno-sign-compare', '-Wno-unused-but-set-variable']}
+    if use_nccl and not IS_HIP_EXTENSION:
+        ext_libs += ['nccl']
+        ext_args['cxx'] += ['-DUSE_NCCL']
+
+    setup(
+        name='tutel',
+        version='0.1',
+        description='An Optimized Mixture-of-Experts Implementation.',
+        url='https://github.com/microsoft/Tutel',
+        author='Microsoft',
+        author_email='tutel@microsoft.com',
+        license='MIT',
+        classifiers=[
+            'Development Status :: 2 - Pre-Alpha',
+            'Environment :: GPU',
+            'Intended Audience :: Developers',
+            'Intended Audience :: Education',
+            'Intended Audience :: Science/Research',
+            'License :: OSI Approved :: MIT License',
+            'Programming Language :: Python :: 3',
+            'Programming Language :: Python :: 3 :: Only',
+            'Programming Language :: Python :: 3.5',
+            'Programming Language :: Python :: 3.6',
+            'Programming Language :: Python :: 3.7',
+            'Programming Language :: Python :: 3.8',
+            'Programming Language :: Python :: 3.9',
+            'Topic :: Scientific/Engineering',
+            'Topic :: Scientific/Engineering :: Artificial Intelligence',
+            'Topic :: Software Development',
+            'Topic :: Software Development :: Libraries',
+            'Topic :: Software Development :: Libraries :: Python Modules',
         ],
-        library_dirs=['/usr/local/cuda/lib64/stubs'],
-        libraries=['dl', 'cuda', 'nvrtc', 'nccl'] if not IS_HIP_EXTENSION else [],
-        extra_compile_args={'cxx': ['-Wno-sign-compare', '-Wno-unused-but-set-variable']})
-    ],
-    cmdclass={
-        'build_ext': BuildExtension
-    },
-    project_urls={
-        'Source': 'https://github.com/microsoft/Tutel',
-        'Tracker': 'https://github.com/microsoft/Tutel/issues',
-    },
-)
+        keywords=['Mixture of Experts', 'MoE', 'Optimization'],
+        packages=find_packages(),
+        python_requires='>=3.6, <4',
+        install_requires=[
+        ],
+        ext_modules=[
+            CUDAExtension('tutel_custom_kernel', [
+                './tutel/custom/custom_kernel.cpp',
+            ],
+            library_dirs=['/usr/local/cuda/lib64/stubs'],
+            libraries=ext_libs,
+            extra_compile_args=ext_args)
+        ],
+        cmdclass={
+            'build_ext': BuildExtension
+        },
+        project_urls={
+            'Source': 'https://github.com/microsoft/Tutel',
+            'Tracker': 'https://github.com/microsoft/Tutel/issues',
+        },
+    )
+
+try:
+    install(use_nccl=True)
+except:
+    print('Try installing without NCCL extension..')
+    install(use_nccl=False)
