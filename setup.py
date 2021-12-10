@@ -26,7 +26,7 @@ root_path = root_path if root_path else '.'
 
 os.chdir(root_path)
 
-use_nccl=False
+use_nccl=True
 ext_libs=[]
 ext_args={}
 if use_nccl:
