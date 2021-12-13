@@ -86,7 +86,7 @@ static std::string nvcc_compile(const char* code, const std::string &arch, int c
     wait(NULL);
   }
   auto image = file_read((code_path + ".fatbin").data());
-  remove((code_path + ".fatbin").data()); 
+  remove((code_path + ".fatbin").data());
   return image;
 }
 
