@@ -76,9 +76,9 @@ static std::string nvcc_compile(const char* code, const std::string &arch, int c
   pid_t  pid = fork();
   if (pid == 0) {
 #if !defined(__HIP_PLATFORM_HCC__)
-    CHECK_EQ(0, execl("/usr/local/cuda/bin/nvcc", (code_path + " -o " + code_path + ".fatbin --fatbin -O4 -gencode arch=compute_" + arch.substr(3) + ",code=" + arch).c_str()));
+    CHECK_EQ(-1, execl("/usr/local/cuda/bin/nvcc", (code_path + " -o " + code_path + ".fatbin --fatbin -O4 -gencode arch=compute_" + arch.substr(3) + ",code=" + arch).c_str()));
 #else
-    CHECK_EQ(0, execl("/opt/rocm/bin/hipcc", (code_path + " -o " + code_path + ".fatbin --genco -O4 -w --amdgpu-target=" + arch).c_str()));
+    CHECK_EQ(-1, execl("/opt/rocm/bin/hipcc", (code_path + " -o " + code_path + ".fatbin --genco -O4 -w --amdgpu-target=" + arch).c_str()));
 #endif
   }
   auto image = file_read((code_path + ".fatbin").data());
