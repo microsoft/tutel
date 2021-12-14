@@ -77,9 +77,9 @@ static std::string nvcc_compile(const char* code, const std::string &arch, int c
   pid_t  pid = fork();
   if (pid == 0) {
 #if !defined(__HIP_PLATFORM_HCC__)
-    CHECK_EQ(-1, execl("/usr/local/cuda/bin/nvcc", "nvcc", code_path.c_str(), "-o", (code_path + ".fatbin").c_str(), "--fatbin", "-O4", "-gencode", ("arch=compute_" + arch.substr(3) + ",code=" + arch).c_str(), NULL));    
+    CHECK_EQ(-1, execl("/usr/local/cuda/bin/nvcc", "/usr/local/cuda/bin/nvcc", code_path.c_str(), "-o", (code_path + ".fatbin").c_str(), "--fatbin", "-O4", "-gencode", ("arch=compute_" + arch.substr(3) + ",code=" + arch).c_str(), (char *)NULL));
 #else
-    CHECK_EQ(-1, execl("/opt/rocm/bin", "hipcc", code_path.c_str(), "-o", (code_path + ".fatbin").c_str(), "--genco", "-O4", "-w" , ("--amdgpu-target=" + arch).c_str(), NULL));
+    CHECK_EQ(-1, execl("/opt/rocm/bin/hipcc", "/opt/rocm/bin/hipcc", code_path.c_str(), "-o", (code_path + ".fatbin").c_str(), "--genco", "-O4", "-w" , ("--amdgpu-target=" + arch).c_str(), (char *)NULL));
 #endif
     exit(1);
   } else {
