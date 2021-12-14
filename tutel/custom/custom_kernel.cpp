@@ -81,7 +81,7 @@ static std::string nvcc_compile(const char* code, const std::string &arch, int c
 #else
     CHECK_EQ(-1, execl("/opt/rocm/bin", "hipcc", code_path.c_str(), "-o", (code_path + ".fatbin").c_str(), "--genco", "-O4", "-w" , ("--amdgpu-target=" + arch).c_str(), NULL));
 #endif
-    exit(0);
+    exit(1);
   } else {
     wait(NULL);
   }
