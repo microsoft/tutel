@@ -9,8 +9,9 @@ Reference:
 """
 
 import os, sys
+from typing import List, Tuple
 
-from setuptools import setup, find_packages
+from setuptools import setup, find_packages, Command
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
 try:
@@ -25,6 +26,29 @@ root_path = os.path.dirname(sys.argv[0])
 root_path = root_path if root_path else '.'
 
 os.chdir(root_path)
+
+class Tester(Command):
+    """Cmdclass for `python setup.py test`.
+    Args:
+        Command (distutils.cmd.Command):
+            Abstract base class for defining command classes.
+    """
+
+    description = 'test the code using pytest'
+    user_options: List[Tuple[str, str, str]] = []
+
+    def initialize_options(self):
+        """Set default values for options that this command supports."""
+        pass
+
+    def finalize_options(self):
+        """Set final values for options that this command supports."""
+        pass
+
+    def run(self):
+        """Run pytest."""
+        errno = os.system('python3 -m pytest -v tests/')
+        sys.exit(0 if errno == 0 else 1)
 
 def install(use_nccl):
     ext_libs = ['dl', 'cuda', 'nvrtc'] if not IS_HIP_EXTENSION else []
@@ -62,10 +86,16 @@ def install(use_nccl):
             'Topic :: Software Development :: Libraries :: Python Modules',
         ],
         keywords=['Mixture of Experts', 'MoE', 'Optimization'],
-        packages=find_packages(),
+        packages=find_packages(exclude=['tests']),
         python_requires='>=3.6, <4',
         install_requires=[
         ],
+        extras_require={
+            'test': [
+                'pytest-subtests>=0.4.0',
+                'pytest>=6.2.2',
+            ],
+        },
         ext_modules=[
             CUDAExtension('tutel_custom_kernel', [
                 './tutel/custom/custom_kernel.cpp',
@@ -75,7 +105,8 @@ def install(use_nccl):
             extra_compile_args=ext_args)
         ],
         cmdclass={
-            'build_ext': BuildExtension
+            'build_ext': BuildExtension,
+            'test': Tester,
         },
         project_urls={
             'Source': 'https://github.com/microsoft/Tutel',
