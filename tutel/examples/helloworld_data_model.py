@@ -99,7 +99,7 @@ dist_print(model)
 optimizer = torch.optim.SGD(model.parameters(), lr=1e-5)
 
 torch.manual_seed(parallel_env.global_rank)
-x = torch.randn([batch_size, num_tokens, model_dim], device=device, requires_grad=True)
+x = torch.tensor(torch.randn([batch_size, num_tokens, model_dim], device='cpu').detach().numpy(), requires_grad=True, device=device)
 y = torch.LongTensor(batch_size).random_(1).to(device)
 
 tuples = (parallel_env.global_size, args.dtype, model_dim, hidden_size, batch_size * num_tokens, num_local_experts, top_value, device, parallel_env.group_count)
