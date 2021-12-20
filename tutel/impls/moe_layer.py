@@ -78,7 +78,7 @@ class TopKGate(torch.nn.Module):
         sorted_cumsum = fast_cumsum_sub_one(sorted_x) * sorted_x
         return sorted_cumsum[importance_scores.argsort(dim=0).argsort(dim=0)]
 
-    def apply_on_expert_fn(self, input, expert_fn, group):
+    def apply_on_expert_fn(self, input, expert_fn, group, sharded_count):
         if self.input_dropout:
             input = self.input_dropout(input)
 
@@ -125,20 +125,24 @@ class TopKGate(torch.nn.Module):
         if not hasattr(self, '_fdr'):
             capacity = self.top_k * int(self.capacity_factor * ((S + self.num_global_experts - 1) // self.num_global_experts))
             self._fdr = fast_dispatcher(num_global_experts=GE, capacity=capacity, model_dim=M, dispatch_dtype=input.dtype)
+        else:
+            capacity = self._fdr.capacity
 
         if self.is_ones_gate:
             gates_s = [torch.ones_like(x) for x in gates_s]
-        self._fdr.update(indices_s, locations_s, gates_s)
+        self._fdr.update(indices_s, locations_s, gates_s, capacity=capacity)
 
         dispatched_input = self._fdr.encode(input)
+        dispatched_input = dispatched_input.repeat(sharded_count, 1)
         dispatched_input = AllToAll.apply(group, dispatched_input)
-        dispatched_input = dispatched_input.reshape(world_size, self.num_global_experts // world_size, -1, M)
+        dispatched_input = dispatched_input.reshape(world_size, -1, capacity, M)
 
         expert_output = expert_fn(dispatched_input)
         expert_output = expert_output.to(input.dtype)
 
         expert_output = AllToAll.apply(group, expert_output)
-        expert_output = expert_output.reshape(GE, -1, M)
+        expert_output = expert_output.reshape(-1, GE, capacity, M)
+        expert_output = torch.sum(expert_output, dim=0)
 
         result_output = self._fdr.decode(expert_output.view(GE * self._fdr.capacity, M))
         return result_output, l_loss
@@ -157,9 +161,10 @@ class MegatronLMGate():
     def named_parameters(self):
         return []
 
-    def apply_on_expert_fn(self, input, expert_fn, group):
+    def apply_on_expert_fn(self, input, expert_fn, group, sharded_count):
         if self.l_zero is None:
             self.l_zero = torch.tensor(0, dtype=input.dtype, device=input.device)
+        assert sharded_count == 1
         gathered_input = PreAllreduceSum.apply(group, input)
         result_output = expert_fn(gathered_input)
         result_output = PostAllreduceSum.apply(group, result_output)
@@ -189,8 +194,27 @@ class MOELayer(torch.nn.Module):
         self.skip_moe = (int(os.environ.get('SKIP_MOE', '0')) != 0)
 
         if not isinstance(experts, dict):
-            self.experts = cast(ModuleList, experts) if type(experts) == ModuleList else ModuleList(experts)
             self.num_local_experts = len(self.experts)
+        else:
+            self.num_local_experts = experts.get('count_per_node', 1)
+            if not isinstance(self.num_local_experts, int):
+                self.num_local_experts = -int(1 / (self.num_local_experts + 1e-5))
+
+        num_devices = get_world_size(self.group)
+        if self.num_local_experts < 0:
+            sharded_count = -self.num_local_experts
+            assert experts['hidden_size_per_expert'] % sharded_count == 0, f"Cannot evenly divide hidden_size_per_expert ({experts['hidden_size_per_expert']}) to {sharded_count} slices."
+            assert num_devices % sharded_count == 0, f"Cannot evenly divide {num_devices} global devices by a {sharded_count}-device expert."
+            self.num_global_experts = num_devices // sharded_count
+            self.num_local_experts, experts['hidden_size_per_expert'] = 1, experts['hidden_size_per_expert'] // sharded_count
+            self.sharded_count = sharded_count
+        else:
+            self.num_global_experts = num_devices * self.num_local_experts
+            self.sharded_count = 1
+        self.model_dim = model_dim
+
+        if not isinstance(experts, dict):
+            self.experts = cast(ModuleList, experts) if type(experts) == ModuleList else ModuleList(experts)
         else:
             experts = copy.deepcopy(experts)
             if experts['type'] == 'attention':
@@ -219,7 +243,6 @@ class MOELayer(torch.nn.Module):
                     output[W, E, C, M]  =  hidden[E, W, C, M]
                 '''
 
-                self.num_local_experts = experts.get('count_per_node', 1)
                 fused_custom_fn = experts.get('fused_custom_fn')
                 if fused_custom_fn is None:
                     activation_fn = experts.get('activation_fn', lambda x: F.relu(x))
@@ -313,9 +336,6 @@ class MOELayer(torch.nn.Module):
                 for n, p in expert.named_parameters():
                     scan_expert_func(n, p)
 
-        self.num_global_experts = get_world_size(self.group) * self.num_local_experts
-        self.model_dim = model_dim
-
         if isinstance(gate_type, str):
             assert re.match(r'^Top[0-9]+Gate$', gate_type), "Unrecognized gate_type: %s" % gate_type
             top_k = int(gate_type[3:-4])
@@ -384,7 +404,7 @@ class MOELayer(torch.nn.Module):
                 reshaped_input = pad_input
 
         reshaped_input = reshaped_input.to(next(iter(self.experts.parameters())).dtype)
-        result_output, l_aux = self.gate.apply_on_expert_fn(reshaped_input, self.expert_fn, self.group)
+        result_output, l_aux = self.gate.apply_on_expert_fn(reshaped_input, self.expert_fn, self.group, sharded_count=self.sharded_count)
 
         result_output = result_output[:reshaped_input_samples, :]
         result_output = result_output.view(original_shape).to(original_dtype)
