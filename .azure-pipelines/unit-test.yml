@@ -1,0 +1,21 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
+
+trigger:
+  - v0.1.x
+
+pool:
+  name: Tutel CI
+  vmImage: ubuntu-latest
+
+container:
+  image: nvcr.io/nvidia/pytorch:20.12-py3
+
+steps:
+  - script: |
+      python3 -m pip install .[test]
+    displayName: Install dependencies
+  - script: |
+      python3 setup.py test
+    displayName: Run unit tests
+    timeoutInMinutes: 15
