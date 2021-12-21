@@ -9,6 +9,7 @@ Reference:
 """
 
 import os, sys
+import subprocess
 from typing import List, Tuple
 
 from setuptools import setup, find_packages, Command
@@ -47,8 +48,7 @@ class Tester(Command):
 
     def run(self):
         """Run pytest."""
-        errno = os.system('python3 -m pytest -v tests/')
-        sys.exit(0 if errno == 0 else 1)
+        subprocess.check_call('python3 -m pytest -v -s tests/', shell=True)
 
 def install(use_nccl):
     ext_libs = ['dl', 'cuda', 'nvrtc'] if not IS_HIP_EXTENSION else []
@@ -92,6 +92,7 @@ def install(use_nccl):
         ],
         extras_require={
             'test': [
+                'GPUtil>=1.4.0',
                 'pytest-subtests>=0.4.0',
                 'pytest>=6.2.2',
             ],
