@@ -10,6 +10,7 @@ pool:
 
 container:
   image: nvcr.io/nvidia/pytorch:20.12-py3
+  options: '--gpus=all'
 
 steps:
   - script: |
