@@ -77,7 +77,7 @@ static std::string nvcc_compile(const char* code, const std::string &arch, int c
   pid_t  pid = fork();
   if (pid == 0) {
 #if !defined(__HIP_PLATFORM_HCC__)
-    CHECK_EQ(-1, execl("/usr/local/cuda/bin/nvcc", "/usr/local/cuda/bin/nvcc", code_path.c_str(), "-o", (code_path + ".fatbin").c_str(), "--fatbin", "-O4", "-gencode", ("arch=compute_" + arch.substr(3) + ",code=" + arch).c_str(), (char *)NULL));
+    CHECK_EQ(-1, execl("/usr/local/cuda/bin/nvcc", "/usr/local/cuda/bin/nvcc", code_path.c_str(), "-o", (code_path + ".fatbin").c_str(), "--fatbin", "-O4", "-gencode", ("arch=compute_" + arch + ",code=sm_" + arch).c_str(), (char *)NULL));
 #else
     CHECK_EQ(-1, execl("/opt/rocm/bin/hipcc", "/opt/rocm/bin/hipcc", code_path.c_str(), "-o", (code_path + ".fatbin").c_str(), "--genco", "-O4", "-w" , ("--amdgpu-target=" + arch).c_str(), (char *)NULL));
 #endif
@@ -91,10 +91,11 @@ static std::string nvcc_compile(const char* code, const std::string &arch, int c
 }
 
 static std::string nvrtc_compile(const char* code, const std::string &arch) {
-  std::string arch_option = "--gpu-architecture=" + arch;
 #if !defined(__HIP_PLATFORM_HCC__)
+  std::string arch_option = "--gpu-architecture=compute_" + arch;
   std::vector<const char*> param_cstrings = {"--restrict", "--include-path=/usr/local/cuda/include", arch_option.c_str(), "--use_fast_math", "--extra-device-vectorization"};
 #else
+  std::string arch_option = "--gpu-architecture=" + arch;
   std::vector<const char*> param_cstrings = {arch_option.c_str(), "-O4"};
 #endif
   nvrtcProgram prog;
@@ -108,7 +109,7 @@ static std::string nvrtc_compile(const char* code, const std::string &arch) {
   log.resize(log_size);
   CHECK_EQ(0, nvrtcGetProgramLog(prog, &log[0]));
   if (0 != res) {
-    LOG(ERROR) << log << " Failed to use NVRTC for JIT compilation in this Pytorch version, try another approach using CUDA compiler.. (To always disable NVRTC, please: export NO_NVRTC=1)";
+    LOG(ERROR) << log << " Failed to use NVRTC for JIT compilation in this Pytorch version, try another approach using CUDA compiler.. (To always disable NVRTC, please: export USE_NVRTC=0)";
     return "";
   }
 
@@ -182,7 +183,7 @@ static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id
     int major, minor;
     CHECK_EQ(0, cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev));
     CHECK_EQ(0, cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, dev));
-    std::string arch = "sm_" + std::to_string(major) + std::to_string(minor);
+    std::string arch = std::to_string(major) + std::to_string(minor);
 #else
     hipDeviceProp_t prop;
     CHECK_EQ(0, hipGetDeviceProperties(&prop, dev));
@@ -190,9 +191,9 @@ static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id
 #endif
     const char *source = code.data(), *pos, *tail;
 
-    int no_nvrtc = flags & 1;
+    int use_nvrtc = flags & 1;
     std::string image;
-    if (no_nvrtc || (image = nvrtc_compile(source, arch)) == "")
+    if (!use_nvrtc || (image = nvrtc_compile(source, arch)) == "")
         image = nvcc_compile(source, arch, code_id, dev);
 
     long launch_bound;
