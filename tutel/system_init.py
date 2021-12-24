@@ -21,6 +21,7 @@ def init_affinity_at_program_beginning():
             logging.warning('Failed to set NUMA status: %s' % ex)
 
 def init_data_model_parallel(group_count=None, backend='nccl'):
+  import torch
   import torch.distributed as dist
   try:
     if ('LOCAL_RANK' not in os.environ) and ('OMPI_COMM_WORLD_SIZE' in os.environ):
@@ -76,7 +77,12 @@ def init_data_model_parallel(group_count=None, backend='nccl'):
   result.group_count = dist_group_size
   result.data_rank = dist_group_rank
   result.model_rank = dist_world_rank
-  result.local_rank = dist_local_rank
+
+  if backend == 'nccl':
+    result.local_device = torch.device('cuda', dist_local_rank)
+    torch.cuda.set_device(result.local_device)
+  else:
+    result.local_device = torch.device('cpu')
 
   result.data_group = data_group
   result.model_group = model_group

@@ -37,15 +37,13 @@ parser.add_argument('--l_aux_wt', type=float, default=0.0)
 parser.add_argument('--group_count', type=int, default=1)
 args = parser.parse_args()
 
-parallel_env = system_init.init_data_model_parallel(group_count=args.group_count)
-dist_print = parallel_env.dist_print
-args.local_rank = parallel_env.local_rank
+parallel_env = system_init.init_data_model_parallel()
+dist_rank, dist_world_size, dist_print = parallel_env.global_rank, parallel_env.global_size, parallel_env.dist_print
+args.local_rank = parallel_env.local_device.index
 
 if not parallel_env.is_distributed:
   raise RuntimeError("\nThe current session is not launched in distributed mode. Please run the program with: python3 -m torch.distributed.launch ..")
 print(f'Device-{parallel_env.global_rank}: data_rank = {parallel_env.data_rank}, model_rank = {parallel_env.model_rank}')
-
-torch.cuda.set_device(args.local_rank)
 
 batch_size = args.batch_size
 num_tokens = args.num_tokens
@@ -53,9 +51,6 @@ model_dim = args.model_dim
 hidden_size = args.hidden_size
 num_local_experts = args.num_local_experts
 top_value = args.top
-local_rank = args.local_rank
-
-
 device = torch.device('cuda', args.local_rank)
 
 if args.dtype == 'float32':
@@ -81,7 +76,7 @@ class ExampleModel(torch.nn.Module):
             group = parallel_env.model_group,
         ).to(device)
 
-        # Distinguish different parameter types: gate, local_experts
+        # Summary of different parameter types: gate, local_experts
         local_count = sum([torch.numel(param) for name, param in self._moe_layer.get_parameter_iterator(param_type='local_experts')])
         shared_count = sum([torch.numel(param) for name, param in self._moe_layer.get_parameter_iterator(param_type='gate')])
         dist_print('[Statistics] param count for MoE local_experts = %s, param count for MoE gate = %s.\n' % (local_count, shared_count))

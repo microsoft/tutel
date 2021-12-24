@@ -30,9 +30,21 @@ parser.add_argument('--top', type=int, default=2)
 parser.add_argument('--use_tutel', default=False, action='store_true')
 args = parser.parse_args()
 
-parallel_env = system_init.init_data_model_parallel()
-dist_rank, dist_world_size, dist_print = parallel_env.global_rank, parallel_env.global_size, parallel_env.dist_print
-args.local_rank = parallel_env.local_rank
+try:
+    if dist.is_available():
+        dist.init_process_group('nccl')
+    dist_rank = dist.get_rank()
+    dist_world_size = dist.get_world_size()
+
+    def dist_print(*args):
+        if dist_rank == 0:
+            print(*args)
+except:
+    dist_rank = 0
+    dist_world_size = 1
+    dist_print = print
+
+args.local_rank = args.local_rank if args.local_rank >= 0 else int(os.environ.get('LOCAL_RANK', 0))
 
 torch.cuda.set_device(args.local_rank)
 
@@ -88,7 +100,7 @@ class ExampleModel(torch.nn.Module):
             if '.experts.' in name:
                 setattr(param, 'skip_allreduce', True)
 
-        # Distinguish different parameter types: gate, local_experts
+        # Summary of different parameter types: gate, local_experts
         local_count = sum([torch.numel(param) for name, param in self._moe_layer.named_parameters() if '.experts.' in name])
         shared_count = sum([torch.numel(param) for name, param in self._moe_layer.named_parameters() if '.gate.' in name])
         dist_print('[Statistics] param count for MoE local_experts = %s, param count for MoE gate = %s.\n' % (local_count, shared_count))
