@@ -20,21 +20,29 @@ def init_affinity_at_program_beginning():
         if group_rank == 0:
             logging.warning('Failed to set NUMA status: %s' % ex)
 
-def init_data_model_parallel(group_count=1, backend='nccl'):
+def init_data_model_parallel(group_count=None, backend='nccl'):
   import torch.distributed as dist
   try:
-    if dist.is_available():
-      dist.init_process_group(backend=backend)
+    if ('LOCAL_RANK' not in os.environ) and ('OMPI_COMM_WORLD_SIZE' in os.environ):
+        dist.init_process_group(backend=backend,
+            init_method='tcp://%s:%s' % (os.environ['MASTER_ADDR'], os.environ.get('MASTER_PORT', '23456')),
+            rank=int(os.environ['OMPI_COMM_WORLD_RANK']), world_size=int(os.environ['OMPI_COMM_WORLD_SIZE']))
+        dist_local_rank = int(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
+    else:
+        dist.init_process_group(backend=backend)
+        dist_local_rank = int(os.environ.get('LOCAL_RANK', 0))
     glob_world_size, glob_world_rank = dist.get_world_size(), dist.get_rank()
     is_distributed = True
 
     def dist_print(*args):
         if glob_world_rank == 0:
             print(*args)
-  except:
-    glob_world_size, glob_world_rank = 1, 0
+  except ValueError:
+    glob_world_size, glob_world_rank, dist_local_rank = 1, 0, 0
     is_distributed = False
     dist_print = print
+
+  group_count = group_count or glob_world_size
 
   assert glob_world_size % group_count == 0, f"Expected to evenly divide devices into {group_count} groups, while the world size of current sesion is {glob_world_size}."
 
@@ -42,7 +50,6 @@ def init_data_model_parallel(group_count=1, backend='nccl'):
   dist_world_size = glob_world_size // dist_group_size
   dist_world_rank = glob_world_rank % dist_world_size
   dist_group_rank = glob_world_rank // dist_world_size
-  dist_local_rank = int(os.environ.get('LOCAL_RANK', 0))
 
   if is_distributed:
     groups, inner_ranks = [], []
