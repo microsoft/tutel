@@ -37,24 +37,11 @@ parser.add_argument('--fp32_gate', default=False, action='store_true')
 parser.add_argument('--top', type=int, default=2)
 args = parser.parse_args()
 
-if args.local_rank < 0:
-    args.local_rank = int(os.environ.get('LOCAL_RANK', 0))
+parallel_env = system_init.init_data_model_parallel()
+dist_rank, dist_world_size, dist_print = parallel_env.global_rank, parallel_env.global_size, parallel_env.dist_print
+args.local_rank = parallel_env.local_rank
 
 torch.cuda.set_device(args.local_rank)
-
-try:
-    if dist.is_available():
-        dist.init_process_group('nccl')
-    dist_rank = dist.get_rank()
-    dist_world_size = dist.get_world_size()
-
-    def dist_print(*args):
-        if dist_rank == 0:
-            print(*args)
-except:
-    dist_rank = 0
-    dist_world_size = 1
-    dist_print = print
 
 batch_size = args.batch_size
 num_tokens = args.num_tokens

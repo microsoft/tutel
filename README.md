@@ -29,6 +29,16 @@ How to setup Tutel MoE for Pytorch:
         (If building from source, the following method also works:)
         $ python3 ./tutel/examples/helloworld.py --batch_size=16
         ..
+
+* Run Tutel MoE in Distributed Mode:
+
+        (Single-Node Multi-GPU based on standard Pytorch distributed launcher:)
+        $ python3 -m torch.distributed.launch --nproc_per_node=8 -m tutel.examples.helloworld --batch_size=16
+
+        (Multi-Node Multi-GPU based on standard Pytorch distributed launcher:)
+        $ ssh <node-ip-0> python3 -m torch.distributed.launch --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=<node-ip-0> -m tutel.examples.helloworld --batch_size=16
+        $ ssh <node-ip-1> python3 -m torch.distributed.launch --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=<node-ip-0> -m tutel.examples.helloworld --batch_size=16
+
 ```
 
 How to import Tutel-optimized MoE in Pytorch:
@@ -66,20 +76,8 @@ y = moe_layer(x)
 print(y)
 ```
 
-Full Examples in Distributed Mode & Usage:
+Usage of MOELayer:
 ```
-* Running Tutel MoE in Distributed Mode:
-
-        (Single-Node Multi-GPU based on standard Pytorch distributed launcher:)
-        $ python3 -m torch.distributed.launch --nproc_per_node=8 -m tutel.examples.helloworld --batch_size=16
-
-        (Multi-Node Multi-GPU based on standard Pytorch distributed launcher:)
-        $ ssh <node-ip-0> python3 -m torch.distributed.launch --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=<node-ip-0> -m tutel.examples.helloworld --batch_size=16
-        $ ssh <node-ip-1> python3 -m torch.distributed.launch --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=<node-ip-0> -m tutel.examples.helloworld --batch_size=16
-
-        (Multi-Node Multi-GPU based on OpenMPI:)
-        $ mpiexec -host <node-ip-0>,<node-ip-1> python3 -m tutel.ompi_launch --nproc_per_node=8 --master_addr=<node-ip-0> -m tutel.examples.helloworld --batch_size=16
-
 * Usage of MOELayer Args:
 
         gate_type        : dict-type gate description, e.g. {'type': 'top', 'k': 2, ..}, or {'type': 'megatron'}
