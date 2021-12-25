@@ -16,11 +16,7 @@ import torch.distributed as dist
 from torch import nn
 import argparse
 
-import logging
-
 from tutel import moe as tutel_moe
-
-logging.basicConfig(level=logging.INFO)
 
 assert torch.__version__ >= '1.8.0', "DDP-based MoE requires Pytorch >= 1.8.0"
 

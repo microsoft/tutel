@@ -5,7 +5,11 @@ import os
 import re
 import logging
 
+TUTEL_CUDA_SANDBOX = int(os.environ.get('TUTEL_CUDA_SANDBOX', 0))
+
 def init_affinity_at_program_beginning():
+    if TUTEL_CUDA_SANDBOX:
+        return
     try:
         numa_type = int(os.environ.get('NUMA_TYPE', '1'))
         if numa_type <= 0:
@@ -20,7 +24,7 @@ def init_affinity_at_program_beginning():
         if group_rank == 0:
             logging.warning('Failed to set NUMA status: %s' % ex)
 
-def init_data_model_parallel(group_count=None, backend='nccl'):
+def init_data_model_parallel(group_count=1, backend='nccl'):
   import torch
   import torch.distributed as dist
   try:
@@ -32,6 +36,8 @@ def init_data_model_parallel(group_count=None, backend='nccl'):
     else:
         dist.init_process_group(backend=backend)
         dist_local_rank = int(os.environ.get('LOCAL_RANK', 0))
+        if TUTEL_CUDA_SANDBOX:
+            dist_local_rank = 0
     glob_world_size, glob_world_rank = dist.get_world_size(), dist.get_rank()
     is_distributed = True
 
@@ -39,11 +45,9 @@ def init_data_model_parallel(group_count=None, backend='nccl'):
         if glob_world_rank == 0:
             print(*args)
   except ValueError:
-    glob_world_size, glob_world_rank, dist_local_rank = 1, 0, 0
-    is_distributed = False
-    dist_print = print
-
-  group_count = group_count or glob_world_size
+      glob_world_size, glob_world_rank, dist_local_rank = 1, 0, 0
+      is_distributed = False
+      dist_print = print
 
   assert glob_world_size % group_count == 0, f"Expected to evenly divide devices into {group_count} groups, while the world size of current sesion is {glob_world_size}."
 
@@ -53,23 +57,25 @@ def init_data_model_parallel(group_count=None, backend='nccl'):
   dist_group_rank = glob_world_rank // dist_world_size
 
   if is_distributed:
-    groups, inner_ranks = [], []
-    for gr in range(dist_group_size):
-      group_ranks = [x for x in range(gr * dist_world_size, (gr + 1) * dist_world_size)]
-      groups += [dist.new_group(ranks=group_ranks)]
-      inner_ranks += [group_ranks]
-    model_group = groups[dist_group_rank]
+      global_group = model_group = data_group = dist.group.WORLD
 
-    groups, outer_ranks = [], []
-    for gr in range(dist_world_size):
-      group_ranks = [x for x in range(gr, dist_world_size * dist_group_size, dist_world_size)]
-      groups += [dist.new_group(ranks=group_ranks)]
-      outer_ranks += [group_ranks]
+      if dist_group_size != glob_world_size:
+          groups, inner_ranks = [], []
+          for gr in range(dist_group_size):
+              group_ranks = [x for x in range(gr * dist_world_size, (gr + 1) * dist_world_size)]
+              groups += [dist.new_group(ranks=group_ranks)]
+              inner_ranks += [group_ranks]
+          model_group = groups[dist_group_rank]
 
-    data_group = groups[dist_world_rank]
-    global_group = dist.new_group(ranks=list(range(dist_world_size * dist_group_size)))
+      if dist_world_size != glob_world_size:
+          groups, outer_ranks = [], []
+          for gr in range(dist_world_size):
+              group_ranks = [x for x in range(gr, dist_world_size * dist_group_size, dist_world_size)]
+              groups += [dist.new_group(ranks=group_ranks)]
+              outer_ranks += [group_ranks]
+          data_group = groups[dist_world_rank]
   else:
-    model_group, data_group, global_group = None, None, None
+      model_group, data_group, global_group = None, None, None
 
   result = init_data_model_parallel
   result.global_size = glob_world_size
@@ -79,10 +85,10 @@ def init_data_model_parallel(group_count=None, backend='nccl'):
   result.model_rank = dist_world_rank
 
   if backend == 'nccl':
-    result.local_device = torch.device('cuda', dist_local_rank)
-    torch.cuda.set_device(result.local_device)
+      result.local_device = torch.device('cuda', dist_local_rank)
+      torch.cuda.set_device(result.local_device)
   else:
-    result.local_device = torch.device('cpu')
+      result.local_device = torch.device('cpu')
 
   result.data_group = data_group
   result.model_group = model_group
@@ -91,5 +97,5 @@ def init_data_model_parallel(group_count=None, backend='nccl'):
   result.is_distributed = is_distributed
   result.dist_print = dist_print
 
-  logging.info(f'Registering device global rank {result.global_rank}: data_rank = {result.data_rank}, model_rank = {result.model_rank}')
+  logging.critical(f'Registering device global rank {result.global_rank}: data_rank = {result.data_rank}, model_rank = {result.model_rank}')
   return result

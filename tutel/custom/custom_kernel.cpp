@@ -193,8 +193,12 @@ static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id
 
     int use_nvrtc = flags & 1;
     std::string image;
-    if (!use_nvrtc || (image = nvrtc_compile(source, arch)) == "")
-        image = nvcc_compile(source, arch, code_id, dev);
+    if (!use_nvrtc || (image = nvrtc_compile(source, arch)) == "") {
+        int dev_ord = dev;
+        if (getenv("TUTEL_CUDA_SANDBOX") != nullptr)
+          dev_ord = std::atoi(getenv("CUDA_VISIBLE_DEVICES"));
+        image = nvcc_compile(source, arch, code_id, dev_ord);
+    }
 
     long launch_bound;
     { char tag[] = " __launch_bounds__(";  pos = strstr(source, tag); launch_bound = pos ? std::atol(pos + sizeof(tag) - 1) : 1024L; }

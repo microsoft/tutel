@@ -16,11 +16,7 @@ import torch.distributed as dist
 from torch import nn
 import argparse
 
-import logging
-
 from tutel import moe as tutel_moe
-
-logging.basicConfig(level=logging.INFO)
 
 parser = argparse.ArgumentParser()
 
@@ -43,7 +39,6 @@ args.local_rank = parallel_env.local_device.index
 
 if not parallel_env.is_distributed:
   raise RuntimeError("\nThe current session is not launched in distributed mode. Please run the program with: python3 -m torch.distributed.launch ..")
-print(f'Device-{parallel_env.global_rank}: data_rank = {parallel_env.data_rank}, model_rank = {parallel_env.model_rank}')
 
 batch_size = args.batch_size
 num_tokens = args.num_tokens
