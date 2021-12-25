@@ -16,11 +16,7 @@ import torch.distributed as dist
 from torch import nn
 import argparse
 
-import logging
-
 from tutel import moe as tutel_moe
-
-logging.basicConfig(level=logging.INFO)
 
 parser = argparse.ArgumentParser()
 
