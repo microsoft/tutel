@@ -43,6 +43,8 @@ device = parallel_env.local_device
 
 if args.dtype == 'float32':
     torch.set_default_dtype(torch.float32)
+elif args.dtype == 'float64':
+    torch.set_default_dtype(torch.float64)
 elif args.dtype == 'float16':
     torch.set_default_dtype(torch.float16)
 elif args.dtype == 'bfloat16':

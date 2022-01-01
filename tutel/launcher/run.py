@@ -11,7 +11,16 @@ def main():
     master_addr = os.environ['MASTER_ADDR'] if host_size > 1 else 'localhost'
     master_port = int(os.environ.get('MASTER_PORT', 23232))
 
-    cmd_args = [sys.executable, '-m', 'torch.distributed.launch', '--use_env',
+    if 'OMP_NUM_THREADS' not in os.environ:
+        os.environ['OMP_NUM_THREADS'] = '1'
+
+    try:
+        from torch.distributed import run
+        launch_mode = ['torch.distributed.run']
+    except:
+        launch_mode = ['torch.distributed.launch', '--use_env']
+
+    cmd_args = [sys.executable, '-m'] + launch_mode + [
         '--nproc_per_node=%d' % local_size,
         '--nnodes=%d' % host_size,
         '--node_rank=%d' % host_rank,
