@@ -36,8 +36,7 @@ def init_data_model_parallel(group_count=1, backend='nccl'):
       else:
           dist.init_process_group(backend=backend)
           dist_local_rank = int(os.environ.get('LOCAL_RANK', 0))
-          if TUTEL_CUDA_SANDBOX:
-              dist_local_rank = 0
+          dist_local_rank = min(dist_local_rank, torch.cuda.device_count() - 1)
       glob_world_size, glob_world_rank = dist.get_world_size(), dist.get_rank()
       is_distributed = True
 
