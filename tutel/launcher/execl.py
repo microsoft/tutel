@@ -14,8 +14,10 @@ def main():
     local_rank = int(os.environ['LOCAL_RANK'])
     local_size = int(os.environ['LOCAL_SIZE'])
 
-    os.environ['TUTEL_CUDA_SANDBOX'] = '1'
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(local_rank)
+    if int(os.environ.get('TUTEL_CUDA_SANDBOX', 0)) == 2:
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(local_rank)
+    else:
+        os.environ['TUTEL_CUDA_SANDBOX'] = '1'
 
     cmd_args = []
     try:

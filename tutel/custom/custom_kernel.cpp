@@ -195,8 +195,8 @@ static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id
     std::string image;
     if (!use_nvrtc || (image = nvrtc_compile(source, arch)) == "") {
         int dev_ord = dev;
-        if (getenv("TUTEL_CUDA_SANDBOX") != nullptr)
-          dev_ord = std::atoi(getenv("CUDA_VISIBLE_DEVICES"));
+        const char *local_rank = getenv("LOCAL_RANK");
+        dev_ord = local_rank ? std::atoi(local_rank) : dev_ord;
         image = nvcc_compile(source, arch, code_id, dev_ord);
     }
 
