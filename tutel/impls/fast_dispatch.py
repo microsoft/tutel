@@ -79,7 +79,7 @@ class TutelMoeFastDispatcher:
         self.locations_ = [x.to(torch.int32) for x in locations_]
         self.gates_ = [x.to(self.dtype) for x in gates_]
         sample_size = self.indices_[0].size(0)
-        capacity = capacity or self.capacity
+        capacity = int(capacity) or self.capacity
 
         if sample_size != self.expected_sample_size or capacity != self.capacity:
             self.expected_sample_size, self.capacity = sample_size, capacity
