@@ -24,7 +24,7 @@ def get_cumsum_kernel(samples, global_experts):
   if (samples, global_experts) in cumsum_kernels:
     return cumsum_kernels[(samples, global_experts)]
 
-  base_kernel = JitCompiler.generate_kernel({'batch_num': global_experts, 'num_samples': samples}, '''
+  base_kernel = JitCompiler.generate_kernel({'batch_num': global_experts, 'num_samples': samples}, 3, '''
     #define thread_num  1024
     #define batch_num   (@batch_num@)
 

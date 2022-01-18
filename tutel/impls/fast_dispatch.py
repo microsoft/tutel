@@ -26,7 +26,7 @@ class GatingEncoder(torch.autograd.Function):
         last_result = None
         for i in range(len(ctx.config.indices_)):
           grad_data = torch.empty(ctx.reshaped_input.shape, dtype=dispatched_input.dtype, device=dispatched_input.device)
-          ctx.config.func_bwd_data(ctx.config.ones_helper, dispatched_input, ctx.config.indices_[i], ctx.config.locations_[i], grad_data)
+          ctx.config.func_bwd_data(ctx.config.ones_helper, ctx.config.indices_[i], ctx.config.locations_[i], grad_data, dispatched_input)
           last_result = grad_data if last_result is None else last_result + grad_data
         return (None, last_result)
 
@@ -41,7 +41,7 @@ class GatingDecoder(torch.autograd.Function):
         last_result = None
         for i in range(len(config.indices_)):
           single_output = torch.empty([config.expected_sample_size, config.model_dim], dtype=expert_output.dtype, device=expert_output.device)
-          config.func_bwd_data(ctx.gates_h2[i], expert_output, config.indices_[i], config.locations_[i], single_output)
+          config.func_bwd_data(ctx.gates_h2[i], config.indices_[i], config.locations_[i], single_output, expert_output)
           last_result = single_output if last_result is None else last_result + single_output
         return last_result
 
@@ -55,7 +55,7 @@ class GatingDecoder(torch.autograd.Function):
         grad_gates = []
         for i in range(len(ctx.config.indices_)):
           grad_gates1_s = torch.empty([ctx.config.expected_sample_size,], dtype=combined_output.dtype, device=combined_output.device)
-          ctx.config.func_bwd_gate(ctx.expert_output, ctx.config.indices_[i], ctx.config.locations_[i], combined_output, grad_gates1_s)
+          ctx.config.func_bwd_gate(grad_gates1_s, ctx.config.indices_[i], ctx.config.locations_[i], combined_output, ctx.expert_output)
           grad_gates.append(grad_gates1_s)
         return (None, grad_expert_output, *grad_gates)
 
