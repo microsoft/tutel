@@ -24,7 +24,7 @@ def get_cumsum_kernel(samples, global_experts):
   if (samples, global_experts) in cumsum_kernels:
     return cumsum_kernels[(samples, global_experts)]
 
-  base_kernel = JitCompiler.generate_kernel({'batch_num': global_experts, 'num_samples': samples}, 3, '''
+  base_kernel = JitCompiler.generate_kernel({'batch_num': global_experts, 'num_samples': samples}, '''
     #define thread_num  1024
     #define batch_num   (@batch_num@)
 
@@ -68,9 +68,12 @@ def get_cumsum_kernel(samples, global_experts):
   ''')
 
   def optimized_cumsum(mask1):
-    locations1 = torch.empty(mask1.shape, dtype=torch.int32, device=mask1.device).contiguous()
-    base_kernel(mask1.to(torch.int32).contiguous(), locations1)
-    return locations1
+    if mask1.is_cuda:
+      locations1 = torch.empty(mask1.shape, dtype=torch.int32, device=mask1.device).contiguous()
+      base_kernel(mask1.to(torch.int32).contiguous(), locations1)
+      return locations1
+    else:
+      return torch_cumsum(mask1) 
 
   cumsum_kernels[(samples, global_experts)] = optimized_cumsum
   return optimized_cumsum

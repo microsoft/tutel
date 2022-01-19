@@ -18,7 +18,7 @@ except:
 
 class JitCompiler:
     @staticmethod
-    def create_raw(source, kernel_type, capacity):
+    def create_raw(source):
         if not hasattr(JitCompiler, '__CTX__'):
             torch.cuda.init()
             JitCompiler.__CTX__ = 0
@@ -42,10 +42,7 @@ class JitCompiler:
         return func
 
     @staticmethod
-    def generate_kernel(keyword_dict, kernel_type, template):
-      capacity = -1
+    def generate_kernel(keyword_dict, template):
       for key in keyword_dict:
-        if key == 'capacity':
-          capacity = keyword_dict[key]
         template = template.replace('@%s@' % key, str(keyword_dict[key]))
-      return JitCompiler.create_raw(template, kernel_type, capacity)
+      return JitCompiler.create_raw(template)

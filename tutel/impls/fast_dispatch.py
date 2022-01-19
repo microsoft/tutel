@@ -84,9 +84,9 @@ class TutelMoeFastDispatcher:
         if sample_size != self.expected_sample_size or capacity != self.capacity:
             self.expected_sample_size, self.capacity = sample_size, capacity
             if tuple((sample_size, capacity)) not in self.kernel_pool:
-                self.func_fwd = jit_kernel.create_forward(sample_size, self.num_global_experts, self.capacity, self.aligned_dim, self.dtype)
-                self.func_bwd_data = jit_kernel.create_backward_data(sample_size, self.num_global_experts, self.capacity, self.aligned_dim, self.dtype)
-                self.func_bwd_gate = jit_kernel.create_backward_gate(sample_size, self.num_global_experts, self.capacity, self.aligned_dim, self.dtype)
+                self.func_fwd = jit_kernel.create_forward(sample_size, self.num_global_experts, self.capacity, self.aligned_dim, self.dtype, indices_[0].is_cuda)
+                self.func_bwd_data = jit_kernel.create_backward_data(sample_size, self.num_global_experts, self.capacity, self.aligned_dim, self.dtype, indices_[0].is_cuda)
+                self.func_bwd_gate = jit_kernel.create_backward_gate(sample_size, self.num_global_experts, self.capacity, self.aligned_dim, self.dtype, indices_[0].is_cuda)
                 self.ones_helper = torch.ones([sample_size, 2], dtype=self.dtype, device=self.indices_[0].device)
                 self.kernel_pool[tuple((sample_size, capacity))] = self.func_fwd, self.func_bwd_data, self.func_bwd_gate, self.ones_helper
             else:
