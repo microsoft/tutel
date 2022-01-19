@@ -16,7 +16,7 @@ def get_kernel_dtype(param_dtype):
 
 def create_forward(samples, global_experts, capacity, aligned_dim, param_dtype, is_cuda = True):
   if not is_cuda:
-    JitCompiler.generate_cpu_kernel(capacity = capacity, kernel_type = 0)
+    return JitCompiler.generate_cpu_kernel(capacity = capacity, kernel_type = 0)
   return JitCompiler.generate_kernel({'capacity': capacity, 'samples': samples, 'hidden': aligned_dim, 'dtype': get_kernel_dtype(param_dtype), 'IS_FLOAT': 1 if param_dtype == torch.float32 else 0}, '''
     #define capacity (@capacity@)
     #define samples (@samples@)
@@ -39,7 +39,7 @@ def create_forward(samples, global_experts, capacity, aligned_dim, param_dtype, 
 
 def create_backward_data(samples, global_experts, capacity, aligned_dim, param_dtype, is_cuda = True):
   if not is_cuda:
-    JitCompiler.generate_cpu_kernel(capacity = capacity, kernel_type = 1)
+    return JitCompiler.generate_cpu_kernel(capacity = capacity, kernel_type = 1)
   return JitCompiler.generate_kernel({'capacity': capacity, 'samples': samples, 'hidden': aligned_dim, 'dtype': get_kernel_dtype(param_dtype), 'IS_FLOAT': 1 if param_dtype == torch.float32 else 0}, '''
     #define capacity (@capacity@)
     #define samples (@samples@)
@@ -70,7 +70,7 @@ def create_backward_data(samples, global_experts, capacity, aligned_dim, param_d
 
 def create_backward_gate(samples, global_experts, capacity, aligned_dim, param_dtype, is_cuda = True):
   if not is_cuda:
-    JitCompiler.generate_cpu_kernel(capacity = capacity, kernel_type = 2)
+    return JitCompiler.generate_cpu_kernel(capacity = capacity, kernel_type = 2)
   return JitCompiler.generate_kernel({'capacity': capacity, 'samples': samples, 'hidden': aligned_dim, 'dtype': get_kernel_dtype(param_dtype), 'IS_FLOAT': 1 if param_dtype == torch.float32 else 0}, '''
     #define capacity (@capacity@)
     #define samples (@samples@)
