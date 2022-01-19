@@ -50,7 +50,7 @@ class TutelTestCase(unittest.TestCase):
         self.GPUtype = GPUtil.getGPUs()[0].name
         with open('tests/test_baseline.json') as f:
             self.data = json.load(f)
-        for i in range(8):
+        for i in range(9):
             for j in range(len(self.data[i]['losses'])):
                 if '32' in self.data[i]['dtype']:
                     self.data[i]['losses'][j] = round(float(self.data[i]['losses'][j]), 3)
@@ -116,7 +116,7 @@ class TutelTestCase(unittest.TestCase):
 
     def test_top2_fp64_2_experts(self):
         """Test helloworld with top2 gate, float64 dtype and 2 expert(s)."""
-        self.assertEqual(self.tutelCaller.run(nproc_per_node=1, helloworld_file='helloworld', top=2, dtype='float64', num_local_experts=2, show_step_time=False, batch_size=1, is_round=False), self.data[8]['losses'])
+        self.assertEqual(self.tutelCaller.run(nproc_per_node=1, helloworld_file='helloworld', top=2, dtype='float64', num_local_experts=2, show_step_time=False, batch_size=1), self.data[8]['losses'])
 
     def test_compare_megatron_with_tutel(self):
         """Test helloworld_megatron and helloworld which should have same result"""
