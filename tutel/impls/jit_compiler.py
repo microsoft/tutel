@@ -46,3 +46,9 @@ class JitCompiler:
       for key in keyword_dict:
         template = template.replace('@%s@' % key, str(keyword_dict[key]))
       return JitCompiler.create_raw(template)
+
+    @staticmethod
+    def generate_cpu_kernel(capacity, kernel_type):
+      def func(*inputs):
+        tutel_custom_kernel.invoke_cpu(inputs, kernel_type, capacity)
+      return func
