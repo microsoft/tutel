@@ -18,7 +18,7 @@ import torch.nn.functional as F
 
 from ..impls.fast_dispatch import fast_dispatcher
 from ..jit_kernels.gating import fast_cumsum_sub_one
-from ..impls.communicate import PreAllreduceSum, PostAllreduceSum, get_world_size, get_world_rank, AllToAllStatus, AllToAllScatterAsync, AllToAllGatherAsync, CurrentStreamRelease, CurrentStreamAcquire
+from ..impls.communicate import PreAllreduceSum, PostAllreduceSum, get_world_size, get_world_rank, AllToAllStatus, AllToAll, AllToAllScatterAsync, AllToAllGatherAsync, CurrentStreamRelease, CurrentStreamAcquire
 
 
 def one_hot_with_dtype(data, num_classes, dtype):
@@ -46,6 +46,7 @@ class TopKGate(torch.nn.Module):
         self,
         model_dim,
         num_global_experts,
+        a2a_ffn_overlap_degree,
         capacity_factor=1.0,
         top_k=2,
         batch_prioritized_routing=False,
@@ -72,6 +73,8 @@ class TopKGate(torch.nn.Module):
 
         input_dropout_p = kwargs.get('input_dropout_p', 0)
         self.input_dropout = torch.nn.Dropout(p=input_dropout_p) if input_dropout_p else None
+
+        self.a2a_ffn_overlap_degree = a2a_ffn_overlap_degree
 
     def compute_sorted_location(self, x, importance_scores):
         sorted_x = x[importance_scores.argsort(dim=0)]
@@ -136,19 +139,26 @@ class TopKGate(torch.nn.Module):
         dispatched_input = dispatched_input.repeat(sharded_count, 1)
         dispatched_input = dispatched_input.reshape(world_size, -1, capacity, M)
 
-        num_split = 2
-        split_dim = 2
-        AllToAllStatus.init(group, num_split, split_dim, dispatched_input)
+        if self.a2a_ffn_overlap_degree == 1:
+            dispatched_input = AllToAll.apply(group, dispatched_input)
 
-        # Implicit x.contiguous() in CurrentStreamRelease.forward() and CurrentStreamAcquire.backward()
-        dispatched_input_ready = CurrentStreamRelease.apply(dispatched_input, 0)
-        dispatched_input_scattered_after_a2a = AllToAllScatterAsync.apply(dispatched_input_ready)
+            expert_output = expert_fn(dispatched_input)
+            expert_output = expert_output.to(input.dtype)
 
-        expert_output_scattered = [
-            CurrentStreamRelease.apply(expert_fn(CurrentStreamAcquire.apply(x, i)).to(input.dtype), i)
-            for i, x in enumerate(dispatched_input_scattered_after_a2a)]
-        expert_output_gathered_after_a2a = AllToAllGatherAsync.apply(*expert_output_scattered)
-        expert_output = CurrentStreamAcquire.apply(expert_output_gathered_after_a2a, 0)
+            expert_output = AllToAll.apply(group, expert_output)
+        else:
+            split_dim = 2
+            AllToAllStatus.init(group, self.a2a_ffn_overlap_degree, split_dim, dispatched_input)
+
+            # Implicit x.contiguous() in CurrentStreamRelease.forward() and CurrentStreamAcquire.backward()
+            dispatched_input_ready = CurrentStreamRelease.apply(dispatched_input, 0)
+            dispatched_input_scattered_after_a2a = AllToAllScatterAsync.apply(dispatched_input_ready)
+
+            expert_output_scattered = [
+                CurrentStreamRelease.apply(expert_fn(CurrentStreamAcquire.apply(x, i)).to(input.dtype), i)
+                for i, x in enumerate(dispatched_input_scattered_after_a2a)]
+            expert_output_gathered_after_a2a = AllToAllGatherAsync.apply(*expert_output_scattered)
+            expert_output = CurrentStreamAcquire.apply(expert_output_gathered_after_a2a, 0)
 
         expert_output = expert_output.reshape(-1, GE, capacity, M)
         expert_output = torch.sum(expert_output, dim=0)
@@ -187,7 +197,7 @@ class MOELayer(torch.nn.Module):
     """Tutel optimized MOELayer
     """
 
-    def __init__(self, gate_type, model_dim: int, experts = None, scan_expert_func = None, result_func = None, group: Optional[Any] = None, seeds = None, **kwargs):
+    def __init__(self, gate_type, model_dim: int, experts = None, scan_expert_func = None, result_func = None, group: Optional[Any] = None, seeds = None, a2a_ffn_overlap_degree = 2, **kwargs):
         super().__init__()
         assert model_dim % 2 == 0, "Model_dim (%s) must be even value, while this Model_dim mod 2 > 0." % model_dim
         group = group or dist.group.WORLD
@@ -357,7 +367,7 @@ class MOELayer(torch.nn.Module):
                     logging.warning(f'`fp32_gate` option in tutel.moe_layer has been deprecated, please move this option to gate_type = {{.., "fp32_gate": {kwargs["fp32_gate"]}}} instead.')
                     single_gate_type["fp32_gate"] = kwargs["fp32_gate"]
 
-                self.gates += [TopKGate(model_dim=model_dim, top_k=single_gate_type['k'], num_global_experts=self.num_global_experts, **single_gate_type)]
+                self.gates += [TopKGate(model_dim=model_dim, top_k=single_gate_type['k'], num_global_experts=self.num_global_experts, a2a_ffn_overlap_degree=a2a_ffn_overlap_degree, **single_gate_type)]
             elif single_gate_type['type'] == 'megatron':
                 self.gates += [MegatronLMGate(**single_gate_type)]
                 assert isinstance(experts, dict), "Gate type `megatron` requires dict-type expert description."

@@ -66,6 +66,22 @@ class AllToAllStatus:
 
         AllToAllStatus.initialized = True
 
+class AllToAll(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor):
+        ctx.group = group
+        world_size = get_world_size(group)
+        if world_size <= 1:
+            return input
+        input = input.contiguous()
+        output = torch.empty_like(input)
+        dist.all_to_all_single(output, input, group=group)
+        return output
+
+    @staticmethod
+    def backward(ctx: Any, grad_output: Tensor):
+        return (None, AllToAll.apply(ctx.group, grad_output))
+
 class CurrentStreamRelease(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, input: Tensor, idx: int) -> Tensor:
