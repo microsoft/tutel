@@ -26,44 +26,113 @@ def get_world_rank(group):
         return 0
 
 
-class AllToAll(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor):
-        if not hasattr(AllToAll, '__prepared__'):
-            AllToAll.__prepared__ = True
-            if not hasattr(dist, 'all_to_all_single') and (AllToAll.a2a_type & 1) == 1:
-                AllToAll.a2a_type ^= 3
-            if (AllToAll.a2a_type & 2) == 2 and get_world_size(group) > 1:
-                host_unique_id = torch.zeros([256], dtype=torch.int32).cpu()
-                if get_world_rank(group) == 0:
-                    tutel_custom_kernel.external_all2all(host_unique_id, 0)
-                host_unique_id = host_unique_id.to(input.device)
-                dist.broadcast(host_unique_id, 0, group, async_op=True).wait()
-                tutel_custom_kernel.external_all2all(host_unique_id.cpu(), 1)
+class AllToAllStatus:
+    initialized = False
+    gather_tensor = None
+    scatter_tensors = []
+    world_size = 0
 
-        ctx.group = group
-        ctx.world_size = get_world_size(group)
-        if ctx.world_size <= 1 or AllToAll.a2a_type == 0:
+    @staticmethod
+    def init(group: dist.ProcessGroup, num_split: int, split_dim: int, gather_tensor_ref: Tensor) -> None:
+        AllToAllStatus.world_size = get_world_size(group)
+        if AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
+            return
+
+        # Make sure addresses of tensors allocated are not in use
+        torch.cuda.synchronize()
+
+        # Initialize NCCL
+        world_rank = get_world_rank(group)
+        nccl_unique_id_size = tutel_custom_kernel.get_nccl_unique_id_size()
+        nccl_unique_id = torch.zeros([nccl_unique_id_size], dtype=torch.int8).cpu()
+        if world_rank == 0:
+            tutel_custom_kernel.get_nccl_unique_id(nccl_unique_id)
+        nccl_unique_id = nccl_unique_id.to(gather_tensor_ref.device)
+        dist.broadcast(nccl_unique_id, 0, group)
+        tutel_custom_kernel.init_nccl(
+            nccl_unique_id.cpu(),
+            AllToAllStatus.world_size,
+            world_rank,
+            num_split,
+            gather_tensor_ref.shape[:split_dim].numel())
+
+        # Initialize dedicate buffers for scatter/gather
+        AllToAllStatus.gather_tensor = torch.empty_like(gather_tensor_ref).contiguous()
+        scatter_tensors_ref = gather_tensor_ref.split(
+            gather_tensor_ref.shape[split_dim] // num_split,
+            dim=split_dim)
+        AllToAllStatus.scatter_tensors = [
+            torch.empty_like(x).contiguous() for x in scatter_tensors_ref]
+
+        AllToAllStatus.initialized = True
+
+class CurrentStreamRelease(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, input: Tensor, idx: int) -> Tensor:
+        if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
             return input
+        ctx.idx = idx
         input = input.contiguous()
-        if (AllToAll.a2a_type & 8) == 8:
-            torch.cuda.synchronize(input.device)
-            t_start = time.time()
-        if (AllToAll.a2a_type & 1) == 1:
-          output = torch.empty_like(input)
-          dist.all_to_all_single(output, input, group=group)
-        else:
-          output = tutel_custom_kernel.external_all2all(input, -1)
-        if (AllToAll.a2a_type & 8) == 8:
-            torch.cuda.synchronize(input.device)
-            t_stop = time.time()
-            if get_world_rank(group) == 0:
-                logging.info('AllToAll on message size (%d x %s) costs %g sec.' % (torch.numel(input), input.dtype, t_stop - t_start))
-        return output
+        return tutel_custom_kernel.current_stream_release(input, idx)
 
     @staticmethod
-    def backward(ctx: Any, grad_output: Tensor):
-        return (None, AllToAll.apply(ctx.group, grad_output))
+    def backward(ctx: Any, grad_output: Tensor) -> Tensor:
+        if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
+            return (grad_output, None)
+        return (tutel_custom_kernel.current_stream_acquire(grad_output, ctx.idx), None)
+
+class CurrentStreamAcquire(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, input: Tensor, idx: int) -> Tensor:
+        if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
+            return input
+        ctx.idx = idx
+        return tutel_custom_kernel.current_stream_acquire(input, idx)
+
+    @staticmethod
+    def backward(ctx: Any, grad_output: Tensor) -> Tensor:
+        if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
+            return (grad_output, None)
+        grad_output = grad_output.contiguous()
+        return (tutel_custom_kernel.current_stream_release(grad_output, ctx.idx), None)
+
+class AllToAllScatterAsync(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, input: Tensor) -> Tuple[Tensor]:
+        if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
+            return (input,)
+        return tuple(tutel_custom_kernel.nccl_all_to_all_scatter_async(
+            input,
+            AllToAllStatus.scatter_tensors,
+            False))
+
+    @staticmethod
+    def backward(ctx: Any, *grad_output) -> Tensor:
+        if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
+            return grad_output[0]
+        return tutel_custom_kernel.nccl_all_to_all_gather_async(
+            grad_output,
+            AllToAllStatus.gather_tensor,
+            True)
+
+class AllToAllGatherAsync(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, *input) -> Tensor:
+        if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
+            return input[0]
+        return tutel_custom_kernel.nccl_all_to_all_gather_async(
+            input,
+            AllToAllStatus.gather_tensor,
+            False)
+
+    @staticmethod
+    def backward(ctx: Any, grad_output: Tensor) -> Tuple[Tensor]:
+        if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
+            return (grad_output,)
+        return tuple(tutel_custom_kernel.nccl_all_to_all_scatter_async(
+            grad_output,
+            AllToAllStatus.scatter_tensors,
+            True))
 
 
 class PreAllreduceSum(torch.autograd.Function):
@@ -111,6 +180,3 @@ class PostAllreduceSum(torch.autograd.Function):
         dist.all_gather(tensor_list=tensor_list, tensor=doutput)
         return (None, dinput)
 
-
-# A2A_TYPE: 0 for skip AllToAll, 1 for standard Pytorch AllToAll, 9 for standard Pytorch AllToAll with Timing
-AllToAll.a2a_type = int(os.environ.get('A2A_TYPE', '1'))

@@ -18,7 +18,7 @@ import torch.nn.functional as F
 
 from ..impls.fast_dispatch import fast_dispatcher
 from ..jit_kernels.gating import fast_cumsum_sub_one
-from ..impls.communicate import AllToAll, PreAllreduceSum, PostAllreduceSum, get_world_size, get_world_rank
+from ..impls.communicate import PreAllreduceSum, PostAllreduceSum, get_world_size, get_world_rank, AllToAllStatus, AllToAllScatterAsync, AllToAllGatherAsync, CurrentStreamRelease, CurrentStreamAcquire
 
 
 def one_hot_with_dtype(data, num_classes, dtype):
@@ -134,13 +134,22 @@ class TopKGate(torch.nn.Module):
 
         dispatched_input = self._fdr.encode(input)
         dispatched_input = dispatched_input.repeat(sharded_count, 1)
-        dispatched_input = AllToAll.apply(group, dispatched_input)
         dispatched_input = dispatched_input.reshape(world_size, -1, capacity, M)
 
-        expert_output = expert_fn(dispatched_input)
-        expert_output = expert_output.to(input.dtype)
+        num_split = 2
+        split_dim = 2
+        AllToAllStatus.init(group, num_split, split_dim, dispatched_input)
 
-        expert_output = AllToAll.apply(group, expert_output)
+        # Implicit x.contiguous() in CurrentStreamRelease.forward() and CurrentStreamAcquire.backward()
+        dispatched_input_ready = CurrentStreamRelease.apply(dispatched_input, 0)
+        dispatched_input_scattered_after_a2a = AllToAllScatterAsync.apply(dispatched_input_ready)
+
+        expert_output_scattered = [
+            CurrentStreamRelease.apply(expert_fn(CurrentStreamAcquire.apply(x, i)).to(input.dtype), i)
+            for i, x in enumerate(dispatched_input_scattered_after_a2a)]
+        expert_output_gathered_after_a2a = AllToAllGatherAsync.apply(*expert_output_scattered)
+        expert_output = CurrentStreamAcquire.apply(expert_output_gathered_after_a2a, 0)
+
         expert_output = expert_output.reshape(-1, GE, capacity, M)
         expert_output = torch.sum(expert_output, dim=0)
 
