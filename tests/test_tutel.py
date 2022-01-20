@@ -16,23 +16,28 @@ class HelloworldCaller():
         top=2, dtype='float32',
         num_local_experts='2',
         hidden_size=2048,
-        show_step_time=True
+        show_step_time=True,
+        batch_size=16,
+        is_round=True
         ):
         """Run helloworld example"""
         if helloworld_file == 'helloworld':
-            command = 'python3 -m torch.distributed.launch --nproc_per_node=' + str(nproc_per_node) + ' tutel/examples/helloworld.py --top ' + str(top) + ' --dtype ' + dtype + ' --num_local_experts ' + str(num_local_experts) + ' --hidden_size ' + str(hidden_size)
+            command = 'python3 -m torch.distributed.launch --nproc_per_node=' + str(nproc_per_node) + ' tutel/examples/helloworld.py --top ' + str(top) + ' --dtype ' + dtype + ' --num_local_experts ' + str(num_local_experts) + ' --hidden_size ' + str(hidden_size) + ' --batch_size ' + str(batch_size)
         if helloworld_file == 'helloworld_megatron':
-            command = 'python3 -m torch.distributed.launch --nproc_per_node=' + str(nproc_per_node) + ' tutel/examples/helloworld_megatron.py --dtype ' + dtype + ' --num_local_experts ' + str(num_local_experts) + ' --hidden_size ' + str(hidden_size)
+            command = 'python3 -m torch.distributed.launch --nproc_per_node=' + str(nproc_per_node) + ' tutel/examples/helloworld_megatron.py --dtype ' + dtype + ' --num_local_experts ' + str(num_local_experts) + ' --hidden_size ' + str(hidden_size) + ' --batch_size ' + str(batch_size)
         p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         losses = []
         while p.poll() is None:
             line = p.stdout.readline().decode("utf8").split()
             if len(line) > 5:
                 if line[2] == 'loss':
-                    if dtype == 'float32':
-                        losses.append(round(float(line[4][:-1]), 3))
+                    if is_round:
+                        if dtype == 'float32':
+                            losses.append(round(float(line[4][:-1]), 3))
+                        else:
+                            losses.append(round(float(line[4][:-1]), 1))
                     else:
-                        losses.append(round(float(line[4][:-1]), 1))
+                        losses.append(line[4][:-1])
                 if show_step_time and line[0] == '[Summary]':
                     print('step time:', line[5])
         p.stdout.close()
@@ -45,7 +50,7 @@ class TutelTestCase(unittest.TestCase):
         self.GPUtype = GPUtil.getGPUs()[0].name
         with open('tests/test_baseline.json') as f:
             self.data = json.load(f)
-        for i in range(8):
+        for i in range(9):
             for j in range(len(self.data[i]['losses'])):
                 if '32' in self.data[i]['dtype']:
                     self.data[i]['losses'][j] = round(float(self.data[i]['losses'][j]), 3)
@@ -108,6 +113,10 @@ class TutelTestCase(unittest.TestCase):
             if self.data[5]['step_time'][i]['GPU'] in self.GPUtype:
                 print('\nexpected time:', self.data[5]['step_time'][i]['value'])
         self.assertEqual(self.tutelCaller.run(nproc_per_node=1, helloworld_file='helloworld', top=2, dtype='float16', num_local_experts=2)[0:2], self.data[5]['losses'][0:2])
+
+    def test_top2_fp64_2_experts(self):
+        """Test helloworld with top2 gate, float64 dtype and 2 expert(s)."""
+        self.assertEqual(self.tutelCaller.run(nproc_per_node=1, helloworld_file='helloworld', top=2, dtype='float64', num_local_experts=2, show_step_time=False, batch_size=1), self.data[8]['losses'])
 
     def test_compare_megatron_with_tutel(self):
         """Test helloworld_megatron and helloworld which should have same result"""
