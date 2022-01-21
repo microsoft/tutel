@@ -28,8 +28,9 @@ def get_world_rank(group):
 
 class AllToAllStatus:
     initialized = False
-    gather_tensor = None
-    scatter_tensors = []
+    gather_tensor_shape = None
+    scatter_tensor_shape = None
+    num_split = 0
     world_size = 0
 
     @staticmethod
@@ -49,20 +50,19 @@ class AllToAllStatus:
             tutel_custom_kernel.get_nccl_unique_id(nccl_unique_id)
         nccl_unique_id = nccl_unique_id.to(gather_tensor_ref.device)
         dist.broadcast(nccl_unique_id, 0, group)
+        AllToAllStatus.num_split = num_split
         tutel_custom_kernel.init_nccl(
             nccl_unique_id.cpu(),
             AllToAllStatus.world_size,
             world_rank,
-            num_split,
+            AllToAllStatus.num_split,
             gather_tensor_ref.shape[:split_dim].numel())
 
-        # Initialize dedicate buffers for scatter/gather
-        AllToAllStatus.gather_tensor = torch.empty_like(gather_tensor_ref).contiguous()
-        scatter_tensors_ref = gather_tensor_ref.split(
-            gather_tensor_ref.shape[split_dim] // num_split,
-            dim=split_dim)
-        AllToAllStatus.scatter_tensors = [
-            torch.empty_like(x).contiguous() for x in scatter_tensors_ref]
+        AllToAllStatus.gather_tensor_shape = list(gather_tensor_ref.shape)
+        AllToAllStatus.scatter_tensor_shape = [
+            x if i != split_dim else x // AllToAllStatus.num_split
+            for i, x in enumerate(AllToAllStatus.gather_tensor_shape)
+        ]
 
         AllToAllStatus.initialized = True
 
@@ -117,38 +117,40 @@ class AllToAllScatterAsync(torch.autograd.Function):
     def forward(ctx: Any, input: Tensor) -> Tuple[Tensor]:
         if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
             return (input,)
-        return tuple(tutel_custom_kernel.nccl_all_to_all_scatter_async(
-            input,
-            AllToAllStatus.scatter_tensors,
-            False))
+        output = [
+            torch.empty(AllToAllStatus.scatter_tensor_shape, device=input.device).contiguous()
+            for _ in range(AllToAllStatus.num_split)
+        ]
+        tutel_custom_kernel.nccl_all_to_all_scatter_async(input, output, False)
+        return tuple(output)
 
     @staticmethod
     def backward(ctx: Any, *grad_output) -> Tensor:
         if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
             return grad_output[0]
-        return tutel_custom_kernel.nccl_all_to_all_gather_async(
-            grad_output,
-            AllToAllStatus.gather_tensor,
-            True)
+        grad_input = torch.empty(AllToAllStatus.gather_tensor_shape, device=grad_output[0].device).contiguous()
+        tutel_custom_kernel.nccl_all_to_all_gather_async(grad_output, grad_input, True)
+        return grad_input
 
 class AllToAllGatherAsync(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, *input) -> Tensor:
         if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
             return input[0]
-        return tutel_custom_kernel.nccl_all_to_all_gather_async(
-            input,
-            AllToAllStatus.gather_tensor,
-            False)
+        output = torch.empty(AllToAllStatus.gather_tensor_shape, device=input[0].device).contiguous()
+        tutel_custom_kernel.nccl_all_to_all_gather_async(input, output, False)
+        return output
 
     @staticmethod
     def backward(ctx: Any, grad_output: Tensor) -> Tuple[Tensor]:
         if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
             return (grad_output,)
-        return tuple(tutel_custom_kernel.nccl_all_to_all_scatter_async(
-            grad_output,
-            AllToAllStatus.scatter_tensors,
-            True))
+        grad_input = [
+            torch.empty(AllToAllStatus.scatter_tensor_shape, device=grad_output.device).contiguous()
+            for _ in range(AllToAllStatus.num_split)
+        ]
+        tutel_custom_kernel.nccl_all_to_all_scatter_async(grad_output, grad_input, True)
+        return tuple(grad_input)
 
 
 class PreAllreduceSum(torch.autograd.Function):

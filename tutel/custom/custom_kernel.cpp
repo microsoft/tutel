@@ -286,7 +286,7 @@ static torch::Tensor& current_stream_acquire(torch::Tensor &tensor, int idx) {
   return tensor;
 }
 
-static std::vector<torch::Tensor> nccl_all_to_all_scatter_async(
+static void nccl_all_to_all_scatter_async(
     const torch::Tensor &input,
     std::vector<torch::Tensor> &output_list,
     bool is_backward) {
@@ -337,11 +337,9 @@ static std::vector<torch::Tensor> nccl_all_to_all_scatter_async(
     // Release calc_idx-th event
     g_cuda_events[calc_idx].record(get_nccl_stream());
   }
-
-  return output_list;
 }
 
-static torch::Tensor nccl_all_to_all_gather_async(
+static void nccl_all_to_all_gather_async(
     const std::vector<torch::Tensor> &input_list,
     torch::Tensor &output,
     bool is_backward) {
@@ -392,8 +390,6 @@ static torch::Tensor nccl_all_to_all_gather_async(
 
   // Release 0-th event for single output
   g_cuda_events[0].record(get_nccl_stream());
-
-  return output;
 }
 
 #endif

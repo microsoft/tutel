@@ -139,7 +139,11 @@ class TopKGate(torch.nn.Module):
         dispatched_input = dispatched_input.repeat(sharded_count, 1)
         dispatched_input = dispatched_input.reshape(world_size, -1, capacity, M)
 
-        if self.a2a_ffn_overlap_degree == 1:
+        split_dim = 2
+
+        print(dispatched_input.shape)
+        if self.a2a_ffn_overlap_degree == 1 or \
+           dispatched_input.shape[split_dim] % self.a2a_ffn_overlap_degree:
             dispatched_input = AllToAll.apply(group, dispatched_input)
 
             expert_output = expert_fn(dispatched_input)
@@ -147,7 +151,6 @@ class TopKGate(torch.nn.Module):
 
             expert_output = AllToAll.apply(group, expert_output)
         else:
-            split_dim = 2
             AllToAllStatus.init(group, self.a2a_ffn_overlap_degree, split_dim, dispatched_input)
 
             # Implicit x.contiguous() in CurrentStreamRelease.forward() and CurrentStreamAcquire.backward()
@@ -197,7 +200,7 @@ class MOELayer(torch.nn.Module):
     """Tutel optimized MOELayer
     """
 
-    def __init__(self, gate_type, model_dim: int, experts = None, scan_expert_func = None, result_func = None, group: Optional[Any] = None, seeds = None, a2a_ffn_overlap_degree = 2, **kwargs):
+    def __init__(self, gate_type, model_dim: int, experts = None, scan_expert_func = None, result_func = None, group: Optional[Any] = None, seeds = None, a2a_ffn_overlap_degree = 1, **kwargs):
         super().__init__()
         assert model_dim % 2 == 0, "Model_dim (%s) must be even value, while this Model_dim mod 2 > 0." % model_dim
         group = group or dist.group.WORLD
