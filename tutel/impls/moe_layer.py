@@ -139,10 +139,8 @@ class TopKGate(torch.nn.Module):
         dispatched_input = dispatched_input.repeat(sharded_count, 1)
         dispatched_input = dispatched_input.reshape(world_size, -1, capacity, M)
 
-        split_dim = 2
 
-        if self.a2a_ffn_overlap_degree == 1 or \
-           dispatched_input.shape[split_dim] % self.a2a_ffn_overlap_degree:
+        if self.a2a_ffn_overlap_degree == 1:
             dispatched_input = AllToAll.apply(group, dispatched_input)
 
             expert_output = expert_fn(dispatched_input)
@@ -150,6 +148,8 @@ class TopKGate(torch.nn.Module):
 
             expert_output = AllToAll.apply(group, expert_output)
         else:
+            split_dim = 2
+
             AllToAllStatus.init(group, self.a2a_ffn_overlap_degree, split_dim, dispatched_input)
 
             # Implicit x.contiguous() in CurrentStreamRelease.forward() and CurrentStreamAcquire.backward()
