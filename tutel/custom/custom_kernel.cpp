@@ -242,17 +242,17 @@ static void invoke_cpu(const std::vector<torch::Tensor> &ts, const int &kernel_t
   } else if (kernel_type == 1) { //backward_data
     for (int i = 0; i < samples; ++i) {
       if ((ts[2][i].item<int>() < capacity) && (ts[1][i].item<int>() >= 0)) {
-	for (int j = 0; j < hidden; ++j) {
-	  if (ts[0].sizes().size() == 1) {
-	    ts[3][i][j] = ts[0][i].item<double>() * ts[4][ts[1][i].item<int>() * capacity + ts[2][i].item<int>()][j];
-	  } else {
-	    ts[3][i][j] = ts[0][i][0].item<double>() * ts[4][ts[1][i].item<int>() * capacity + ts[2][i].item<int>()][j];
-	  }
-	}
+        for (int j = 0; j < hidden; ++j) {
+          if (ts[0].sizes().size() == 1) {
+            ts[3][i][j] = ts[0][i].item<double>() * ts[4][ts[1][i].item<int>() * capacity + ts[2][i].item<int>()][j];
+          } else {
+            ts[3][i][j] = ts[0][i][0].item<double>() * ts[4][ts[1][i].item<int>() * capacity + ts[2][i].item<int>()][j];
+          }
+        }
       } else {
         for (int j = 0; j < hidden; ++j) {
-	  ts[4][i][j] = 0;
-	}
+          ts[4][i][j] = 0;
+        }
       }
     }
   } else { //backward_gate
@@ -260,17 +260,17 @@ static void invoke_cpu(const std::vector<torch::Tensor> &ts, const int &kernel_t
       ts[0][block] = 0;
       double grad_gates1_s_rf = 0.0;
       for (int thread = 0; thread < 32; ++thread) {
-	if (ts[2][block].item<int>() >= capacity || ts[1][block].item<int>() < 0) {
+        if (ts[2][block].item<int>() >= capacity || ts[1][block].item<int>() < 0) {
           if (thread == 0)
             if (ts[0].sizes().size() == 1)
               ts[0][block] = 0;
-	    else
-	      ts[0][block][0] = 0;
-	  return;
-	}
-	int indice = ts[1][block].item<int>() * capacity + ts[2][block].item<int>();
-	for (int i = thread; i < hidden; i += 32)
-	  grad_gates1_s_rf += ts[4][indice][i].item<double>() * ts[3][block][i].item<double>();
+            else
+              ts[0][block][0] = 0;
+          return;
+        }
+        int indice = ts[1][block].item<int>() * capacity + ts[2][block].item<int>();
+        for (int i = thread; i < hidden; i += 32)
+          grad_gates1_s_rf += ts[4][indice][i].item<double>() * ts[3][block][i].item<double>();
       }
       ts[0][block] = grad_gates1_s_rf;
     }
@@ -333,8 +333,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "Generic Invoke with Source (CUDA)"
     );
     m.def("invoke_cpu",
-	      &invoke_cpu,
-	      "Generic Invoke (CPU)"
+        &invoke_cpu,
+        "Generic Invoke (CPU)"
     );
 #if defined(USE_NCCL)
     m.def("external_all2all",
