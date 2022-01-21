@@ -333,8 +333,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "Generic Invoke with Source (CUDA)"
     );
     m.def("invoke_cpu",
-	      &invoke_cpu,
-	      "Generic Invoke (CPU)"
+        &invoke_cpu,
+        "Generic Invoke (CPU)"
     );
 #if defined(USE_NCCL)
     m.def("external_all2all",
