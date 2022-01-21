@@ -141,7 +141,6 @@ class TopKGate(torch.nn.Module):
 
         split_dim = 2
 
-        print(dispatched_input.shape)
         if self.a2a_ffn_overlap_degree == 1 or \
            dispatched_input.shape[split_dim] % self.a2a_ffn_overlap_degree:
             dispatched_input = AllToAll.apply(group, dispatched_input)
