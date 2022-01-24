@@ -224,6 +224,58 @@ static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id
   return invoke(ts, code_id);
 }
 
+template<typename dtype> static void invoke_cpu(const std::vector<torch::Tensor> &ts, const int &kernel_type, const int &capacity) {
+  int samples = ts[1].sizes()[0];
+  int hidden = ts[3].sizes()[1];
+  if (kernel_type == 0) { //forward
+    for (int i = 0; i < samples; ++i) {
+      if ((ts[2][i].item<int>() < capacity) && (ts[1][i].item<int>() >= 0)) {
+        for (int j = 0; j < hidden; ++j) {
+          if (ts[0].sizes().size() == 1) {
+            ts[4][ts[1][i].item<int>() * capacity + ts[2][i].item<int>()][j] += ts[0][i].item<dtype>() * ts[3][i][j].item<dtype>();
+          } else {
+            ts[4][ts[1][i].item<int>() * capacity + ts[2][i].item<int>()][j] += ts[0][i][0].item<dtype>() * ts[3][i][j].item<dtype>();
+          }
+        }
+      }
+    }
+  } else if (kernel_type == 1) { //backward_data
+    for (int i = 0; i < samples; ++i) {
+      if ((ts[2][i].item<int>() < capacity) && (ts[1][i].item<int>() >= 0)) {
+        for (int j = 0; j < hidden; ++j) {
+          if (ts[0].sizes().size() == 1) {
+            ts[3][i][j] = ts[0][i].item<dtype>() * ts[4][ts[1][i].item<int>() * capacity + ts[2][i].item<int>()][j];
+          } else {
+            ts[3][i][j] = ts[0][i][0].item<dtype>() * ts[4][ts[1][i].item<int>() * capacity + ts[2][i].item<int>()][j];
+          }
+        }
+      } else {
+        for (int j = 0; j < hidden; ++j) {
+          ts[4][i][j] = 0;
+        }
+      }
+    }
+  } else { //backward_gate
+    for (int block = 0; block < samples; ++block) {
+      ts[0][block] = 0;
+      dtype grad_gates1_s_rf = 0.0;
+      for (int thread = 0; thread < 32; ++thread) {
+        if (ts[2][block].item<int>() >= capacity || ts[1][block].item<int>() < 0) {
+          if (thread == 0)
+            if (ts[0].sizes().size() == 1)
+              ts[0][block] = 0;
+            else
+              ts[0][block][0] = 0;
+          return;
+        }
+        int indice = ts[1][block].item<int>() * capacity + ts[2][block].item<int>();
+        for (int i = thread; i < hidden; i += 32)
+          grad_gates1_s_rf += ts[4][indice][i].item<dtype>() * ts[3][block][i].item<dtype>();
+      }
+      ts[0][block] = grad_gates1_s_rf;
+    }
+  }
+}
 
 #if defined(USE_NCCL)
 static torch::Tensor external_all2all(const torch::Tensor &tensor, int stage) {
@@ -279,6 +331,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("invoke_with_source",
         &invoke_with_source,
         "Generic Invoke with Source (CUDA)"
+    );
+    m.def("invoke_cpu_fp32",
+        &invoke_cpu<float>,
+        "Generic Invoke (CPU)"
+    );
+    m.def("invoke_cpu_fp64",
+        &invoke_cpu<double>,
+        "Generic Invoke (CPU)"
     );
 #if defined(USE_NCCL)
     m.def("external_all2all",
