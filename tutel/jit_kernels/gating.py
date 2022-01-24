@@ -10,18 +10,17 @@ from ..impls.jit_compiler import JitCompiler
 disable_fast_cumsum = int(os.environ.get('FAST_CUMSUM', '1')) == 0
 cumsum_kernels = dict()
 
-def get_cumsum_kernel(samples, global_experts, is_cuda):
-  def torch_cumsum(mask1):
-    locations1 = torch.cumsum(mask1, dim=0) - 1
-    return locations1
+def torch_cumsum(mask1):
+  locations1 = torch.cumsum(mask1, dim=0) - 1
+  return locations1
+
+def get_cumsum_kernel(samples, global_experts):
 
   if disable_fast_cumsum:
     logging.warning("Optimized cumsum is disabled, and may result in big performance regression.")
 
     return torch_cumsum
 
-  if not is_cuda:
-    return torch_cumsum
   global cumsum_kernels
   if (samples, global_experts) in cumsum_kernels:
     return cumsum_kernels[(samples, global_experts)]
@@ -80,4 +79,6 @@ def get_cumsum_kernel(samples, global_experts, is_cuda):
 def fast_cumsum_sub_one(data, dim=0):
   if data.dim() != 2 or dim != 0:
     raise Exception("Unimplemented fast_cumsum_sub_one() of data = %s and dim = %s" % (data.size(), dim))
-  return get_cumsum_kernel(data.size(0), data.size(1), data.is_cuda)(data)
+  if not data.is_cuda:
+    return torch_cumsum(data)
+  return get_cumsum_kernel(data.size(0), data.size(1))(data)
