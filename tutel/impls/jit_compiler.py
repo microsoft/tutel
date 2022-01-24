@@ -50,5 +50,11 @@ class JitCompiler:
     @staticmethod
     def generate_cpu_kernel(capacity, kernel_type):
       def func(*inputs):
-        tutel_custom_kernel.invoke_cpu(inputs, kernel_type, capacity)
+        if inputs[0].dtype is torch.float32:
+          tutel_custom_kernel.invoke_cpu_fp32(inputs, kernel_type, capacity)
+        elif inputs[0].dtype is torch.float64:
+          tutel_custom_kernel.invoke_cpu_fp64(inputs, kernel_type, capacity)
+        else:
+          raise Exception("CPU kernel only supports float32 and float64!")
+        
       return func
