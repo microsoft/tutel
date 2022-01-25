@@ -3,6 +3,7 @@
 
 import json
 import unittest
+import os
 import sys, subprocess
 
 import GPUtil
@@ -18,14 +19,19 @@ class HelloworldCaller():
         hidden_size=2048,
         show_step_time=True,
         batch_size=16,
-        is_round=True
+        is_round=True,
+        a2a_ffn_overlap_degree=1,
+        num_steps=100
         ):
+        # Disable NCCL SHM because it's capacity is limited in Azure pipeline
+        new_env = os.environ.copy()
+        new_env['NCCL_SHM_DISABLE'] = '1'
         """Run helloworld example"""
         if helloworld_file == 'helloworld':
-            command = 'python3 -m torch.distributed.launch --nproc_per_node=' + str(nproc_per_node) + ' tutel/examples/helloworld.py --top ' + str(top) + ' --dtype ' + dtype + ' --num_local_experts ' + str(num_local_experts) + ' --hidden_size ' + str(hidden_size) + ' --batch_size ' + str(batch_size)
+            command = 'python3 -m torch.distributed.launch --nproc_per_node=' + str(nproc_per_node) + ' tutel/examples/helloworld.py --top ' + str(top) + ' --dtype ' + dtype + ' --num_local_experts ' + str(num_local_experts) + ' --hidden_size ' + str(hidden_size) + ' --batch_size ' + str(batch_size) + ' --a2a_ffn_overlap_degree ' + str(a2a_ffn_overlap_degree) + ' --num_steps ' + str(num_steps)
         if helloworld_file == 'helloworld_megatron':
-            command = 'python3 -m torch.distributed.launch --nproc_per_node=' + str(nproc_per_node) + ' tutel/examples/helloworld_megatron.py --dtype ' + dtype + ' --num_local_experts ' + str(num_local_experts) + ' --hidden_size ' + str(hidden_size) + ' --batch_size ' + str(batch_size)
-        p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            command = 'python3 -m torch.distributed.launch --nproc_per_node=' + str(nproc_per_node) + ' tutel/examples/helloworld_megatron.py --dtype ' + dtype + ' --num_local_experts ' + str(num_local_experts) + ' --hidden_size ' + str(hidden_size) + ' --batch_size ' + str(batch_size) + ' --num_steps ' + str(num_steps)
+        p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=new_env)
         losses = []
         while p.poll() is None:
             line = p.stdout.readline().decode("utf8").split()
@@ -123,4 +129,21 @@ class TutelTestCase(unittest.TestCase):
         self.assertEqual(
             self.tutelCaller.run(nproc_per_node=2, helloworld_file='helloworld', top=2, dtype='float32', num_local_experts=-2, show_step_time=False),
             self.tutelCaller.run(nproc_per_node=2, helloworld_file='helloworld_megatron', dtype='float32', num_local_experts=1, hidden_size=1024, show_step_time=False)
+            )
+
+    def test_a2a_ffn_overlap(self):
+        """Test whether AllToAll-FFN overlapping works properly. Note that too small batch size might cause precision issue."""
+        self.assertEqual(
+            self.tutelCaller.run(nproc_per_node=2, helloworld_file='helloworld', top=2, dtype='float64', num_local_experts=-2, show_step_time=False, batch_size=8, a2a_ffn_overlap_degree=1, num_steps=10),
+            self.tutelCaller.run(nproc_per_node=2, helloworld_file='helloworld', top=2, dtype='float64', num_local_experts=-2, show_step_time=False, batch_size=8, a2a_ffn_overlap_degree=2, num_steps=10)
+            )
+
+        self.assertEqual(
+            self.tutelCaller.run(nproc_per_node=2, helloworld_file='helloworld', top=2, dtype='float64', num_local_experts=1, show_step_time=False, batch_size=8, a2a_ffn_overlap_degree=1, num_steps=10),
+            self.tutelCaller.run(nproc_per_node=2, helloworld_file='helloworld', top=2, dtype='float64', num_local_experts=1, show_step_time=False, batch_size=8, a2a_ffn_overlap_degree=2, num_steps=10)
+            )
+
+        self.assertEqual(
+            self.tutelCaller.run(nproc_per_node=2, helloworld_file='helloworld', top=2, dtype='float64', num_local_experts=2, show_step_time=False, batch_size=8, a2a_ffn_overlap_degree=1, num_steps=10),
+            self.tutelCaller.run(nproc_per_node=2, helloworld_file='helloworld', top=2, dtype='float64', num_local_experts=2, show_step_time=False, batch_size=8, a2a_ffn_overlap_degree=2, num_steps=10)
             )

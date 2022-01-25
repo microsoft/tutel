@@ -53,8 +53,11 @@ class Tester(Command):
 def install(use_nccl):
     ext_libs = ['dl', 'cuda', 'nvrtc'] if not IS_HIP_EXTENSION else []
     ext_args = {'cxx': ['-Wno-sign-compare', '-Wno-unused-but-set-variable']}
-    if use_nccl and not IS_HIP_EXTENSION:
-        ext_libs += ['nccl']
+    if use_nccl:
+        if IS_HIP_EXTENSION:
+            ext_libs += ['rccl']
+        else:
+            ext_libs += ['nccl']
         ext_args['cxx'] += ['-DUSE_NCCL']
 
     setup(
