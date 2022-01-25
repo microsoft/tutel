@@ -46,7 +46,7 @@ class TopKGate(torch.nn.Module):
         self,
         model_dim,
         num_global_experts,
-        a2a_ffn_overlap_degree,
+        a2a_ffn_overlap_degree=1,
         capacity_factor=1.0,
         top_k=2,
         batch_prioritized_routing=False,
@@ -140,7 +140,10 @@ class TopKGate(torch.nn.Module):
         dispatched_input = dispatched_input.reshape(world_size, -1, capacity, M)
 
 
-        if self.a2a_ffn_overlap_degree == 1:
+        if self.a2a_ffn_overlap_degree == -1:
+            expert_output = expert_fn(dispatched_input)
+            expert_output = expert_output.to(input.dtype)
+        elif self.a2a_ffn_overlap_degree == 1:
             dispatched_input = AllToAll.apply(group, dispatched_input)
 
             expert_output = expert_fn(dispatched_input)
