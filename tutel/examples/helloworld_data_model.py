@@ -31,6 +31,8 @@ parser.add_argument('--fp32_gate', default=False, action='store_true')
 parser.add_argument('--top', type=int, default=2)
 parser.add_argument('--l_aux_wt', type=float, default=0.0)
 parser.add_argument('--group_count', type=int, default=1)
+parser.add_argument('--a2a_ffn_overlap_degree', type=int, default=1)
+parser.add_argument('--num_steps', type=int, default=100)
 args = parser.parse_args()
 
 parallel_env = system_init.init_data_model_parallel()
@@ -46,6 +48,7 @@ model_dim = args.model_dim
 hidden_size = args.hidden_size
 num_local_experts = args.num_local_experts
 top_value = args.top
+a2a_ffn_overlap_degree = args.a2a_ffn_overlap_degree
 device = torch.device('cuda', args.local_rank)
 
 if args.dtype == 'float32':
@@ -71,6 +74,7 @@ class ExampleModel(torch.nn.Module):
             scan_expert_func = lambda name, param: setattr(param, 'skip_allreduce', True),
             seeds = (1, parallel_env.model_rank + 1, 1),
             group = parallel_env.model_group,
+            a2a_ffn_overlap_degree = a2a_ffn_overlap_degree,
         ).to(device)
 
         # Summary of different parameter types: gate, local_experts
@@ -92,10 +96,10 @@ torch.manual_seed(parallel_env.global_rank)
 x = torch.tensor(torch.randn([batch_size, num_tokens, model_dim], dtype=torch.float32, device='cpu').detach().numpy(), dtype=torch.get_default_dtype(), requires_grad=True, device=device)
 y = torch.LongTensor(batch_size).random_(1).to(device)
 
-tuples = (parallel_env.global_size, args.dtype, model_dim, hidden_size, batch_size * num_tokens, num_local_experts, top_value, device, parallel_env.group_count)
-dist_print('[Benchmark] world_size = %s, dtype = %s, model_dim = %s, hidden_size = %s, samples = %s, num_local_experts = %s, topK = %s, device = `%s`, group_count = %s' % tuples)
+tuples = (parallel_env.global_size, args.dtype, model_dim, hidden_size, batch_size * num_tokens, num_local_experts, top_value, a2a_ffn_overlap_degree, device, parallel_env.group_count)
+dist_print('[Benchmark] world_size = %s, dtype = %s, model_dim = %s, hidden_size = %s, samples = %s, num_local_experts = %s, topK = %s, a2a_ffn_overlap_degree = %s, device = `%s`, group_count = %s' % tuples)
 
-average_time, num_steps = 0, 100
+average_time, num_steps = 0, args.num_steps
 
 params_for_all_reduce = [p for p in model.parameters() if not hasattr(p, 'skip_allreduce') and getattr(p, 'requires_grad', False) and p.grad is not None]
 params_for_replicas_all_reduce = [p for p in model.parameters() if not (not hasattr(p, 'skip_allreduce') and getattr(p, 'requires_grad', False) and p.grad is not None)]
