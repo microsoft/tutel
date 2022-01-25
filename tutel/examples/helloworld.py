@@ -31,6 +31,7 @@ parser.add_argument('--fp32_gate', default=False, action='store_true')
 parser.add_argument('--top', type=int, default=2)
 parser.add_argument('--l_aux_wt', type=float, default=0.0)
 parser.add_argument('--a2a_ffn_overlap_degree', type=int, default=1)
+parser.add_argument('--num_steps', type=int, default=100)
 args = parser.parse_args()
 
 parallel_env = system_init.init_data_model_parallel()
@@ -93,7 +94,7 @@ y = torch.LongTensor(batch_size).random_(1).to(device)
 tuples = (dist_world_size, args.dtype, model_dim, hidden_size, batch_size * num_tokens, num_local_experts, top_value, a2a_ffn_overlap_degree, device)
 dist_print('[Benchmark] world_size = %s, dtype = %s, model_dim = %s, hidden_size = %s, samples = %s, num_local_experts = %s, topK = %s, a2a_ffn_overlap_degree = %s, device = `%s`' % tuples)
 
-average_time, num_steps = 0, 100
+average_time, num_steps = 0, args.num_steps
 
 params_for_all_reduce = [p for p in model.parameters() if not hasattr(p, 'skip_allreduce') and getattr(p, 'requires_grad', False) and p.grad is not None]
 
