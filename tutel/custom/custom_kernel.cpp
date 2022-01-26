@@ -283,6 +283,11 @@ template<typename dtype> static void invoke_cpu(const std::vector<torch::Tensor>
 
 #if defined(USE_NCCL)
 
+cudaError_t memStrideCopy(
+    void* dst, const void* src, const size_t slice_size,
+    const size_t height, const size_t width,
+    cudaStream_t stream);
+
 static ncclComm_t g_nccl_comm;
 static std::vector<at::cuda::CUDAEvent> g_cuda_events;
 static int g_num_split = 0;
@@ -326,8 +331,11 @@ static void init_nccl(
   g_world_size = world_size;
   g_world_rank = world_rank;
 
-  char* local_size = std::getenv("LOCAL_SIZE");
-  local_size ? g_local_size = std::atoi(local_size) : CHECK_EQ(0, cudaGetDeviceCount(&g_local_size));
+  if (const char* local_size = std::getenv("LOCAL_SIZE")) {
+    g_local_size = std::atoi(local_size);
+  } else {
+    CHECK_EQ(0, cudaGetDeviceCount(&g_local_size));
+  }
   CHECK_EQ(0, ncclCommCuDevice(g_nccl_comm, &g_local_rank));
 }
 
@@ -452,18 +460,6 @@ static void nccl_all_to_all_gather_async(
   g_cuda_events[0].record(get_nccl_stream());
 }
 
-template <typename T>
-__global__ void memStrideCopyKernel(
-    T *__restrict__ out, const T *__restrict__ in,
-    const uint64_t size, const uint64_t height, const uint64_t width) {
-    const uint64_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-    for (uint64_t i = tid; i < size * height * width; i += gridDim.x * blockDim.x) {
-        const uint64_t index = i / size, offset = i % size;
-        const uint64_t j = (width * (index % height) + (index / height)) * size + offset;
-        out[j] = in[i];
-    }
-}
-
 static void all_to_all(torch::Tensor &output, torch::Tensor &input, const char *algo) {
   CHECK_CUDA(output);
   CHECK_CUDA(input);
@@ -482,28 +478,22 @@ static void all_to_all(torch::Tensor &output, torch::Tensor &input, const char *
 
   if (algo && !strcmp(algo, "2D")) {
     int node_rank = g_world_rank / ngpus, local_rank = g_local_rank;
-    int gridsize, blocksize;
-    CHECK_EQ(0, cudaOccupancyMaxPotentialBlockSize(&gridsize, &blocksize, memStrideCopyKernel<uint4>));
     // phase 0. per-gpu (ngpus) stride copy
-    slice_size < sizeof(uint4)
-      ? memStrideCopyKernel<char><<<gridsize, blocksize, 0, stream>>>((char*)recvbuff, (char*)sendbuff, slice_size, ngpus, nnodes)
-      : memStrideCopyKernel<uint4><<<gridsize, blocksize, 0, stream>>>((uint4*)recvbuff, (uint4*)sendbuff, slice_size/sizeof(uint4), ngpus, nnodes);
+    CHECK_EQ(0, memStrideCopy(recvbuff, sendbuff, slice_size, ngpus, nnodes, stream));
     // phase 1. intra-node alltoall
     CHECK_EQ(0, ncclGroupStart());
     for (int g = 0; g < ngpus; g++) {
-      CHECK_EQ(0, ncclSend(((char*)recvbuff) + g * nnodes * slice_size, nnodes * slice_size, ncclInt8, g + node_rank * ngpus, comm, stream));
-      CHECK_EQ(0, ncclRecv(((char*)sendbuff) + g * nnodes * slice_size, nnodes * slice_size, ncclInt8, g + node_rank * ngpus, comm, stream));
+      CHECK_EQ(0, ncclSend(((char*)recvbuff) + g * nnodes * slice_size, nnodes * slice_size, ncclInt8, g + node_rank * ngpus, g_nccl_comm, stream));
+      CHECK_EQ(0, ncclRecv(((char*)sendbuff) + g * nnodes * slice_size, nnodes * slice_size, ncclInt8, g + node_rank * ngpus, g_nccl_comm, stream));
     }
     CHECK_EQ(0, ncclGroupEnd());
     // phase 2. per-gpu (nnodes) stride copy
-    slice_size < sizeof(uint4)
-      ? memStrideCopyKernel<char><<<gridsize, blocksize, 0, stream>>>((char*)recvbuff, (char*)sendbuff, slice_size, nnodes, ngpus)
-      : memStrideCopyKernel<uint4><<<gridsize, blocksize, 0, stream>>>((uint4*)recvbuff, (uint4*)sendbuff, slice_size/sizeof(uint4), nnodes, ngpus);
+    CHECK_EQ(0, memStrideCopy(recvbuff, sendbuff, slice_size, nnodes, ngpus, stream));
     // phase 3. inter-node alltoall
     CHECK_EQ(0, ncclGroupStart());
     for (int n = 0; n < nnodes; n++) {
-      CHECK_EQ(0, ncclSend(((char*)recvbuff) + n * ngpus * slice_size, ngpus * slice_size, ncclInt8, n * ngpus + local_rank, comm, stream));
-      CHECK_EQ(0, ncclRecv(((char*)sendbuff) + n * ngpus * slice_size, ngpus * slice_size, ncclInt8, n * ngpus + local_rank, comm, stream));
+      CHECK_EQ(0, ncclSend(((char*)recvbuff) + n * ngpus * slice_size, ngpus * slice_size, ncclInt8, n * ngpus + local_rank, g_nccl_comm, stream));
+      CHECK_EQ(0, ncclRecv(((char*)sendbuff) + n * ngpus * slice_size, ngpus * slice_size, ncclInt8, n * ngpus + local_rank, g_nccl_comm, stream));
     }
     CHECK_EQ(0, ncclGroupEnd());
     CHECK_EQ(0, cudaMemcpyAsync(recvbuff, sendbuff, nranks * slice_size, cudaMemcpyDeviceToDevice, stream));
@@ -511,8 +501,8 @@ static void all_to_all(torch::Tensor &output, torch::Tensor &input, const char *
 linear:
     CHECK_EQ(0, ncclGroupStart());
     for (int r = 0; r < nranks; r++) {
-      CHECK_EQ(0, ncclSend(((char*)sendbuff) + r * slice_size, slice_size, ncclInt8, r, comm, stream));
-      CHECK_EQ(0, ncclRecv(((char*)recvbuff) + r * slice_size, slice_size, ncclInt8, r, comm, stream));
+      CHECK_EQ(0, ncclSend(((char*)sendbuff) + r * slice_size, slice_size, ncclInt8, r, g_nccl_comm, stream));
+      CHECK_EQ(0, ncclRecv(((char*)recvbuff) + r * slice_size, slice_size, ncclInt8, r, g_nccl_comm, stream));
     }
     CHECK_EQ(0, ncclGroupEnd());
   }
