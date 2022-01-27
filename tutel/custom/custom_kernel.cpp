@@ -212,7 +212,9 @@ static int inject_source(const std::string &headless_code) {
 
 static void invoke(const std::vector<torch::Tensor> &ts, int fd) {
 #if 0
-  int fd0 = inject_source(R"(
+  // Example:
+
+  int fd0 = jit::inject_source(R"(
 extern "C" __global__ void helloworld(float *data, int N) {
   for (int i = blockIdx.x; i < N; i += gridDim.x)
     data[i] = i + 1.2f;
@@ -224,7 +226,6 @@ extern "C" __global__ void helloworld(float *data, int N) {
   jit::jit_execute({&d_data, &N}, fd0, ts[0].device().index(), dim3(4, 1, 1), dim3(1, 1, 1));
   cudaMemcpy(h_data, d_data, sizeof(h_data), cudaMemcpyDeviceToHost);
   cudaStreamSynchronize(nullptr);
-  printf("@@ %f\n", *h_data);
 #endif
 
   std::vector<const void*> pargs(ts.size()), ppargs(ts.size());
@@ -277,11 +278,12 @@ template<typename dtype> static void invoke_cpu(const std::vector<torch::Tensor>
       dtype grad_gates1_s_rf = 0.0;
       for (int thread = 0; thread < 32; ++thread) {
         if (ts[2][block].item<int>() >= capacity || ts[1][block].item<int>() < 0) {
-          if (thread == 0)
+          if (thread == 0) {
             if (ts[0].sizes().size() == 1)
               ts[0][block] = 0;
             else
               ts[0][block][0] = 0;
+          }
           return;
         }
         int indice = ts[1][block].item<int>() * capacity + ts[2][block].item<int>();
