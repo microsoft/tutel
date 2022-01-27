@@ -163,7 +163,7 @@ class TutelTestCase(unittest.TestCase):
 
         for nproc_per_node, dtype, num_local_experts in itertools.product(
             [1, 2],
-            ['float64', 'float32'],
+            ['float32', 'float16'],
             [1, 2],
         ):
             test_case = {
@@ -173,6 +173,7 @@ class TutelTestCase(unittest.TestCase):
                 'dtype': dtype,
                 'num_local_experts': num_local_experts,
                 'show_step_time': True,
+                'num_steps': 50,
             }
             with self.subTest(msg='Testing a2a algo with setting', test_case=test_case):
                 loss_expected, step_time_expected = get_loss_and_step_time(test_case)
@@ -183,4 +184,4 @@ class TutelTestCase(unittest.TestCase):
                     }):
                         loss, step_time = get_loss_and_step_time(test_case)
                         self.assertEqual(loss, loss_expected)
-                        self.assertTrue(math.isclose(step_time, step_time_expected, rel_tol=0.01, abs_tol=0.001))
+                        self.assertTrue(math.isclose(step_time, step_time_expected, rel_tol=0.01, abs_tol=0.01))

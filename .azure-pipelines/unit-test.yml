@@ -19,4 +19,4 @@ steps:
   - script: |
       python3 setup.py test
     displayName: Run unit tests
-    timeoutInMinutes: 15
+    timeoutInMinutes: 30
