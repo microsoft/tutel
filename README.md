@@ -3,16 +3,24 @@
 Tutel MoE: An Optimized Mixture-of-Experts Implementation.
 
 - Supported Framework: Pytorch (recommend: >= 1.10)
-- Supported GPUs: CUDA(fp32 + fp16), ROCm(fp32 + fp16)
+- Supported GPUs: CUDA(fp64/fp32/fp16/bfp16), ROCm(fp64/fp32/fp16)
 
 How to setup Tutel MoE for Pytorch:
 ```
-* Install Online:
+* Recommended Pytorch:
+        #   Pytorch for NVIDIA CUDA >= 10.2:
+        python3 -m pip install --user torch==1.10.0+cu102 torchvision==0.11.1+cu102 -f https://download.pytorch.org/whl/torch_stable.html
+        #   Pytorch for NVIDIA CUDA >= 11.3:
+        python3 -m pip install --user torch==1.10.0+cu113 torchvision==0.11.1+cu113 -f https://download.pytorch.org/whl/torch_stable.html
+        #   Pytorch for AMD ROCm == 4.2:
+        python3 -m pip install --user torch==1.10.0+rocm4.2 torchvision==0.11.1+rocm4.2 -f https://download.pytorch.org/whl/torch_stable.html
+
+* Install Tutel Online:
 
         $ python3 -m pip uninstall tutel -y
         $ python3 -m pip install --user --upgrade git+https://github.com/microsoft/tutel@v0.1.x
 
-* Build from Source:
+* Build Tutel from Source:
 
         $ git clone https://github.com/microsoft/tutel --branch v0.1.x
 
@@ -64,7 +72,7 @@ moe_layer = tutel_moe.moe_layer(
 # Cast to GPU
 moe_layer = moe_layer.to('cuda:0')
 
-# In distributed model, you need further skip doing allreduce on global parameters that has `skip_allreduce` mask, 
+# In distributed model, you need further skip doing allreduce on global parameters that have `skip_allreduce` mask, 
 # e.g.
 #    for p in moe_layer.parameters():
 #        if hasattr(p, 'skip_allreduce'):
