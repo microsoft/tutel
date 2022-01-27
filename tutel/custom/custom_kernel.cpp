@@ -32,6 +32,8 @@
 #define CHECK_CUDA(x) AT_ASSERTM(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) AT_ASSERTM(x.is_contiguous(), #x " must be contiguous")
 
+namespace jit {
+
 static std::string file_read(const char *path) {
   FILE *fp = fopen(path, "rb");
   CHECK_EQ(true, fp != nullptr);
@@ -141,8 +143,8 @@ struct ModuleConfig {
 
 static std::vector<ModuleConfig> _gms;
 
-static void jit_execute(void **ppargs, int code_id, int dev) {
-  auto &gm = _gms[code_id];
+static void jit_execute(const std::vector<const void*> &ppargs, int fd, int dev, const dim3 &blocks, const dim3 &threads) {
+  auto &gm = _gms[fd];
   if (gm.hFunc.size() <= dev)
     gm.hFunc.resize(dev + 1);
 
@@ -178,30 +180,19 @@ static void jit_execute(void **ppargs, int code_id, int dev) {
     CHECK_NE(nullptr, (pos = strstr(source, " void ")));
     pos += 6; CHECK_NE(nullptr, (tail = strchr(pos, '(')));
 
-    CHECK_EQ(0, cuModuleGetFunction(&gm.hFunc[dev], hMod, std::string(pos, tail - pos).c_str()));
+    std::string fname = std::string(pos, tail - pos);
+    CHECK_EQ(0, cuModuleGetFunction(&gm.hFunc[dev], hMod, fname.c_str()));
     CHECK_NE(nullptr, gm.hFunc[dev]);
   }
 
-  CHECK_EQ(0, cuLaunchKernel(gm.hFunc[dev], gm.blocks.x, gm.blocks.y, gm.blocks.z, gm.threads.x, gm.threads.y, gm.threads.z, 0, nullptr, ppargs, nullptr));
-}
-
-static void invoke(const std::vector<torch::Tensor> &ts, int code_id) {
-  std::vector<void*> pargs(ts.size()), ppargs(ts.size());
-  for (int i = 0; i < (int)ts.size(); ++i) {
-    CHECK_CUDA(ts[i]);
-    pargs[i] = (void*)ts[i].data_ptr(), ppargs[i] = &pargs[i];
-  }
-
-  int dev = ts[0].device().index();
-  CHECK_EQ(0, cudaSetDevice(dev));
-  jit_execute(ppargs.data(), code_id, dev);
+  CHECK_EQ(0, cuLaunchKernel(gm.hFunc[dev], blocks.x, blocks.y, blocks.z, threads.x, threads.y, threads.z, 0, nullptr, (void**)ppargs.data(), nullptr));
 }
 
 static int inject_source(const std::string &headless_code) {
-  int code_id = _gms.size();
-  _gms.resize(code_id + 1);
+  int fd = _gms.size();
+  _gms.resize(fd + 1);
 
-  auto &gm = _gms[code_id];
+  auto &gm = _gms[fd];
 #if !defined(__HIP_PLATFORM_HCC__)
   gm.code = "#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n" + headless_code;
 #else
@@ -216,8 +207,38 @@ static int inject_source(const std::string &headless_code) {
   { char tag[] = "// [thread_extent] threadIdx.y = "; const char *pos = strstr(source, tag); gm.threads.y = pos ? std::atoi(pos + sizeof(tag) - 1) : 1; }
   { char tag[] = "// [thread_extent] threadIdx.z = "; const char *pos = strstr(source, tag); gm.threads.z = pos ? std::atoi(pos + sizeof(tag) - 1) : 1; }
 
-  return code_id;
+  return fd;
 }
+
+static void invoke(const std::vector<torch::Tensor> &ts, int fd) {
+#if 0
+  int fd0 = inject_source(R"(
+extern "C" __global__ void helloworld(float *data, int N) {
+  for (int i = blockIdx.x; i < N; i += gridDim.x)
+    data[i] = i + 1.2f;
+}
+)");
+  float *d_data, h_data[1]; int N = 1024;
+  cudaMalloc(&d_data, N * sizeof(*d_data));
+
+  jit::jit_execute({&d_data, &N}, fd0, ts[0].device().index(), dim3(4, 1, 1), dim3(1, 1, 1));
+  cudaMemcpy(h_data, d_data, sizeof(h_data), cudaMemcpyDeviceToHost);
+  cudaStreamSynchronize(nullptr);
+  printf("@@ %f\n", *h_data);
+#endif
+
+  std::vector<const void*> pargs(ts.size()), ppargs(ts.size());
+  for (int i = 0; i < (int)ts.size(); ++i) {
+    CHECK_CUDA(ts[i]);
+    pargs[i] = ts[i].data_ptr(), ppargs[i] = &pargs[i];
+  }
+
+  int dev = ts[0].device().index();
+  CHECK_EQ(0, cudaSetDevice(dev));
+  jit_execute(ppargs, fd, dev, _gms[fd].blocks, _gms[fd].threads);
+}
+
+} // namespace jit
 
 template<typename dtype> static void invoke_cpu(const std::vector<torch::Tensor> &ts, const int &kernel_type, const int &capacity) {
   int samples = ts[1].sizes()[0];
@@ -439,11 +460,11 @@ static void nccl_all_to_all_gather_async(
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("invoke",
-        &invoke,
+        &jit::invoke,
         "Generic Invoke for GPU (CUDA)"
     );
     m.def("inject_source",
-        &inject_source,
+        &jit::inject_source,
         "Inject Source for GPU (CUDA)"
     );
     m.def("invoke_cpu_fp32",
