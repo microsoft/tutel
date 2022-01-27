@@ -498,7 +498,7 @@ static void all_to_all_async(torch::Tensor &output, torch::Tensor &input, const 
       CHECK_EQ(0, ncclRecv(((char*)sendbuff) + n * ngpus * slice_size, ngpus * slice_size, ncclInt8, n * ngpus + local_rank, g_nccl_comm, stream));
     }
     CHECK_EQ(0, ncclGroupEnd());
-    // CHECK_EQ(0, cudaMemcpyAsync(recvbuff, sendbuff, nranks * slice_size, cudaMemcpyDeviceToDevice, stream));
+    CHECK_EQ(0, cudaMemcpyAsync(recvbuff, sendbuff, nranks * slice_size, cudaMemcpyDeviceToDevice, stream));
   } else {
 linear:
     CHECK_EQ(0, ncclGroupStart());
@@ -558,7 +558,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         &nccl_all_to_all_gather_async,
         "NCCL AllToAll (Gather Async)"
     );
-    m.def("all_to_all_aysnc",
+    m.def("all_to_all_async",
         &all_to_all_async,
         "AllToAll (Async, will modify input if algo is 2D)"
     );
