@@ -76,12 +76,14 @@ class AllToAll(torch.autograd.Function):
             return input
         input = input.contiguous()
         output = torch.empty_like(input)
+        inplace = False
         if AllToAllStatus.algo:
-            AllToAllStatus.init(group, 1, 0, input)
+            AllToAllStatus.init(group, 1, -1, input)
+            inplace = (AllToAllStatus.algo == '2D')
             tutel_custom_kernel.all_to_all(output, input, AllToAllStatus.algo)
         else:
             dist.all_to_all_single(output, input, group=group)
-        return output
+        return (input if inplace else output)
 
     @staticmethod
     def backward(ctx: Any, grad_output: Tensor):
