@@ -137,7 +137,6 @@ struct ModuleConfig {
   std::vector<CUmodule> hMod;
   std::vector<CUfunction> hFunc;
 
-  int flags;
   std::string code;
 
   dim3 blocks, threads;
@@ -146,7 +145,7 @@ struct ModuleConfig {
 static std::vector<ModuleConfig> gpuModules;
 
 static void invoke(const std::vector<torch::Tensor> &ts, int code_id);
-static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id, int flags, const std::string &code);
+static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id, const std::string &code);
 
 static void invoke(const std::vector<torch::Tensor> &ts, int code_id) {
   auto &gm = gpuModules[code_id];
@@ -154,7 +153,7 @@ static void invoke(const std::vector<torch::Tensor> &ts, int code_id) {
   if (gm.hMod.size() <= dev)
     gm.hMod.resize(dev + 1);
   if (!gm.hMod[dev])
-    return invoke_with_source(ts, code_id, gm.flags, gm.code);
+    return invoke_with_source(ts, code_id, gm.code);
 
   std::vector<void*> pargs(ts.size()), ppargs(ts.size());
   for (int i = 0; i < (int)ts.size(); ++i) {
@@ -164,39 +163,11 @@ static void invoke(const std::vector<torch::Tensor> &ts, int code_id) {
   CHECK_EQ(0, cuLaunchKernel(gm.hFunc[dev], gm.blocks.x, gm.blocks.y, gm.blocks.z, gm.threads.x, gm.threads.y, gm.threads.z, 0, nullptr, ppargs.data(), nullptr));
 }
 
-static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id, int flags, const std::string &code) {
-
-#if !defined(__HIP_PLATFORM_HCC__)
-#if 0
-  static void *libcuda = nullptr;
-  static int (*cuModuleLoad)(...) = nullptr;
-  static int (*cuModuleGetFunction)(...) = nullptr;
-  static int (*cuLaunchKernel)(...) = nullptr;
-
-  if (libcuda == nullptr) {
-    (libcuda == nullptr ? (libcuda = dlopen("/usr/local/cuda/compat/lib/libcuda.so.1", RTLD_LAZY | RTLD_GLOBAL)) : 0);
-    (libcuda == nullptr ? (libcuda = dlopen("/usr/local/cuda/compat/lib/libcuda.so", RTLD_LAZY | RTLD_GLOBAL)) : 0);
-    (libcuda == nullptr ? (libcuda = dlopen("/usr/lib/x86_64-linux-gnu/libcuda.so.1", RTLD_LAZY | RTLD_GLOBAL)) : 0);
-    (libcuda == nullptr ? (libcuda = dlopen("/usr/lib/x86_64-linux-gnu/libcuda.so", RTLD_LAZY | RTLD_GLOBAL)) : 0);
-    (libcuda == nullptr ? (libcuda = dlopen("/usr/local/lib/x86_64-linux-gnu/libcuda.so.1", RTLD_LAZY | RTLD_GLOBAL)) : 0);
-    (libcuda == nullptr ? (libcuda = dlopen("/usr/local/lib/x86_64-linux-gnu/libcuda.so", RTLD_LAZY | RTLD_GLOBAL)) : 0);
-    (libcuda == nullptr ? (libcuda = dlopen("/usr/local/cuda/lib64/libcuda.so.1", RTLD_LAZY | RTLD_GLOBAL)) : 0);
-    (libcuda == nullptr ? (libcuda = dlopen("/usr/local/cuda/lib64/libcuda.so", RTLD_LAZY | RTLD_GLOBAL)) : 0);
-    (libcuda == nullptr ? (libcuda = dlopen("/usr/local/cuda/lib64/stubs/libcuda.so", RTLD_LAZY | RTLD_GLOBAL)) : 0);
-
-    CHECK_NE(nullptr, libcuda);
-    CHECK_NE(nullptr, (cuModuleLoad = (decltype(cuModuleLoad))dlsym(libcuda, "cuModuleLoad")));
-    CHECK_NE(nullptr, (cuModuleGetFunction = (decltype(cuModuleGetFunction))dlsym(libcuda, "cuModuleGetFunction")));
-    CHECK_NE(nullptr, (cuLaunchKernel = (decltype(cuLaunchKernel))dlsym(libcuda, "cuLaunchKernel")));
-  }
-#endif
-#endif
-
+static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id, const std::string &code) {
   if (code_id >= (int)gpuModules.size())
     gpuModules.resize(code_id + 1);
 
   auto &gm = gpuModules[code_id];
-  gm.flags = flags;
   gm.code = code;
 
   CHECK_CUDA(ts[0]);
@@ -221,7 +192,7 @@ static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id
 #endif
     const char *source = code.data(), *pos, *tail;
 
-    int use_nvrtc = flags & 1;
+    int use_nvrtc = getenv("USE_NVRTC") ? std::atoi(getenv("USE_NVRTC")) : 1;
     std::string image;
     if (!use_nvrtc || (image = nvrtc_compile(source, arch)) == "") {
         image = nvcc_compile(source, arch);

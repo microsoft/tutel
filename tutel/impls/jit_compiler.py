@@ -27,7 +27,6 @@ class JitCompiler:
         __ctx__ = JitCompiler.__CTX__
         JitCompiler.__CTX__ += 1
 
-        use_nvrtc = 1 if int(os.environ.get('USE_NVRTC', '1')) else 0
         if not IS_HIP_EXTENSION:
             source = '#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n' + source
         else:
@@ -36,7 +35,7 @@ class JitCompiler:
         def func(*inputs):
             if __ctx__ not in JitCompiler.__JITTED_SET__:
                 JitCompiler.__JITTED_SET__.add(__ctx__)
-                tutel_custom_kernel.invoke_with_source(inputs, __ctx__, use_nvrtc, source)
+                tutel_custom_kernel.invoke_with_source(inputs, __ctx__, source)
             else:
                 tutel_custom_kernel.invoke(inputs, __ctx__)
         return func
