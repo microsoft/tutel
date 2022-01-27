@@ -75,22 +75,27 @@ static std::string get_cache_path() {
   return cache_path;
 }
 
-static std::string nvcc_compile(const char* code, const std::string &arch, int code_id, int dev_id) {
-  std::string code_path = get_cache_path() + std::to_string(code_id) + "-" + std::to_string(dev_id) + ".cu";
-  file_write(code_path.data(), code);
+static std::string nvcc_compile(const char* code, const std::string &arch) {
+  char code_path[] = "/tmp/torch-tutel-XXXXXX.cu";
+  CHECK_NE(-1, mkstemps(code_path, 3));
+
+  file_write(code_path, code);
+  std::string fatbin_path = code_path + std::string(".fatbin");
+
   pid_t  pid = fork();
   if (pid == 0) {
 #if !defined(__HIP_PLATFORM_HCC__)
-    CHECK_EQ(-1, execl("/usr/local/cuda/bin/nvcc", "/usr/local/cuda/bin/nvcc", code_path.c_str(), "-o", (code_path + ".fatbin").c_str(), "--fatbin", "-O4", "-gencode", ("arch=compute_" + arch + ",code=sm_" + arch).c_str(), (char *)NULL));
+    CHECK_EQ(-1, execl("/usr/local/cuda/bin/nvcc", "/usr/local/cuda/bin/nvcc", code_path, "-o", fatbin_path.c_str(), "--fatbin", "-O4", "-gencode", ("arch=compute_" + arch + ",code=sm_" + arch).c_str(), (char *)NULL));
 #else
-    CHECK_EQ(-1, execl("/opt/rocm/bin/hipcc", "/opt/rocm/bin/hipcc", code_path.c_str(), "-o", (code_path + ".fatbin").c_str(), "--genco", "-O4", "-w" , ("--amdgpu-target=" + arch).c_str(), (char *)NULL));
+    CHECK_EQ(-1, execl("/opt/rocm/bin/hipcc", "/opt/rocm/bin/hipcc", code_path, "-o", fatbin_path.c_str(), "--genco", "-O4", "-w" , ("--amdgpu-target=" + arch).c_str(), (char *)NULL));
 #endif
     exit(1);
   } else {
     wait(NULL);
   }
-  auto image = file_read((code_path + ".fatbin").data());
-  remove((code_path + ".fatbin").data());
+  auto image = file_read(fatbin_path.data());
+  unlink(fatbin_path.data());
+  unlink(code_path);
   return image;
 }
 
@@ -219,10 +224,7 @@ static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id
     int use_nvrtc = flags & 1;
     std::string image;
     if (!use_nvrtc || (image = nvrtc_compile(source, arch)) == "") {
-        int dev_ord = dev;
-        const char *local_rank = getenv("LOCAL_RANK");
-        dev_ord = local_rank ? std::atoi(local_rank) : dev_ord;
-        image = nvcc_compile(source, arch, code_id, dev_ord);
+        image = nvcc_compile(source, arch);
     }
 
     long launch_bound;
