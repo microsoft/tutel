@@ -19,25 +19,11 @@ except:
 class JitCompiler:
     @staticmethod
     def create_raw(source):
-        if not hasattr(JitCompiler, '__CTX__'):
-            torch.cuda.init()
-            JitCompiler.__CTX__ = 0
-            JitCompiler.__JITTED_SET__ = set()
-
-        __ctx__ = JitCompiler.__CTX__
-        JitCompiler.__CTX__ += 1
-
-        if not IS_HIP_EXTENSION:
-            source = '#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n' + source
-        else:
-            source = '#include <hip/hip_runtime.h>\n#include <hip/hip_fp16.h>\n' + source
+        torch.cuda.init()
+        __ctx__ = tutel_custom_kernel.inject_source(source)
 
         def func(*inputs):
-            if __ctx__ not in JitCompiler.__JITTED_SET__:
-                JitCompiler.__JITTED_SET__.add(__ctx__)
-                tutel_custom_kernel.invoke_with_source(inputs, __ctx__, source)
-            else:
-                tutel_custom_kernel.invoke(inputs, __ctx__)
+            tutel_custom_kernel.invoke(inputs, __ctx__)
         return func
 
     @staticmethod

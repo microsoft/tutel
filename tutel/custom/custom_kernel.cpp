@@ -134,52 +134,19 @@ static std::string nvrtc_compile(const char* code, const std::string &arch) {
 
 struct ModuleConfig {
   // Handling JIT compilation in Multi-gpu cases
-  std::vector<CUmodule> hMod;
   std::vector<CUfunction> hFunc;
-
   std::string code;
-
   dim3 blocks, threads;
 };
 
-static std::vector<ModuleConfig> gpuModules;
+static std::vector<ModuleConfig> _gms;
 
-static void invoke(const std::vector<torch::Tensor> &ts, int code_id);
-static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id, const std::string &code);
-
-static void invoke(const std::vector<torch::Tensor> &ts, int code_id) {
-  auto &gm = gpuModules[code_id];
-  int dev = ts[0].device().index();
-  if (gm.hMod.size() <= dev)
-    gm.hMod.resize(dev + 1);
-  if (!gm.hMod[dev])
-    return invoke_with_source(ts, code_id, gm.code);
-
-  std::vector<void*> pargs(ts.size()), ppargs(ts.size());
-  for (int i = 0; i < (int)ts.size(); ++i) {
-    CHECK_CUDA(ts[i]);
-    pargs[i] = (void*)ts[i].data_ptr(), ppargs[i] = &pargs[i];
-  }
-  CHECK_EQ(0, cuLaunchKernel(gm.hFunc[dev], gm.blocks.x, gm.blocks.y, gm.blocks.z, gm.threads.x, gm.threads.y, gm.threads.z, 0, nullptr, ppargs.data(), nullptr));
-}
-
-static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id, const std::string &code) {
-  if (code_id >= (int)gpuModules.size())
-    gpuModules.resize(code_id + 1);
-
-  auto &gm = gpuModules[code_id];
-  gm.code = code;
-
-  CHECK_CUDA(ts[0]);
-  int dev = int(ts[0].device().index());
-  CHECK_EQ(0, cudaSetDevice(dev));
+static void jit_execute(void **ppargs, int code_id, int dev) {
+  auto &gm = _gms[code_id];
   if (gm.hFunc.size() <= dev)
     gm.hFunc.resize(dev + 1);
-  if (gm.hMod.size() <= dev)
-    gm.hMod.resize(dev + 1);
 
   if (gm.hFunc[dev] == nullptr) {
-
 #if !defined(__HIP_PLATFORM_HCC__)
     int major, minor;
     CHECK_EQ(0, cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev));
@@ -190,7 +157,7 @@ static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id
     CHECK_EQ(0, hipGetDeviceProperties(&prop, dev));
     std::string arch = prop.gcnArchName;
 #endif
-    const char *source = code.data(), *pos, *tail;
+    const char *source = gm.code.data(), *pos, *tail;
 
     int use_nvrtc = getenv("USE_NVRTC") ? std::atoi(getenv("USE_NVRTC")) : 1;
     std::string image;
@@ -199,27 +166,57 @@ static void invoke_with_source(const std::vector<torch::Tensor> &ts, int code_id
     }
 
     long launch_bound;
-    { char tag[] = " __launch_bounds__(";  pos = strstr(source, tag); launch_bound = pos ? std::atol(pos + sizeof(tag) - 1) : 1024L; }
+    { char tag[] = " __launch_bounds__(";  const char *pos = strstr(source, tag); launch_bound = pos ? std::atol(pos + sizeof(tag) - 1) : 1024L; }
 
     static CUjit_option options[] = {CU_JIT_OPTIMIZATION_LEVEL, CU_JIT_THREADS_PER_BLOCK};
     static void* values[] = {(void*)4L, (void*)launch_bound};
-    CHECK_EQ(0, cuModuleLoadDataEx(&gm.hMod[dev], image.c_str(), sizeof(options) / sizeof(*options), options, values));
 
-    CHECK_EQ(true, nullptr != (pos = strstr(source, " void ")));
-    pos += 6; CHECK_EQ(true, nullptr != (tail = strchr(pos, '(')));
+    CUmodule hMod = nullptr;
+    CHECK_EQ(0, cuModuleLoadDataEx(&hMod, image.c_str(), sizeof(options) / sizeof(*options), options, values));
+    CHECK_NE(nullptr, hMod);
 
-    CHECK_EQ(0, cuModuleGetFunction(&gm.hFunc[dev], gm.hMod[dev], std::string(pos, tail - pos).c_str()));
-    CHECK_EQ(true, nullptr != gm.hFunc[dev]);
+    CHECK_NE(nullptr, (pos = strstr(source, " void ")));
+    pos += 6; CHECK_NE(nullptr, (tail = strchr(pos, '(')));
 
-    { char tag[] = "// [thread_extent] blockIdx.x = ";  pos = strstr(source, tag); gm.blocks.x = pos ? std::atoi(pos + sizeof(tag) - 1) : 1; }
-    { char tag[] = "// [thread_extent] blockIdx.y = ";  pos = strstr(source, tag); gm.blocks.y = pos ? std::atoi(pos + sizeof(tag) - 1) : 1; }
-    { char tag[] = "// [thread_extent] blockIdx.z = ";  pos = strstr(source, tag); gm.blocks.z = pos ? std::atoi(pos + sizeof(tag) - 1) : 1; }
-    { char tag[] = "// [thread_extent] threadIdx.x = "; pos = strstr(source, tag); gm.threads.x = pos ? std::atoi(pos + sizeof(tag) - 1) : 1; }
-    { char tag[] = "// [thread_extent] threadIdx.y = "; pos = strstr(source, tag); gm.threads.y = pos ? std::atoi(pos + sizeof(tag) - 1) : 1; }
-    { char tag[] = "// [thread_extent] threadIdx.z = "; pos = strstr(source, tag); gm.threads.z = pos ? std::atoi(pos + sizeof(tag) - 1) : 1; }
+    CHECK_EQ(0, cuModuleGetFunction(&gm.hFunc[dev], hMod, std::string(pos, tail - pos).c_str()));
+    CHECK_NE(nullptr, gm.hFunc[dev]);
   }
 
-  return invoke(ts, code_id);
+  CHECK_EQ(0, cuLaunchKernel(gm.hFunc[dev], gm.blocks.x, gm.blocks.y, gm.blocks.z, gm.threads.x, gm.threads.y, gm.threads.z, 0, nullptr, ppargs, nullptr));
+}
+
+static void invoke(const std::vector<torch::Tensor> &ts, int code_id) {
+  std::vector<void*> pargs(ts.size()), ppargs(ts.size());
+  for (int i = 0; i < (int)ts.size(); ++i) {
+    CHECK_CUDA(ts[i]);
+    pargs[i] = (void*)ts[i].data_ptr(), ppargs[i] = &pargs[i];
+  }
+
+  int dev = ts[0].device().index();
+  CHECK_EQ(0, cudaSetDevice(dev));
+  jit_execute(ppargs.data(), code_id, dev);
+}
+
+static int inject_source(const std::string &headless_code) {
+  int code_id = _gms.size();
+  _gms.resize(code_id + 1);
+
+  auto &gm = _gms[code_id];
+#if !defined(__HIP_PLATFORM_HCC__)
+  gm.code = "#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n" + headless_code;
+#else
+  gm.code = "#include <hip/hip_runtime.h>\n#include <hip/hip_fp16.h>\n" + headless_code;
+#endif
+
+  const char *source = headless_code.c_str();
+  { char tag[] = "// [thread_extent] blockIdx.x = ";  const char *pos = strstr(source, tag); gm.blocks.x = pos ? std::atoi(pos + sizeof(tag) - 1) : 1; }
+  { char tag[] = "// [thread_extent] blockIdx.y = ";  const char *pos = strstr(source, tag); gm.blocks.y = pos ? std::atoi(pos + sizeof(tag) - 1) : 1; }
+  { char tag[] = "// [thread_extent] blockIdx.z = ";  const char *pos = strstr(source, tag); gm.blocks.z = pos ? std::atoi(pos + sizeof(tag) - 1) : 1; }
+  { char tag[] = "// [thread_extent] threadIdx.x = "; const char *pos = strstr(source, tag); gm.threads.x = pos ? std::atoi(pos + sizeof(tag) - 1) : 1; }
+  { char tag[] = "// [thread_extent] threadIdx.y = "; const char *pos = strstr(source, tag); gm.threads.y = pos ? std::atoi(pos + sizeof(tag) - 1) : 1; }
+  { char tag[] = "// [thread_extent] threadIdx.z = "; const char *pos = strstr(source, tag); gm.threads.z = pos ? std::atoi(pos + sizeof(tag) - 1) : 1; }
+
+  return code_id;
 }
 
 template<typename dtype> static void invoke_cpu(const std::vector<torch::Tensor> &ts, const int &kernel_type, const int &capacity) {
@@ -443,11 +440,11 @@ static void nccl_all_to_all_gather_async(
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("invoke",
         &invoke,
-        "Generic Invoke (CUDA)"
+        "Generic Invoke for GPU (CUDA)"
     );
-    m.def("invoke_with_source",
-        &invoke_with_source,
-        "Generic Invoke with Source (CUDA)"
+    m.def("inject_source",
+        &inject_source,
+        "Inject Source for GPU (CUDA)"
     );
     m.def("invoke_cpu_fp32",
         &invoke_cpu<float>,
