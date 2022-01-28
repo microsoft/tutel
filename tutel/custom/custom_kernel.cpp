@@ -339,6 +339,11 @@ static void init_nccl(
   CHECK_EQ(0, ncclCommCuDevice(g_nccl_comm, &g_local_rank));
 }
 
+static at::cuda::CUDAStream& get_default_stream() {
+  static at::cuda::CUDAStream default_stream = at::cuda::getDefaultCUDAStream();
+  return default_stream;
+}
+
 static at::cuda::CUDAStream& get_nccl_stream() {
   static at::cuda::CUDAStream nccl_stream = at::cuda::getStreamFromPool();
   return nccl_stream;
@@ -467,7 +472,7 @@ static void all_to_all_async(torch::Tensor &output, torch::Tensor &input, const 
   CHECK_CONTIGUOUS(input);
   auto recvbuff = (void*)output.data_ptr();
   auto sendbuff = (void*)input.data_ptr();
-  cudaStream_t stream = 0;
+  cudaStream_t stream = get_default_stream().stream();
 
   size_t length = input.nbytes();
   CHECK_EQ(0, length % g_world_size);
