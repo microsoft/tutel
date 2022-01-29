@@ -349,6 +349,7 @@ static std::vector<torch::Tensor> nccl_all_to_all_scatter_async(
   size_t slice_size = length / num_slices;
 
   // Save original stream and switch to NCCL stream
+  // Output tensors must be allocated in NCCL stream context to prevent PyTorch Caching Allocator from recycling it
   const at::cuda::CUDAStream& original_stream = at::cuda::getCurrentCUDAStream();
   at::cuda::setCurrentCUDAStream(get_nccl_stream());
 
@@ -413,6 +414,7 @@ static torch::Tensor nccl_all_to_all_gather_async(
   CHECK_EQ(0, num_slices_per_split % g_world_size);
 
   // Save original stream and switch to NCCL stream
+  // Output tensor must be allocated in NCCL stream context to prevent PyTorch Caching Allocator from recycling it
   const at::cuda::CUDAStream& original_stream = at::cuda::getCurrentCUDAStream();
   at::cuda::setCurrentCUDAStream(get_nccl_stream());
 
