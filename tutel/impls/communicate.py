@@ -114,21 +114,14 @@ class AllToAllScatterAsync(torch.autograd.Function):
             x if i != AllToAllStatus.split_dim else x // AllToAllStatus.num_split
             for i, x in enumerate(ctx.input_shape)
         ])
-        output = [
-            torch.empty(output_shape, device=input.device).contiguous()
-            for _ in range(AllToAllStatus.num_split)
-        ]
         ctx.num_slices_per_split = ctx.input_shape[:AllToAllStatus.split_dim].numel()
-        tutel_custom_kernel.nccl_all_to_all_scatter_async(input, output, ctx.num_slices_per_split, False)
-        return tuple(output)
+        return tuple(tutel_custom_kernel.nccl_all_to_all_scatter_async(input, output_shape, ctx.num_slices_per_split, False))
 
     @staticmethod
     def backward(ctx: Any, *grad_output) -> Tensor:
         if not AllToAllStatus.initialized:
             return grad_output[0]
-        grad_input = torch.empty(ctx.input_shape, device=grad_output[0].device).contiguous()
-        tutel_custom_kernel.nccl_all_to_all_gather_async(grad_output, grad_input, ctx.num_slices_per_split, True)
-        return grad_input
+        return tutel_custom_kernel.nccl_all_to_all_gather_async(grad_output, ctx.input_shape, ctx.num_slices_per_split, True)
 
 class AllToAllGatherAsync(torch.autograd.Function):
     @staticmethod
@@ -140,21 +133,14 @@ class AllToAllGatherAsync(torch.autograd.Function):
             x if i != AllToAllStatus.split_dim else x * AllToAllStatus.num_split
             for i, x in enumerate(ctx.input_shape)
         ])
-        output = torch.empty(output_shape, device=input[0].device).contiguous()
         ctx.num_slices_per_split = ctx.input_shape[:AllToAllStatus.split_dim].numel()
-        tutel_custom_kernel.nccl_all_to_all_gather_async(input, output, ctx.num_slices_per_split, False)
-        return output
+        return tutel_custom_kernel.nccl_all_to_all_gather_async(input, output_shape, ctx.num_slices_per_split, False)
 
     @staticmethod
     def backward(ctx: Any, grad_output: Tensor) -> Tuple[Tensor]:
         if not AllToAllStatus.initialized:
             return (grad_output,)
-        grad_input = [
-            torch.empty(ctx.input_shape, device=grad_output.device).contiguous()
-            for _ in range(AllToAllStatus.num_split)
-        ]
-        tutel_custom_kernel.nccl_all_to_all_scatter_async(grad_output, grad_input, ctx.num_slices_per_split, True)
-        return tuple(grad_input)
+        return tuple(tutel_custom_kernel.nccl_all_to_all_scatter_async(grad_output, ctx.input_shape, ctx.num_slices_per_split, True))
 
 
 class PreAllreduceSum(torch.autograd.Function):
