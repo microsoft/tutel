@@ -31,40 +31,32 @@ class AllToAllStatus:
     gather_tensor_shape = None
     scatter_tensor_shape = None
     num_split = 0
-    world_size = 0
+    split_dim = 0
 
     @staticmethod
     def init(group: dist.ProcessGroup, num_split: int, split_dim: int, gather_tensor_ref: Tensor) -> None:
-        AllToAllStatus.world_size = get_world_size(group)
-        if AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
+        world_size = get_world_size(group)
+        if world_size <= 1:
             return
 
-        # Make sure addresses of tensors allocated are not in use
-        torch.cuda.synchronize()
+        AllToAllStatus.num_split = num_split
+        AllToAllStatus.split_dim = split_dim
 
         # Initialize NCCL
-        world_rank = get_world_rank(group)
-        nccl_unique_id_size = tutel_custom_kernel.get_nccl_unique_id_size()
-        nccl_unique_id = torch.zeros([nccl_unique_id_size], dtype=torch.int8).cpu()
-        if world_rank == 0:
-            tutel_custom_kernel.get_nccl_unique_id(nccl_unique_id)
-        nccl_unique_id = nccl_unique_id.to(gather_tensor_ref.device)
-        dist.broadcast(nccl_unique_id, 0, group)
-        AllToAllStatus.num_split = num_split
-        tutel_custom_kernel.init_nccl(
-            nccl_unique_id.cpu(),
-            AllToAllStatus.world_size,
-            world_rank,
-            AllToAllStatus.num_split,
-            gather_tensor_ref.shape[:split_dim].numel())
-
-        AllToAllStatus.gather_tensor_shape = list(gather_tensor_ref.shape)
-        AllToAllStatus.scatter_tensor_shape = [
-            x if i != split_dim else x // AllToAllStatus.num_split
-            for i, x in enumerate(AllToAllStatus.gather_tensor_shape)
-        ]
-
-        AllToAllStatus.initialized = True
+        if not AllToAllStatus.initialized:
+            world_rank = get_world_rank(group)
+            nccl_unique_id_size = tutel_custom_kernel.get_nccl_unique_id_size()
+            nccl_unique_id = torch.zeros([nccl_unique_id_size], dtype=torch.int8).cpu()
+            if world_rank == 0:
+                tutel_custom_kernel.get_nccl_unique_id(nccl_unique_id)
+            nccl_unique_id = nccl_unique_id.to(gather_tensor_ref.device)
+            dist.broadcast(nccl_unique_id, 0, group)
+            tutel_custom_kernel.init_nccl(
+                nccl_unique_id.cpu(),
+                world_size,
+                world_rank,
+                AllToAllStatus.num_split)
+            AllToAllStatus.initialized = True
 
 class AllToAll(torch.autograd.Function):
     @staticmethod
@@ -85,7 +77,7 @@ class AllToAll(torch.autograd.Function):
 class CurrentStreamRelease(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, input: Tensor, idx: int) -> Tensor:
-        if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
+        if not AllToAllStatus.initialized:
             return input
         ctx.idx = idx
         input = input.contiguous()
@@ -93,21 +85,21 @@ class CurrentStreamRelease(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx: Any, grad_output: Tensor) -> Tensor:
-        if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
+        if not AllToAllStatus.initialized:
             return (grad_output, None)
         return (tutel_custom_kernel.current_stream_acquire(grad_output, ctx.idx), None)
 
 class CurrentStreamAcquire(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, input: Tensor, idx: int) -> Tensor:
-        if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
+        if not AllToAllStatus.initialized:
             return input
         ctx.idx = idx
         return tutel_custom_kernel.current_stream_acquire(input, idx)
 
     @staticmethod
     def backward(ctx: Any, grad_output: Tensor) -> Tensor:
-        if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
+        if not AllToAllStatus.initialized:
             return (grad_output, None)
         grad_output = grad_output.contiguous()
         return (tutel_custom_kernel.current_stream_release(grad_output, ctx.idx), None)
@@ -115,42 +107,40 @@ class CurrentStreamAcquire(torch.autograd.Function):
 class AllToAllScatterAsync(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, input: Tensor) -> Tuple[Tensor]:
-        if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
+        if not AllToAllStatus.initialized:
             return (input,)
-        output = [
-            torch.empty(AllToAllStatus.scatter_tensor_shape, device=input.device).contiguous()
-            for _ in range(AllToAllStatus.num_split)
-        ]
-        tutel_custom_kernel.nccl_all_to_all_scatter_async(input, output, False)
-        return tuple(output)
+        ctx.input_shape = input.shape
+        output_shape = torch.Size([
+            x if i != AllToAllStatus.split_dim else x // AllToAllStatus.num_split
+            for i, x in enumerate(ctx.input_shape)
+        ])
+        ctx.num_slices_per_split = ctx.input_shape[:AllToAllStatus.split_dim].numel()
+        return tuple(tutel_custom_kernel.nccl_all_to_all_scatter_async(input, output_shape, ctx.num_slices_per_split, False))
 
     @staticmethod
     def backward(ctx: Any, *grad_output) -> Tensor:
-        if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
+        if not AllToAllStatus.initialized:
             return grad_output[0]
-        grad_input = torch.empty(AllToAllStatus.gather_tensor_shape, device=grad_output[0].device).contiguous()
-        tutel_custom_kernel.nccl_all_to_all_gather_async(grad_output, grad_input, True)
-        return grad_input
+        return tutel_custom_kernel.nccl_all_to_all_gather_async(grad_output, ctx.input_shape, ctx.num_slices_per_split, True)
 
 class AllToAllGatherAsync(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, *input) -> Tensor:
-        if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
+        if not AllToAllStatus.initialized:
             return input[0]
-        output = torch.empty(AllToAllStatus.gather_tensor_shape, device=input[0].device).contiguous()
-        tutel_custom_kernel.nccl_all_to_all_gather_async(input, output, False)
-        return output
+        ctx.input_shape = input[0].shape
+        output_shape = torch.Size([
+            x if i != AllToAllStatus.split_dim else x * AllToAllStatus.num_split
+            for i, x in enumerate(ctx.input_shape)
+        ])
+        ctx.num_slices_per_split = ctx.input_shape[:AllToAllStatus.split_dim].numel()
+        return tutel_custom_kernel.nccl_all_to_all_gather_async(input, output_shape, ctx.num_slices_per_split, False)
 
     @staticmethod
     def backward(ctx: Any, grad_output: Tensor) -> Tuple[Tensor]:
-        if not AllToAllStatus.initialized or AllToAllStatus.world_size <= 1:
+        if not AllToAllStatus.initialized:
             return (grad_output,)
-        grad_input = [
-            torch.empty(AllToAllStatus.scatter_tensor_shape, device=grad_output.device).contiguous()
-            for _ in range(AllToAllStatus.num_split)
-        ]
-        tutel_custom_kernel.nccl_all_to_all_scatter_async(grad_output, grad_input, True)
-        return tuple(grad_input)
+        return tuple(tutel_custom_kernel.nccl_all_to_all_scatter_async(grad_output, ctx.input_shape, ctx.num_slices_per_split, True))
 
 
 class PreAllreduceSum(torch.autograd.Function):
