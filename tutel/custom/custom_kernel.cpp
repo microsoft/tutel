@@ -300,7 +300,6 @@ template<typename dtype> static void invoke_cpu(const std::vector<torch::Tensor>
 static ncclComm_t g_nccl_comm;
 static std::vector<at::cuda::CUDAEvent> g_cuda_events;
 static int g_num_split = 0;
-static int g_num_slices_per_split = 0;
 static int g_world_size = 0;
 
 static size_t get_nccl_unique_id_size() {
@@ -320,8 +319,7 @@ static void init_nccl(
     const torch::Tensor &nccl_unique_id_tensor,
     int world_size,
     int world_rank,
-    int num_split,
-    int num_slices_per_split) {
+    int num_split) {
   ncclUniqueId nccl_unique_id;
 
   CHECK_CPU(nccl_unique_id_tensor);
@@ -333,7 +331,6 @@ static void init_nccl(
 
   g_num_split = num_split;
   g_cuda_events.resize(num_split);
-  g_num_slices_per_split = num_slices_per_split;
   g_world_size = world_size;
 }
 
@@ -352,26 +349,34 @@ static torch::Tensor& current_stream_acquire(torch::Tensor &tensor, int idx) {
   return tensor;
 }
 
-static void nccl_all_to_all_scatter_async(
+static std::vector<torch::Tensor> nccl_all_to_all_scatter_async(
     const torch::Tensor &input,
-    std::vector<torch::Tensor> &output_list,
+    torch::IntArrayRef output_size,
+    int num_slices_per_split,
     bool is_backward) {
   CHECK_CUDA(input);
-  CHECK_EQ(g_num_split, output_list.size());
-  for (auto& output : output_list) {
-    CHECK_CUDA(output);
-  }
 
-  CHECK_EQ(0, g_num_slices_per_split % g_world_size);
+  CHECK_EQ(0, num_slices_per_split % g_world_size);
   size_t length = input.nbytes();
-  size_t num_slices = g_num_slices_per_split * g_num_split;
+  size_t num_slices = num_slices_per_split * g_num_split;
   CHECK_EQ(0, length % num_slices);
   size_t slice_size = length / num_slices;
 
-  // Allocator will add blocking event to nccl stream after nccl kernels
+  // Save original stream and switch to NCCL stream
+  // Output tensors must be allocated in NCCL stream context to prevent PyTorch Caching Allocator from recycling it
+  const at::cuda::CUDAStream& original_stream = at::cuda::getCurrentCUDAStream();
+  at::cuda::setCurrentCUDAStream(get_nccl_stream());
+
+  // Computation stream allocator will add blocking event to nccl stream after nccl kernels
   c10::cuda::CUDACachingAllocator::recordStream(input.storage().data_ptr(), get_nccl_stream());
+
+  std::vector<torch::Tensor> output_list(g_num_split);
+  for (int i = 0; i < g_num_split; i++) {
+    output_list[i] = torch::empty(output_size, input.device(), torch::MemoryFormat::Contiguous);
+  }
+  // NCCL stream allocator will add blocking event to computation stream after computation kernels
   for (auto& output : output_list) {
-    c10::cuda::CUDACachingAllocator::recordStream(output.storage().data_ptr(), get_nccl_stream());
+    c10::cuda::CUDACachingAllocator::recordStream(output.storage().data_ptr(), original_stream);
   }
 
   // Acquire 0-th event for single input
@@ -382,19 +387,19 @@ static void nccl_all_to_all_scatter_async(
     int calc_idx = is_backward ? g_num_split - 1 - i : i;
 
     CHECK_EQ(0, ncclGroupStart());
-    for (int j = 0; j < g_num_slices_per_split; j++) {
+    for (int j = 0; j < num_slices_per_split; j++) {
       CHECK_EQ(0, ncclSend(
           ((char*)input.data_ptr()) + (j * g_num_split + calc_idx) * slice_size,
           slice_size,
           ncclInt8,
-          g_world_size * j / g_num_slices_per_split,
+          g_world_size * j / num_slices_per_split,
           g_nccl_comm,
           get_nccl_stream().stream()));
       CHECK_EQ(0, ncclRecv(
           ((char*)output_list[calc_idx].data_ptr()) + j * slice_size,
           slice_size,
           ncclInt8,
-          g_world_size * j / g_num_slices_per_split,
+          g_world_size * j / num_slices_per_split,
           g_nccl_comm,
           get_nccl_stream().stream()));
     }
@@ -403,29 +408,42 @@ static void nccl_all_to_all_scatter_async(
     // Release calc_idx-th event
     g_cuda_events[calc_idx].record(get_nccl_stream());
   }
+
+  // Switch to original stream
+  at::cuda::setCurrentCUDAStream(original_stream);
+
+  return output_list;
 }
 
-static void nccl_all_to_all_gather_async(
+static torch::Tensor nccl_all_to_all_gather_async(
     const std::vector<torch::Tensor> &input_list,
-    torch::Tensor &output,
+    torch::IntArrayRef output_size,
+    int num_slices_per_split,
     bool is_backward) {
   CHECK_EQ(g_num_split, input_list.size());
   for (auto& input : input_list) {
     CHECK_CUDA(input);
   }
-  CHECK_CUDA(output);
 
-  CHECK_EQ(0, g_num_slices_per_split % g_world_size);
-  size_t length = output.nbytes();
-  size_t num_slices = g_num_slices_per_split * g_num_split;
-  CHECK_EQ(0, length % num_slices);
-  size_t slice_size = length / num_slices;
+  CHECK_EQ(0, num_slices_per_split % g_world_size);
 
-  // Allocator will add blocking event to nccl stream after nccl kernels
+  // Save original stream and switch to NCCL stream
+  // Output tensor must be allocated in NCCL stream context to prevent PyTorch Caching Allocator from recycling it
+  const at::cuda::CUDAStream& original_stream = at::cuda::getCurrentCUDAStream();
+  at::cuda::setCurrentCUDAStream(get_nccl_stream());
+
+  // Computation stream allocator will add blocking event to nccl stream after nccl kernels
   for (auto& input : input_list) {
     c10::cuda::CUDACachingAllocator::recordStream(input.storage().data_ptr(), get_nccl_stream());
   }
-  c10::cuda::CUDACachingAllocator::recordStream(output.storage().data_ptr(), get_nccl_stream());
+
+  torch::Tensor output = torch::empty(output_size, input_list[0].device(), torch::MemoryFormat::Contiguous);
+  size_t length = output.nbytes();
+  size_t num_slices = num_slices_per_split * g_num_split;
+  CHECK_EQ(0, length % num_slices);
+  size_t slice_size = length / num_slices;
+  // NCCL stream allocator will add blocking event to computation stream after computation kernels
+  c10::cuda::CUDACachingAllocator::recordStream(output.storage().data_ptr(), original_stream);
 
   for (int i = 0; i < g_num_split; i++) {
     // Reverse calculation order in backward for pipelining
@@ -435,19 +453,19 @@ static void nccl_all_to_all_gather_async(
     g_cuda_events[calc_idx].block(get_nccl_stream());
 
     CHECK_EQ(0, ncclGroupStart());
-    for (int j = 0; j < g_num_slices_per_split; j++) {
+    for (int j = 0; j < num_slices_per_split; j++) {
       CHECK_EQ(0, ncclSend(
           ((char*)input_list[calc_idx].data_ptr()) + j * slice_size,
           slice_size,
           ncclInt8,
-          g_world_size * j / g_num_slices_per_split,
+          g_world_size * j / num_slices_per_split,
           g_nccl_comm,
           get_nccl_stream().stream()));
       CHECK_EQ(0, ncclRecv(
           ((char*)output.data_ptr()) + (j * g_num_split + calc_idx) * slice_size,
           slice_size,
           ncclInt8,
-          g_world_size * j / g_num_slices_per_split,
+          g_world_size * j / num_slices_per_split,
           g_nccl_comm,
           get_nccl_stream().stream()));
     }
@@ -456,6 +474,11 @@ static void nccl_all_to_all_gather_async(
 
   // Release 0-th event for single output
   g_cuda_events[0].record(get_nccl_stream());
+
+  // Switch to original stream
+  at::cuda::setCurrentCUDAStream(original_stream);
+
+  return output;
 }
 
 #endif
