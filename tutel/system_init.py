@@ -25,76 +25,8 @@ def init_affinity_at_program_beginning():
             logging.warning('Failed to set NUMA status: %s' % ex)
 
 def init_data_model_parallel(group_count=1, backend='nccl'):
-    import torch
-    import torch.distributed as dist
-    try:
-      if ('LOCAL_RANK' not in os.environ) and ('OMPI_COMM_WORLD_SIZE' in os.environ):
-          dist.init_process_group(backend=backend,
-              init_method='tcp://%s:%s' % (os.environ['MASTER_ADDR'], os.environ.get('MASTER_PORT', '23456')),
-              rank=int(os.environ['OMPI_COMM_WORLD_RANK']), world_size=int(os.environ['OMPI_COMM_WORLD_SIZE']))
-          dist_local_rank = int(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
-      else:
-          dist.init_process_group(backend=backend)
-          dist_local_rank = int(os.environ.get('LOCAL_RANK', 0))
-          dist_local_rank = min(dist_local_rank, torch.cuda.device_count() - 1)
-      glob_world_size, glob_world_rank = dist.get_world_size(), dist.get_rank()
-      is_distributed = True
-
-      def dist_print(*args):
-          if glob_world_rank == 0:
-              print(*args)
-    except ValueError:
-        glob_world_size, glob_world_rank, dist_local_rank = 1, 0, 0
-        is_distributed = False
-        dist_print = print
-
-    assert glob_world_size % group_count == 0, f"Expected to evenly divide devices into {group_count} groups, while the world size of current sesion is {glob_world_size}."
-
-    dist_group_size = group_count
-    dist_world_size = glob_world_size // dist_group_size
-    dist_world_rank = glob_world_rank % dist_world_size
-    dist_group_rank = glob_world_rank // dist_world_size
-
-    if is_distributed:
-        global_group = model_group = data_group = dist.group.WORLD
-
-        if dist_group_size != glob_world_size:
-            groups, inner_ranks = [], []
-            for gr in range(dist_group_size):
-                group_ranks = [x for x in range(gr * dist_world_size, (gr + 1) * dist_world_size)]
-                groups += [dist.new_group(ranks=group_ranks)]
-                inner_ranks += [group_ranks]
-            model_group = groups[dist_group_rank]
-
-        if dist_world_size != glob_world_size:
-            groups, outer_ranks = [], []
-            for gr in range(dist_world_size):
-                group_ranks = [x for x in range(gr, dist_world_size * dist_group_size, dist_world_size)]
-                groups += [dist.new_group(ranks=group_ranks)]
-                outer_ranks += [group_ranks]
-            data_group = groups[dist_world_rank]
-    else:
-        model_group, data_group, global_group = None, None, None
-
-    result = init_data_model_parallel
-    result.global_size = glob_world_size
-    result.global_rank = glob_world_rank
-    result.group_count = dist_group_size
-    result.data_rank = dist_group_rank
-    result.model_rank = dist_world_rank
-
-    if backend == 'nccl':
-        result.local_device = torch.device('cuda', dist_local_rank)
-        torch.cuda.set_device(result.local_device)
-    else:
-        result.local_device = torch.device('cpu')
-
-    result.data_group = data_group
-    result.model_group = model_group
-    result.global_group = global_group
-
-    result.is_distributed = is_distributed
-    result.dist_print = dist_print
+    from tutel.impls.communicate import create_groups_from_world
+    result = create_groups_from_world(group_count=group_count, include_init=backend)
 
     # Temp work around for: https://github.com/pytorch/pytorch/issues/56390
     import atexit
