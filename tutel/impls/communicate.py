@@ -32,7 +32,7 @@ class AllToAllStatus:
     scatter_tensor_shape = None
     num_split = 0
     split_dim = 0
-    algo = os.getenv('TUTEL_ALLTOALL_ALGO', '').upper()
+    algo = os.environ.get('TUTEL_ALLTOALL_ALGO', '').upper()
 
     @staticmethod
     def init(group: dist.ProcessGroup, num_split: int, split_dim: int, gather_tensor_ref: Tensor) -> None:
