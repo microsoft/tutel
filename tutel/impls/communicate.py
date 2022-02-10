@@ -26,6 +26,95 @@ def get_world_rank(group):
         return 0
 
 
+TUTEL_GROUPING_CACHE = {}
+
+def create_groups_from_world(group_count, include_init=False):
+    backend = include_init or next(iter(TUTEL_GROUPING_CACHE))
+
+    if backend not in TUTEL_GROUPING_CACHE:
+        TUTEL_GROUPING_CACHE[backend] = {}
+    if group_count in TUTEL_GROUPING_CACHE[backend]:
+        return TUTEL_GROUPING_CACHE[backend][group_count]
+
+    try:
+      if ('LOCAL_RANK' not in os.environ) and ('OMPI_COMM_WORLD_SIZE' in os.environ):
+          if include_init:
+              dist.init_process_group(backend=backend,
+                  init_method='tcp://%s:%s' % (os.environ['MASTER_ADDR'], os.environ.get('MASTER_PORT', '23456')),
+                  rank=int(os.environ['OMPI_COMM_WORLD_RANK']), world_size=int(os.environ['OMPI_COMM_WORLD_SIZE']))
+          dist_local_rank = int(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
+      else:
+          if include_init:
+              dist.init_process_group(backend=backend)
+          dist_local_rank = min(int(os.environ.get('LOCAL_RANK', 0)), torch.cuda.device_count() - 1)
+      glob_world_size, glob_world_rank = dist.get_world_size(), dist.get_rank()
+      is_distributed = True
+
+      def dist_print(*args):
+          if glob_world_rank == 0:
+              print(*args)
+    except ValueError:
+        glob_world_size, glob_world_rank, dist_local_rank = 1, 0, 0
+        is_distributed = False
+        dist_print = print
+
+    assert glob_world_size % group_count == 0, f"Expected to evenly divide devices into {group_count} groups, while the world size of current sesion is {glob_world_size}."
+
+    dist_group_size = group_count
+    dist_world_size = glob_world_size // dist_group_size
+    dist_world_rank = glob_world_rank % dist_world_size
+    dist_group_rank = glob_world_rank // dist_world_size
+
+    if is_distributed:
+        global_group = model_group = data_group = dist.group.WORLD
+
+        if dist_group_size != glob_world_size:
+            groups, inner_ranks = [], []
+            for gr in range(dist_group_size):
+                group_ranks = [x for x in range(gr * dist_world_size, (gr + 1) * dist_world_size)]
+                groups += [dist.new_group(ranks=group_ranks)]
+                inner_ranks += [group_ranks]
+            model_group = groups[dist_group_rank]
+
+        if dist_world_size != glob_world_size:
+            groups, outer_ranks = [], []
+            for gr in range(dist_world_size):
+                group_ranks = [x for x in range(gr, dist_world_size * dist_group_size, dist_world_size)]
+                groups += [dist.new_group(ranks=group_ranks)]
+                outer_ranks += [group_ranks]
+            data_group = groups[dist_world_rank]
+    else:
+        model_group, data_group, global_group = None, None, None
+
+    class ParallelPropStorage:
+        pass
+
+    result = ParallelPropStorage()
+    result.global_size = glob_world_size
+    result.global_rank = glob_world_rank
+    result.group_count = dist_group_size
+    result.data_rank = dist_group_rank
+    result.model_rank = dist_world_rank
+
+    if backend == 'nccl':
+        result.local_device = torch.device('cuda', dist_local_rank)
+        torch.cuda.set_device(result.local_device)
+    elif backend == 'gloo':
+        result.local_device = torch.device('cpu')
+    else:
+        raise Exception('Unsupported backend type: %s' % backend)
+
+    result.data_group = data_group
+    result.model_group = model_group
+    result.global_group = global_group
+
+    result.is_distributed = is_distributed
+    result.dist_print = dist_print
+
+    TUTEL_GROUPING_CACHE[backend][group_count] = result
+    return result
+
+
 class AllToAllStatus:
     initialized = False
     gather_tensor_shape = None
@@ -158,7 +247,7 @@ class PreAllreduceSum(torch.autograd.Function):
         ctx.input_shape = input.shape
         output = torch.empty([ctx.num_nodes, input.numel()], device=input.device, dtype=input.dtype)
         tensor_list = [x.contiguous() for x in torch.chunk(output, chunks=ctx.num_nodes, dim=0)]
-        dist.all_gather(tensor_list=tensor_list, tensor=input.contiguous())
+        dist.all_gather(tensor_list=tensor_list, tensor=input.contiguous(), group=group)
         output = output.view(list(input.shape[:0]) + [input.shape[0] * ctx.num_nodes] + list(input.shape[1:]))
         return output
     @staticmethod
@@ -167,7 +256,7 @@ class PreAllreduceSum(torch.autograd.Function):
             return (None, doutput)
         dinput = torch.empty(ctx.input_shape, device=doutput.device, dtype=doutput.dtype)
         chunks = [x.contiguous() for x in torch.chunk(doutput.view(ctx.num_nodes, -1), chunks=ctx.num_nodes, dim=0)]
-        dist.reduce_scatter(output=dinput, input_list=chunks)
+        dist.reduce_scatter(output=dinput, input_list=chunks, group=ctx.group)
         return (None, dinput)
 
 class PostAllreduceSum(torch.autograd.Function):
@@ -182,7 +271,7 @@ class PostAllreduceSum(torch.autograd.Function):
         chunks = [x.contiguous() for x in torch.chunk(input, chunks=ctx.num_nodes, dim=ctx.leading_dim)]
         assert len(chunks) == ctx.num_nodes
         output = torch.empty_like(chunks[0])
-        dist.reduce_scatter(output=output, input_list=list(chunks))
+        dist.reduce_scatter(output=output, input_list=list(chunks), group=group)
         return output
     @staticmethod
     def backward(ctx, doutput):
@@ -190,6 +279,6 @@ class PostAllreduceSum(torch.autograd.Function):
             return (None, doutput)
         dinput = torch.empty(ctx.input_shape, device=doutput.device, dtype=doutput.dtype)
         tensor_list = [x.contiguous() for x in torch.chunk(dinput, chunks=ctx.num_nodes, dim=ctx.leading_dim)]
-        dist.all_gather(tensor_list=tensor_list, tensor=doutput)
+        dist.all_gather(tensor_list=tensor_list, tensor=doutput, group=ctx.group)
         return (None, dinput)
 

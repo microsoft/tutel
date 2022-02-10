@@ -32,6 +32,7 @@ parser.add_argument('--top', type=int, default=2)
 parser.add_argument('--l_aux_wt', type=float, default=0.0)
 parser.add_argument('--a2a_ffn_overlap_degree', type=int, default=1)
 parser.add_argument('--num_steps', type=int, default=100)
+parser.add_argument('--save_load_checkpoint', default=False, action='store_true')
 args = parser.parse_args()
 
 parallel_env = system_init.init_data_model_parallel()
@@ -85,6 +86,13 @@ class ExampleModel(torch.nn.Module):
 model = ExampleModel()
 dist_print(model)
 
+if args.save_load_checkpoint:
+    checkpoint_path = './distributed-hellworld-%d-in-%d.ckpt' % (parallel_env.global_rank, parallel_env.global_size)
+    if os.path.exists(checkpoint_path):
+        model.load_state_dict(torch.load(checkpoint_path))
+    else:
+        print('Checkpoint not loaded: file `%s` is not found' % checkpoint_path)
+
 optimizer = torch.optim.SGD(model.parameters(), lr=1e-5)
 
 torch.manual_seed(0)
@@ -124,3 +132,6 @@ for i in range(num_steps):
 
 average_time /= 10
 dist_print('\n[Summary] Average synchronized step_time = %s sec.' % average_time)
+
+if args.save_load_checkpoint:
+    torch.save(model.state_dict(), checkpoint_path)

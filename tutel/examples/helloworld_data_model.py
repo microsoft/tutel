@@ -35,7 +35,7 @@ parser.add_argument('--a2a_ffn_overlap_degree', type=int, default=1)
 parser.add_argument('--num_steps', type=int, default=100)
 args = parser.parse_args()
 
-parallel_env = system_init.init_data_model_parallel()
+parallel_env = system_init.init_data_model_parallel(group_count=args.group_count)
 dist_rank, dist_world_size, dist_print = parallel_env.global_rank, parallel_env.global_size, parallel_env.dist_print
 args.local_rank = parallel_env.local_device.index
 
