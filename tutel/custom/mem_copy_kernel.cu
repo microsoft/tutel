@@ -29,7 +29,7 @@ cudaError_t memStrideCopy(
         CHECK_EQ(cudaSuccess, cudaOccupancyMaxPotentialBlockSize(
             &g_mem_stride_copy_gridsize, &g_mem_stride_copy_blocksize, memStrideCopyKernel<uint4>));
     }
-    
+
     if (slice_size < sizeof(uint4)) {
         memStrideCopyKernel<char><<<g_mem_stride_copy_gridsize, g_mem_stride_copy_blocksize, 0, stream>>>(
             (char*)dst, (char*)src, slice_size, height, width);
