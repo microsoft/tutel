@@ -64,9 +64,9 @@ class TutelMoeFastDispatcher:
 
     def __init__(self, num_global_experts, capacity, model_dim, dispatch_dtype):
         self.expected_sample_size = -1
-        self.num_global_experts = num_global_experts
-        self.capacity = capacity
-        self.model_dim = model_dim
+        self.num_global_experts = int(num_global_experts)
+        self.capacity = int(capacity)
+        self.model_dim = int(model_dim)
         self.kernel_pool = dict()
         self.dtype = dispatch_dtype
         if IS_HIP_EXTENSION or dispatch_dtype != torch.float16:
@@ -78,7 +78,7 @@ class TutelMoeFastDispatcher:
         self.indices_ = [x.to(torch.int32).view(-1) for x in indices_]
         self.locations_ = [x.to(torch.int32) for x in locations_]
         self.gates_ = [x.to(self.dtype) for x in gates_]
-        sample_size = self.indices_[0].size(0)
+        sample_size = int(self.indices_[0].size(0))
         capacity = int(capacity) or self.capacity
 
         if sample_size != self.expected_sample_size or capacity != self.capacity:
