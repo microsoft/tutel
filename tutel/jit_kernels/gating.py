@@ -80,4 +80,4 @@ def fast_cumsum_sub_one(data, dim=0):
     raise Exception("Unimplemented fast_cumsum_sub_one() of data = %s and dim = %s" % (data.size(), dim))
   if not data.is_cuda:
     return torch_cumsum_sub_one(data)
-  return get_cumsum_kernel(data.size(0), data.size(1))(data)
+  return get_cumsum_kernel(int(data.size(0)), int(data.size(1)))(data)
