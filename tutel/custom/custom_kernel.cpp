@@ -298,10 +298,8 @@ static int g_local_rank = 0;
 // jit
 static int mem_stride_copy_char_fd = -1;
 static int mem_stride_copy_uint4_fd = -1;
-// TODO: cuOccupancyMaxPotentialBlockSize in jit
-// for A100 only currently
-static dim3 mem_stride_copy_gridsize(216);
-static dim3 mem_stride_copy_blocksize(1024);
+static int mem_stride_copy_gridsize = 1;
+static int mem_stride_copy_blocksize = 1;
 
 static size_t get_nccl_unique_id_size() {
   return sizeof(ncclUniqueId);
@@ -343,7 +341,7 @@ static void init_nccl(
   CHECK_EQ(0, ncclCommCuDevice(g_nccl_comm, &g_local_rank));
 
   // jit for nccl
-  if (!mem_stride_copy_char_fd || !mem_stride_copy_uint4_fd) {
+  if (mem_stride_copy_uint4_fd == -1) {
     std::string mem_stride_copy_cu = R"(
 extern "C" __global__ void memStrideCopyKernel(
     $T *__restrict__ out, const $T *__restrict__ in,
@@ -360,6 +358,8 @@ extern "C" __global__ void memStrideCopyKernel(
     mem_stride_copy_uint4_fd = jit::inject_source(std::regex_replace(mem_stride_copy_cu, std::regex("\\$T"), "uint4"));
     CHECK_NE(-1, mem_stride_copy_char_fd);
     CHECK_NE(-1, mem_stride_copy_uint4_fd);
+    CUfunction hfunc = jit::jit_activate(mem_stride_copy_uint4_fd, g_local_rank);
+    CHECK_EQ(0, cuOccupancyMaxPotentialBlockSize(&mem_stride_copy_gridsize, &mem_stride_copy_blocksize, hfunc, 0, 0, 0));
   }
 }
 
