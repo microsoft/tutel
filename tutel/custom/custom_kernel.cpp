@@ -10,6 +10,7 @@
 #include <nccl.h>
 #endif
 
+#include <regex>
 #include <vector>
 #include <pwd.h>
 #include <sys/wait.h>
@@ -143,7 +144,7 @@ struct ModuleConfig {
 
 static std::vector<ModuleConfig> _gms;
 
-static void jit_execute(const std::vector<const void*> &ppargs, int fd, int dev, const dim3 &blocks, const dim3 &threads) {
+static void jit_execute(const std::vector<const void*> &ppargs, int fd, int dev, const dim3 &blocks, const dim3 &threads, cudaStream_t stream = 0) {
   auto &gm = _gms[fd];
   if (gm.hFunc.size() <= dev)
     gm.hFunc.resize(dev + 1);
@@ -185,7 +186,7 @@ static void jit_execute(const std::vector<const void*> &ppargs, int fd, int dev,
     CHECK_NE(nullptr, gm.hFunc[dev]);
   }
 
-  CHECK_EQ(0, cuLaunchKernel(gm.hFunc[dev], blocks.x, blocks.y, blocks.z, threads.x, threads.y, threads.z, 0, nullptr, (void**)ppargs.data(), nullptr));
+  CHECK_EQ(0, cuLaunchKernel(gm.hFunc[dev], blocks.x, blocks.y, blocks.z, threads.x, threads.y, threads.z, 0, stream, (void**)ppargs.data(), nullptr));
 }
 
 static int inject_source(const std::string &headless_code) {
@@ -297,11 +298,6 @@ template<typename dtype> static void invoke_cpu(const std::vector<torch::Tensor>
 
 #if defined(USE_NCCL)
 
-cudaError_t memStrideCopy(
-    void* dst, const void* src, const size_t slice_size,
-    const size_t height, const size_t width,
-    cudaStream_t stream);
-
 static ncclComm_t g_nccl_comm;
 static std::vector<at::cuda::CUDAEvent> g_cuda_events;
 static int g_num_split = 0;
@@ -309,6 +305,12 @@ static int g_world_size = 0;
 static int g_world_rank = 0;
 static int g_local_size = 0;
 static int g_local_rank = 0;
+
+// jit
+static int mem_stride_copy_char_fd = 0;
+static int mem_stride_copy_uint4_fd = 0;
+static dim3 mem_stride_copy_gridsize(216);
+static dim3 mem_stride_copy_blocksize(1024);
 
 static size_t get_nccl_unique_id_size() {
   return sizeof(ncclUniqueId);
@@ -348,6 +350,24 @@ static void init_nccl(
     CHECK_EQ(0, cudaGetDeviceCount(&g_local_size));
   }
   CHECK_EQ(0, ncclCommCuDevice(g_nccl_comm, &g_local_rank));
+
+  // jit for nccl
+  if (!mem_stride_copy_char_fd || mem_stride_copy_uint4_fd) {
+    std::string mem_stride_copy_cu = R"(
+extern "C" __global__ void memStrideCopyKernel(
+    $T *__restrict__ out, const $T *__restrict__ in,
+    const size_t size, const int height, const int width) {
+    const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    for (size_t i = tid; i < size * height * width; i += gridDim.x * blockDim.x) {
+        const size_t index = i / size, offset = i % size;
+        const size_t j = (width * (index % height) + (index / height)) * size + offset;
+        out[j] = in[i];
+    }
+}
+    )";
+    mem_stride_copy_char_fd = jit::inject_source(std::regex_replace(mem_stride_copy_cu, std::regex("\\$T"), "char"));
+    mem_stride_copy_uint4_fd = jit::inject_source(std::regex_replace(mem_stride_copy_cu, std::regex("\\$T"), "uint4"));
+  }
 }
 
 static at::cuda::CUDAStream& get_default_stream() {
@@ -514,6 +534,7 @@ static void all_to_all_async(torch::Tensor &output, torch::Tensor &input, const 
   size_t length = input.nbytes();
   CHECK_EQ(0, length % g_world_size);
   size_t slice_size = length / g_world_size;
+  size_t slice_size_uint4 = slice_size / sizeof(uint4);
 
   int nranks = g_world_size, ngpus = g_local_size;
   CHECK_EQ(0, nranks % ngpus);
@@ -523,7 +544,13 @@ static void all_to_all_async(torch::Tensor &output, torch::Tensor &input, const 
   if (algo && !strcmp(algo, "2D")) {
     int node_rank = g_world_rank / ngpus, local_rank = g_local_rank;
     // phase 0. per-gpu (ngpus) stride copy
-    CHECK_EQ(0, memStrideCopy(recvbuff, sendbuff, slice_size, ngpus, nnodes, stream));
+    slice_size < sizeof(uint4)
+      ? jit::jit_execute(
+        {&recvbuff, &sendbuff, &slice_size, &ngpus, &nnodes}, mem_stride_copy_char_fd,
+        input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, stream)
+      : jit::jit_execute(
+        {&recvbuff, &sendbuff, &slice_size_uint4, &ngpus, &nnodes}, mem_stride_copy_uint4_fd,
+        input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, stream);
     // phase 1. intra-node alltoall
     CHECK_EQ(0, ncclGroupStart());
     for (int g = 0; g < ngpus; g++) {
@@ -532,7 +559,11 @@ static void all_to_all_async(torch::Tensor &output, torch::Tensor &input, const 
     }
     CHECK_EQ(0, ncclGroupEnd());
     // phase 2. per-gpu (nnodes) stride copy
-    CHECK_EQ(0, memStrideCopy(recvbuff, sendbuff, slice_size, nnodes, ngpus, stream));
+    slice_size < sizeof(uint4)
+      ? jit::jit_execute({&recvbuff, &sendbuff, &slice_size, &nnodes, &ngpus}, mem_stride_copy_char_fd,
+      input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, stream)
+      : jit::jit_execute({&recvbuff, &sendbuff, &slice_size_uint4, &nnodes, &ngpus}, mem_stride_copy_uint4_fd,
+      input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, stream);
     // phase 3. inter-node alltoall
     CHECK_EQ(0, ncclGroupStart());
     for (int n = 0; n < nnodes; n++) {

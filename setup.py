@@ -52,7 +52,7 @@ class Tester(Command):
 
 def install(use_nccl):
     ext_libs = ['dl', 'cuda', 'nvrtc'] if not IS_HIP_EXTENSION else []
-    ext_args = {'cxx': ['-Wno-sign-compare', '-Wno-unused-but-set-variable'], 'nvcc': ['-O2']}
+    ext_args = {'cxx': ['-Wno-sign-compare', '-Wno-unused-but-set-variable']}
     if use_nccl:
         if IS_HIP_EXTENSION:
             ext_libs += ['rccl']
@@ -103,7 +103,6 @@ def install(use_nccl):
         ext_modules=[
             CUDAExtension('tutel_custom_kernel', [
                 './tutel/custom/custom_kernel.cpp',
-                './tutel/custom/mem_copy_kernel.cu',
             ],
             library_dirs=['/usr/local/cuda/lib64/stubs'],
             libraries=ext_libs,
