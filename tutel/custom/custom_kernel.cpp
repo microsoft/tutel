@@ -197,7 +197,7 @@ static int inject_source(const std::string &headless_code) {
 #if !defined(__HIP_PLATFORM_HCC__)
   gm.code = "#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n" + headless_code;
 #else
-  gm.code = "#include <hip/hip_runtime.h>\n#include <hip/hip_fp16.h>\n" + headless_code;
+  gm.code = "#include <hip/hip_runtime.h>\n" + headless_code;
 #endif
 
   const char *source = headless_code.c_str();
