@@ -309,6 +309,8 @@ static int g_local_rank = 0;
 // jit
 static int mem_stride_copy_char_fd = -1;
 static int mem_stride_copy_uint4_fd = -1;
+// TODO: cuOccupancyMaxPotentialBlockSize in jit
+// for A100 only currently
 static dim3 mem_stride_copy_gridsize(216);
 static dim3 mem_stride_copy_blocksize(1024);
 
@@ -541,9 +543,8 @@ static void all_to_all_async(torch::Tensor &output, torch::Tensor &input, const 
   int nranks = g_world_size, ngpus = g_local_size;
   CHECK_EQ(0, nranks % ngpus);
   int nnodes = nranks / ngpus;
-  if (ngpus == 1 || nnodes == 1) goto linear;
 
-  if (algo && !strcmp(algo, "2D")) {
+  if (algo && !strcmp(algo, "2D") && !(ngpus == 1 || nnodes == 1)) {
     int node_rank = g_world_rank / ngpus, local_rank = g_local_rank;
     // phase 0. per-gpu (ngpus) stride copy
     slice_size < sizeof(uint4)
@@ -575,7 +576,6 @@ static void all_to_all_async(torch::Tensor &output, torch::Tensor &input, const 
     CHECK_EQ(0, ncclGroupEnd());
     CHECK_EQ(0, cudaMemcpyAsync(recvbuff, sendbuff, nranks * slice_size, cudaMemcpyDeviceToDevice, stream));
   } else {
-linear:
     CHECK_EQ(0, ncclGroupStart());
     for (int r = 0; r < nranks; r++) {
       CHECK_EQ(0, ncclSend(((char*)sendbuff) + r * slice_size, slice_size, ncclInt8, r, g_nccl_comm, stream));
