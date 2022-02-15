@@ -1,12 +1,18 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
+import contextlib
+import io
+import itertools
 import json
-import unittest
+import math
 import os
-import sys, subprocess
+import subprocess
+import unittest
+from unittest.mock import patch
 
 import GPUtil
+
 
 class HelloworldCaller():
     """A class for run tutel helloworld example with different arguments"""
@@ -147,3 +153,35 @@ class TutelTestCase(unittest.TestCase):
             self.tutelCaller.run(nproc_per_node=2, helloworld_file='helloworld', top=2, dtype='float64', num_local_experts=2, show_step_time=False, batch_size=1, a2a_ffn_overlap_degree=1),
             self.tutelCaller.run(nproc_per_node=2, helloworld_file='helloworld', top=2, dtype='float64', num_local_experts=2, show_step_time=False, batch_size=1, a2a_ffn_overlap_degree=2)
             )
+
+    def test_a2a_algos(self):
+        def get_loss_and_step_time(args):
+            with contextlib.redirect_stdout(io.StringIO()) as f:
+                loss = self.tutelCaller.run(**args)
+            step_time = float(f.getvalue().strip().split()[-1])
+            return loss, step_time
+
+        for nproc_per_node, dtype, num_local_experts in itertools.product(
+            [1, 2],
+            ['float32', 'float16'],
+            [1, 2],
+        ):
+            test_case = {
+                'nproc_per_node': nproc_per_node,
+                'helloworld_file': 'helloworld',
+                'top': 2,
+                'dtype': dtype,
+                'num_local_experts': num_local_experts,
+                'show_step_time': True,
+                'num_steps': 50,
+            }
+            with self.subTest(msg='Testing a2a algo with setting', test_case=test_case):
+                loss_expected, step_time_expected = get_loss_and_step_time(test_case)
+                for algo in ['LINEAR', '2D']:
+                    with patch.dict('os.environ', {
+                        'TUTEL_ALLTOALL_ALGO': algo,
+                        'LOCAL_SIZE': str(nproc_per_node),
+                    }):
+                        loss, step_time = get_loss_and_step_time(test_case)
+                        self.assertEqual(loss, loss_expected)
+                        self.assertTrue(math.isclose(step_time, step_time_expected, rel_tol=0.01, abs_tol=0.01))

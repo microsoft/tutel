@@ -10,6 +10,7 @@
 #include <nccl.h>
 #endif
 
+#include <regex>
 #include <vector>
 #include <pwd.h>
 #include <sys/wait.h>
@@ -143,7 +144,7 @@ struct ModuleConfig {
 
 static std::vector<ModuleConfig> _gms;
 
-static void jit_execute(const std::vector<const void*> &ppargs, int fd, int dev, const dim3 &blocks, const dim3 &threads) {
+static void jit_execute(const std::vector<const void*> &ppargs, int fd, int dev, const dim3 &blocks, const dim3 &threads, cudaStream_t stream = 0) {
   auto &gm = _gms[fd];
   if (gm.hFunc.size() <= dev)
     gm.hFunc.resize(dev + 1);
@@ -185,7 +186,7 @@ static void jit_execute(const std::vector<const void*> &ppargs, int fd, int dev,
     CHECK_NE(nullptr, gm.hFunc[dev]);
   }
 
-  CHECK_EQ(0, cuLaunchKernel(gm.hFunc[dev], blocks.x, blocks.y, blocks.z, threads.x, threads.y, threads.z, 0, nullptr, (void**)ppargs.data(), nullptr));
+  CHECK_EQ(0, cuLaunchKernel(gm.hFunc[dev], blocks.x, blocks.y, blocks.z, threads.x, threads.y, threads.z, 0, stream, (void**)ppargs.data(), nullptr));
 }
 
 static int inject_source(const std::string &headless_code) {
@@ -196,7 +197,7 @@ static int inject_source(const std::string &headless_code) {
 #if !defined(__HIP_PLATFORM_HCC__)
   gm.code = "#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n" + headless_code;
 #else
-  gm.code = "#include <hip/hip_runtime.h>\n#include <hip/hip_fp16.h>\n" + headless_code;
+  gm.code = "#include <hip/hip_runtime.h>\n" + headless_code;
 #endif
 
   const char *source = headless_code.c_str();
@@ -301,6 +302,17 @@ static ncclComm_t g_nccl_comm;
 static std::vector<at::cuda::CUDAEvent> g_cuda_events;
 static int g_num_split = 0;
 static int g_world_size = 0;
+static int g_world_rank = 0;
+static int g_local_size = 0;
+static int g_local_rank = 0;
+
+// jit
+static int mem_stride_copy_char_fd = -1;
+static int mem_stride_copy_uint4_fd = -1;
+// TODO: cuOccupancyMaxPotentialBlockSize in jit
+// for A100 only currently
+static dim3 mem_stride_copy_gridsize(216);
+static dim3 mem_stride_copy_blocksize(1024);
 
 static size_t get_nccl_unique_id_size() {
   return sizeof(ncclUniqueId);
@@ -332,6 +344,39 @@ static void init_nccl(
   g_num_split = num_split;
   g_cuda_events.resize(num_split);
   g_world_size = world_size;
+  g_world_rank = world_rank;
+
+  if (const char* local_size = std::getenv("LOCAL_SIZE")) {
+    g_local_size = std::atoi(local_size);
+  } else {
+    CHECK_EQ(0, cudaGetDeviceCount(&g_local_size));
+  }
+  CHECK_EQ(0, ncclCommCuDevice(g_nccl_comm, &g_local_rank));
+
+  // jit for nccl
+  if (!mem_stride_copy_char_fd || !mem_stride_copy_uint4_fd) {
+    std::string mem_stride_copy_cu = R"(
+extern "C" __global__ void memStrideCopyKernel(
+    $T *__restrict__ out, const $T *__restrict__ in,
+    const size_t size, const int height, const int width) {
+    const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    for (size_t i = tid; i < size * height * width; i += gridDim.x * blockDim.x) {
+        const size_t index = i / size, offset = i % size;
+        const size_t j = (width * (index % height) + (index / height)) * size + offset;
+        out[j] = in[i];
+    }
+}
+    )";
+    mem_stride_copy_char_fd = jit::inject_source(std::regex_replace(mem_stride_copy_cu, std::regex("\\$T"), "char"));
+    mem_stride_copy_uint4_fd = jit::inject_source(std::regex_replace(mem_stride_copy_cu, std::regex("\\$T"), "uint4"));
+    CHECK_NE(-1, mem_stride_copy_char_fd);
+    CHECK_NE(-1, mem_stride_copy_uint4_fd);
+  }
+}
+
+static at::cuda::CUDAStream& get_default_stream() {
+  static at::cuda::CUDAStream default_stream = at::cuda::getDefaultCUDAStream();
+  return default_stream;
 }
 
 static at::cuda::CUDAStream& get_nccl_stream() {
@@ -481,6 +526,65 @@ static torch::Tensor nccl_all_to_all_gather_async(
   return output;
 }
 
+static void all_to_all_async(torch::Tensor &output, torch::Tensor &input, const char *algo) {
+  CHECK_CUDA(output);
+  CHECK_CUDA(input);
+  CHECK_CONTIGUOUS(output);
+  CHECK_CONTIGUOUS(input);
+  auto recvbuff = (void*)output.data_ptr();
+  auto sendbuff = (void*)input.data_ptr();
+  cudaStream_t stream = get_default_stream().stream();
+
+  size_t length = input.nbytes();
+  CHECK_EQ(0, length % g_world_size);
+  size_t slice_size = length / g_world_size;
+  size_t slice_size_uint4 = slice_size / sizeof(uint4);
+
+  int nranks = g_world_size, ngpus = g_local_size;
+  CHECK_EQ(0, nranks % ngpus);
+  int nnodes = nranks / ngpus;
+
+  if (algo && !strcmp(algo, "2D") && !(ngpus == 1 || nnodes == 1)) {
+    int node_rank = g_world_rank / ngpus, local_rank = g_local_rank;
+    // phase 0. per-gpu (ngpus) stride copy
+    slice_size < sizeof(uint4)
+      ? jit::jit_execute(
+        {&recvbuff, &sendbuff, &slice_size, &ngpus, &nnodes}, mem_stride_copy_char_fd,
+        input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, stream)
+      : jit::jit_execute(
+        {&recvbuff, &sendbuff, &slice_size_uint4, &ngpus, &nnodes}, mem_stride_copy_uint4_fd,
+        input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, stream);
+    // phase 1. intra-node alltoall
+    CHECK_EQ(0, ncclGroupStart());
+    for (int g = 0; g < ngpus; g++) {
+      CHECK_EQ(0, ncclSend(((char*)recvbuff) + g * nnodes * slice_size, nnodes * slice_size, ncclInt8, g + node_rank * ngpus, g_nccl_comm, stream));
+      CHECK_EQ(0, ncclRecv(((char*)sendbuff) + g * nnodes * slice_size, nnodes * slice_size, ncclInt8, g + node_rank * ngpus, g_nccl_comm, stream));
+    }
+    CHECK_EQ(0, ncclGroupEnd());
+    // phase 2. per-gpu (nnodes) stride copy
+    slice_size < sizeof(uint4)
+      ? jit::jit_execute({&recvbuff, &sendbuff, &slice_size, &nnodes, &ngpus}, mem_stride_copy_char_fd,
+      input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, stream)
+      : jit::jit_execute({&recvbuff, &sendbuff, &slice_size_uint4, &nnodes, &ngpus}, mem_stride_copy_uint4_fd,
+      input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, stream);
+    // phase 3. inter-node alltoall
+    CHECK_EQ(0, ncclGroupStart());
+    for (int n = 0; n < nnodes; n++) {
+      CHECK_EQ(0, ncclSend(((char*)recvbuff) + n * ngpus * slice_size, ngpus * slice_size, ncclInt8, n * ngpus + local_rank, g_nccl_comm, stream));
+      CHECK_EQ(0, ncclRecv(((char*)sendbuff) + n * ngpus * slice_size, ngpus * slice_size, ncclInt8, n * ngpus + local_rank, g_nccl_comm, stream));
+    }
+    CHECK_EQ(0, ncclGroupEnd());
+    CHECK_EQ(0, cudaMemcpyAsync(recvbuff, sendbuff, nranks * slice_size, cudaMemcpyDeviceToDevice, stream));
+  } else {
+    CHECK_EQ(0, ncclGroupStart());
+    for (int r = 0; r < nranks; r++) {
+      CHECK_EQ(0, ncclSend(((char*)sendbuff) + r * slice_size, slice_size, ncclInt8, r, g_nccl_comm, stream));
+      CHECK_EQ(0, ncclRecv(((char*)recvbuff) + r * slice_size, slice_size, ncclInt8, r, g_nccl_comm, stream));
+    }
+    CHECK_EQ(0, ncclGroupEnd());
+  }
+}
+
 #endif
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -528,6 +632,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("nccl_all_to_all_gather_async",
         &nccl_all_to_all_gather_async,
         "NCCL AllToAll (Gather Async)"
+    );
+    m.def("all_to_all_async",
+        &all_to_all_async,
+        "AllToAll (Async, will modify input if algo is 2D)"
     );
 #endif
 }
