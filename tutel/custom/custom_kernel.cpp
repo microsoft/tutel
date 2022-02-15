@@ -307,8 +307,8 @@ static int g_local_size = 0;
 static int g_local_rank = 0;
 
 // jit
-static int mem_stride_copy_char_fd = 0;
-static int mem_stride_copy_uint4_fd = 0;
+static int mem_stride_copy_char_fd = -1;
+static int mem_stride_copy_uint4_fd = -1;
 static dim3 mem_stride_copy_gridsize(216);
 static dim3 mem_stride_copy_blocksize(1024);
 
@@ -367,6 +367,8 @@ extern "C" __global__ void memStrideCopyKernel(
     )";
     mem_stride_copy_char_fd = jit::inject_source(std::regex_replace(mem_stride_copy_cu, std::regex("\\$T"), "char"));
     mem_stride_copy_uint4_fd = jit::inject_source(std::regex_replace(mem_stride_copy_cu, std::regex("\\$T"), "uint4"));
+    CHECK_NE(-1, mem_stride_copy_char_fd);
+    CHECK_NE(-1, mem_stride_copy_uint4_fd);
   }
 }
 
