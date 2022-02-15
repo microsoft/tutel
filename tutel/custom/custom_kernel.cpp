@@ -35,7 +35,7 @@
 
 namespace jit {
 
-static std::string file_read(const char *path) {
+inline static std::string file_read(const char *path) {
   FILE *fp = fopen(path, "rb");
   CHECK_EQ(true, fp != nullptr);
   fseek(fp, 0, SEEK_END);
@@ -48,14 +48,14 @@ static std::string file_read(const char *path) {
   return code;
 }
 
-static void file_write(const char *path, const std::string &code) {
+inline static void file_write(const char *path, const std::string &code) {
   FILE *fp = fopen(path, "wb");
   CHECK_EQ(true, fp != nullptr);
   CHECK_EQ(code.size(), fwrite((void*)code.data(), 1, code.size(), fp));
   fclose(fp);
 }
 
-static std::string get_cache_path() {
+inline static std::string get_cache_path() {
   char *home_path;
   struct stat st = {0};
   if ((home_path = getenv("HOME")) == NULL) {
@@ -138,13 +138,13 @@ static std::string nvrtc_compile(const char* code, const std::string &arch) {
 struct ModuleConfig {
   // Handling JIT compilation in Multi-gpu cases
   std::vector<CUfunction> hFunc;
-  std::string code;
+  std::string code, fname;
   dim3 blocks, threads;
 };
 
 static std::vector<ModuleConfig> _gms;
 
-static void jit_execute(const std::vector<const void*> &ppargs, int fd, int dev, const dim3 &blocks, const dim3 &threads, cudaStream_t stream = 0) {
+inline static CUfunction jit_activate(int fd, int dev) {
   auto &gm = _gms[fd];
   if (gm.hFunc.size() <= dev)
     gm.hFunc.resize(dev + 1);
@@ -182,11 +182,17 @@ static void jit_execute(const std::vector<const void*> &ppargs, int fd, int dev,
     pos += 6; CHECK_NE(nullptr, (tail = strchr(pos, '(')));
 
     std::string fname = std::string(pos, tail - pos);
+    gm.fname = fname;
     CHECK_EQ(0, cuModuleGetFunction(&gm.hFunc[dev], hMod, fname.c_str()));
     CHECK_NE(nullptr, gm.hFunc[dev]);
   }
 
-  CHECK_EQ(0, cuLaunchKernel(gm.hFunc[dev], blocks.x, blocks.y, blocks.z, threads.x, threads.y, threads.z, 0, stream, (void**)ppargs.data(), nullptr));
+  return gm.hFunc[dev];
+}
+
+static void jit_execute(const std::vector<const void*> &ppargs, int fd, int dev, const dim3 &blocks, const dim3 &threads, cudaStream_t stream = 0) {
+  CUfunction hfunc = jit_activate(fd, dev);
+  CHECK_EQ(0, cuLaunchKernel(hfunc, blocks.x, blocks.y, blocks.z, threads.x, threads.y, threads.z, 0, stream, (void**)ppargs.data(), nullptr));
 }
 
 static int inject_source(const std::string &headless_code) {
@@ -212,23 +218,6 @@ static int inject_source(const std::string &headless_code) {
 }
 
 static void invoke(const std::vector<torch::Tensor> &ts, int fd) {
-#if 0
-  // Example:
-
-  int fd0 = jit::inject_source(R"(
-extern "C" __global__ void helloworld(float *data, int N) {
-  for (int i = blockIdx.x; i < N; i += gridDim.x)
-    data[i] = i + 1.2f;
-}
-)");
-  float *d_data, h_data[1]; int N = 1024;
-  cudaMalloc(&d_data, N * sizeof(*d_data));
-
-  jit::jit_execute({&d_data, &N}, fd0, ts[0].device().index(), dim3(4, 1, 1), dim3(1, 1, 1));
-  cudaMemcpy(h_data, d_data, sizeof(h_data), cudaMemcpyDeviceToHost);
-  cudaStreamSynchronize(nullptr);
-#endif
-
   std::vector<const void*> pargs(ts.size()), ppargs(ts.size());
   for (int i = 0; i < (int)ts.size(); ++i) {
     CHECK_CUDA(ts[i]);
@@ -237,7 +226,7 @@ extern "C" __global__ void helloworld(float *data, int N) {
 
   int dev = ts[0].device().index();
   CHECK_EQ(0, cudaSetDevice(dev));
-  jit_execute(ppargs, fd, dev, _gms[fd].blocks, _gms[fd].threads);
+  jit_execute(ppargs, fd, dev, _gms[fd].blocks, _gms[fd].threads, at::cuda::getDefaultCUDAStream().stream());
 }
 
 } // namespace jit
@@ -544,7 +533,7 @@ static void all_to_all_async(torch::Tensor &output, torch::Tensor &input, const 
   CHECK_EQ(0, nranks % ngpus);
   int nnodes = nranks / ngpus;
 
-  if (algo && !strcmp(algo, "2D") && !(ngpus == 1 || nnodes == 1)) {
+  if (!(ngpus == 1 || nnodes == 1) && algo && !strcmp(algo, "2D")) {
     int node_rank = g_world_rank / ngpus, local_rank = g_local_rank;
     // phase 0. per-gpu (ngpus) stride copy
     slice_size < sizeof(uint4)
