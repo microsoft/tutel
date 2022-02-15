@@ -121,6 +121,7 @@ class AllToAllStatus:
     scatter_tensor_shape = None
     num_split = 0
     split_dim = 0
+    algo = os.environ.get('TUTEL_ALLTOALL_ALGO', '').upper()
 
     @staticmethod
     def init(group: dist.ProcessGroup, num_split: int, split_dim: int, gather_tensor_ref: Tensor) -> None:
@@ -156,7 +157,11 @@ class AllToAll(torch.autograd.Function):
             return input
         input = input.contiguous()
         output = torch.empty_like(input)
-        dist.all_to_all_single(output, input, group=group)
+        if AllToAllStatus.algo:
+            AllToAllStatus.init(group, 1, -1, input)
+            tutel_custom_kernel.all_to_all_async(output, input, AllToAllStatus.algo)
+        else:
+            dist.all_to_all_single(output, input, group=group)
         return output
 
     @staticmethod
