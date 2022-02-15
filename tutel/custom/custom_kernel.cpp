@@ -352,7 +352,7 @@ static void init_nccl(
   CHECK_EQ(0, ncclCommCuDevice(g_nccl_comm, &g_local_rank));
 
   // jit for nccl
-  if (!mem_stride_copy_char_fd || mem_stride_copy_uint4_fd) {
+  if (!mem_stride_copy_char_fd || !mem_stride_copy_uint4_fd) {
     std::string mem_stride_copy_cu = R"(
 extern "C" __global__ void memStrideCopyKernel(
     $T *__restrict__ out, const $T *__restrict__ in,
