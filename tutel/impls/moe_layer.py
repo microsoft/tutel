@@ -18,7 +18,7 @@ import torch.nn.functional as F
 
 from ..impls.fast_dispatch import fast_dispatcher
 from ..jit_kernels.gating import fast_cumsum_sub_one
-from ..impls.communicate import PreAllreduceSum, PostAllreduceSum, get_world_size, get_world_rank, AllToAllStatus, AllToAll, AllToAllScatterAsync, AllToAllGatherAsync, CurrentStreamRelease, CurrentStreamAcquire
+from ..impls import communicate as C
 
 
 def one_hot_with_dtype(data, num_classes, dtype):
@@ -123,7 +123,7 @@ class TopKGate(torch.nn.Module):
         indices_s = [x.to(torch.int32) for x in indices_s]
 
         S, M, GE = input.size(0), input.size(1), self.num_global_experts
-        world_size = get_world_size(group)
+        world_size = C.get_world_size(group)
 
         if not hasattr(self, '_fdr'):
             capacity = self.top_k * int(self.capacity_factor * ((S + self.num_global_experts - 1) // self.num_global_experts))
@@ -136,39 +136,42 @@ class TopKGate(torch.nn.Module):
         self._fdr.update(indices_s, locations_s, gates_s, capacity=capacity)
 
         dispatched_input = self._fdr.encode(input)
-        dispatched_input = dispatched_input.repeat(sharded_count, 1)
-        dispatched_input = dispatched_input.reshape(world_size, -1, capacity, M)
-
+        # dispatched_input = dispatched_input.repeat(sharded_count, 1)
+        if sharded_count > 1:
+            dispatched_input = dispatched_input.reshape(world_size, 1, -1, M)
+        else:
+            dispatched_input = dispatched_input.reshape(world_size, -1, capacity, M)
 
         if self.a2a_ffn_overlap_degree == -1:
             expert_output = expert_fn(dispatched_input)
             expert_output = expert_output.to(input.dtype)
         elif self.a2a_ffn_overlap_degree == 1:
-            dispatched_input = AllToAll.apply(group, dispatched_input)
-
+            dispatched_input = C.AllToAll.apply(group, dispatched_input)
             expert_output = expert_fn(dispatched_input)
             expert_output = expert_output.to(input.dtype)
 
-            expert_output = AllToAll.apply(group, expert_output)
+            expert_output = C.AllToAll.apply(group, expert_output)
         else:
             split_dim = 2
 
-            AllToAllStatus.init(group, self.a2a_ffn_overlap_degree, split_dim, dispatched_input)
+            C.AllToAllStatus.init(group, self.a2a_ffn_overlap_degree, split_dim, dispatched_input)
 
-            # Implicit x.contiguous() in CurrentStreamRelease.forward() and CurrentStreamAcquire.backward()
-            dispatched_input_ready = CurrentStreamRelease.apply(dispatched_input, 0)
-            dispatched_input_scattered_after_a2a = AllToAllScatterAsync.apply(dispatched_input_ready)
+            # Implicit x.contiguous() in C.CurrentStreamRelease.forward() and C.CurrentStreamAcquire.backward()
+            dispatched_input_ready = C.CurrentStreamRelease.apply(dispatched_input, 0)
+            dispatched_input_scattered_after_a2a = C.AllToAllScatterAsync.apply(dispatched_input_ready)
 
             expert_output_scattered = [
-                CurrentStreamRelease.apply(expert_fn(CurrentStreamAcquire.apply(x, i)).to(input.dtype), i)
+                C.CurrentStreamRelease.apply(expert_fn(C.CurrentStreamAcquire.apply(x, i)).to(input.dtype), i)
                 for i, x in enumerate(dispatched_input_scattered_after_a2a)]
-            expert_output_gathered_after_a2a = AllToAllGatherAsync.apply(*expert_output_scattered)
-            expert_output = CurrentStreamAcquire.apply(expert_output_gathered_after_a2a, 0)
+            expert_output_gathered_after_a2a = C.AllToAllGatherAsync.apply(*expert_output_scattered)
+            expert_output = C.CurrentStreamAcquire.apply(expert_output_gathered_after_a2a, 0)
 
         expert_output = expert_output.reshape(-1, GE, capacity, M)
-        expert_output = torch.sum(expert_output, dim=0)
+        if expert_output.size(0) > 1:
+            expert_output = torch.sum(expert_output, dim=0)
+        expert_output = expert_output.view(GE * self._fdr.capacity, M)
 
-        result_output = self._fdr.decode(expert_output.view(GE * self._fdr.capacity, M))
+        result_output = self._fdr.decode(expert_output)
         return result_output, l_loss
 
 
@@ -192,9 +195,9 @@ class MegatronLMGate(torch.nn.Module):
         if self.l_zero is None:
             self.l_zero = torch.tensor(0, dtype=input.dtype, device=input.device)
         assert sharded_count == 1
-        gathered_input = PreAllreduceSum.apply(group, input)
+        gathered_input = C.PreAllreduceSum.apply(group, input)
         result_output = expert_fn(gathered_input)
-        result_output = PostAllreduceSum.apply(group, result_output)
+        result_output = C.PostAllreduceSum.apply(group, result_output)
         return result_output, self.l_zero
 
 
@@ -218,18 +221,22 @@ class MOELayer(torch.nn.Module):
             if not isinstance(self.num_local_experts, int):
                 self.num_local_experts = -int(1 / (self.num_local_experts + 1e-5))
 
-        num_devices = get_world_size(self.group)
+        self.ffn_zero_group = None
+        num_devices = C.get_world_size(self.group)
         if self.num_local_experts < 0:
             sharded_count = -self.num_local_experts
             assert experts['hidden_size_per_expert'] % sharded_count == 0, f"Cannot evenly divide hidden_size_per_expert ({experts['hidden_size_per_expert']}) to {sharded_count} slices."
-            assert num_devices % sharded_count == 0, f"Cannot evenly divide {num_devices} global devices by a {sharded_count}-device expert."
+            assert num_devices % sharded_count == 0, f"Cannot evenly divide {num_devices} global devices by sharded experts each of whose slice count = {sharded_count}."
             self.num_global_experts = num_devices // sharded_count
             self.num_local_experts, experts['hidden_size_per_expert'] = 1, experts['hidden_size_per_expert'] // sharded_count
             self.sharded_count = sharded_count
+            self.ffn_zero_group = C.create_groups_from_world(group_count=self.num_global_experts).model_group
         else:
             self.num_global_experts = num_devices * self.num_local_experts
-            self.sharded_count = 1
+            sharded_count = 1
+
         self.model_dim = model_dim
+        self.sharded_count = sharded_count
 
         if not isinstance(experts, dict):
             self.experts = cast(ModuleList, experts) if type(experts) == ModuleList else ModuleList(experts)
@@ -237,7 +244,6 @@ class MOELayer(torch.nn.Module):
             experts = copy.deepcopy(experts)
             if experts['type'] == 'attention':
                 experts['type'] = 'ffn'
-                experts['fc1_copies'] = experts.get('fc1_copies', 3)
                 experts['activation_fn'] = experts['attention_fn']
                 experts['hidden_size_per_expert'] = model_dim
 
@@ -265,36 +271,41 @@ class MOELayer(torch.nn.Module):
                 if fused_custom_fn is None:
                     activation_fn = experts.get('activation_fn', lambda x: F.relu(x))
                 implicit_dropout_p = experts.get('implicit_dropout_p', 0)
-                fc1_copies = experts.get('fc1_copies', 1)
 
                 class FusedExpertsNetwork(torch.nn.Module):
-                    def __init__(self, model_dim, hidden_size, local_experts):
+                    def __init__(self, model_dim, hidden_size, local_experts, ffn_zero_group):
                         super().__init__()
                         self.skip_expert = (int(os.environ.get('SKIP_EXPERT', '0')) != 0)
 
-                        fc1_weight = torch.empty(1, local_experts, model_dim, hidden_size * fc1_copies)
+                        fc1_weight = torch.empty(1, local_experts, hidden_size, model_dim)
                         fc2_weight = torch.empty(1, local_experts, hidden_size, model_dim)
-                        fc1_bias = torch.empty(1, local_experts, 1, hidden_size * fc1_copies)
-                        fc2_bias = torch.empty(1, local_experts, 1, model_dim)
+                        fc1_bias = torch.empty(1, local_experts, 1, hidden_size)
+                        fc2_bias = torch.empty(1, local_experts, 1, (model_dim + sharded_count - 1) // sharded_count)
 
                         for i in range(local_experts):
-                            fc1 = torch.nn.Linear(model_dim, hidden_size * fc1_copies)
+                            fc1 = torch.nn.Linear(model_dim, hidden_size)
                             fc2 = torch.nn.Linear(hidden_size, model_dim)
-                            fc1_weight[0, i, :, :], fc1_bias[0, i, :, :] = fc1.weight.t(), fc1.bias
-                            fc2_weight[0, i, :, :], fc2_bias[0, i, :, :] = fc2.weight.t(), fc2.bias
+                            fc1_weight[0, i, :, :], fc1_bias[0, i, :, :] = fc1.weight, fc1.bias
+                            fc2_weight[0, i, :, :], fc2_bias[0, i, :, :] = fc2.weight.t(), fc2.bias[:fc2_bias.size(-1)]
 
                         self.model_dim, self.hidden_size, self.local_experts = model_dim, hidden_size, local_experts
-
-                        if self.local_experts == 1:
-                            fc1_weight = fc1_weight.view(self.model_dim, self.hidden_size * fc1_copies)
+                        self.ffn_zero_group = ffn_zero_group
+                        if self.ffn_zero_group is not None:
+                            assert self.local_experts == 1
+                            fc1_weight = fc1_weight.view(self.hidden_size, self.model_dim)
                             fc2_weight = fc2_weight.view(self.hidden_size, self.model_dim)
-                            fc1_bias = fc1_bias.view(1, self.hidden_size * fc1_copies)
-                            fc2_bias = fc2_bias.view(1, self.model_dim)
+                            fc1_bias = fc1_bias.view(self.hidden_size)
+                            fc2_bias = fc2_bias.view(-1)
+                        elif self.local_experts == 1:
+                            fc1_weight = fc1_weight.view(self.hidden_size, self.model_dim)
+                            fc2_weight = fc2_weight.view(self.hidden_size, self.model_dim)
+                            fc1_bias = fc1_bias.view(self.hidden_size)
+                            fc2_bias = fc2_bias.view(-1)
                         else:
-                            fc1_weight = fc1_weight.view(self.local_experts, self.model_dim, self.hidden_size * fc1_copies)
+                            fc1_weight = fc1_weight.view(self.local_experts, self.hidden_size, self.model_dim)
                             fc2_weight = fc2_weight.view(self.local_experts, self.hidden_size, self.model_dim)
-                            fc1_bias = fc1_bias.view(self.local_experts, 1, self.hidden_size * fc1_copies)
-                            fc2_bias = fc2_bias.view(self.local_experts, 1, self.model_dim)
+                            fc1_bias = fc1_bias.view(self.local_experts, 1, self.hidden_size)
+                            fc2_bias = fc2_bias.view(self.local_experts, 1, -1)
 
                         self.register_parameter(name='fc1_weight', param=torch.nn.Parameter(fc1_weight))
                         self.register_parameter(name='fc2_weight', param=torch.nn.Parameter(fc2_weight))
@@ -308,28 +319,38 @@ class MOELayer(torch.nn.Module):
                             self.dropout_fc1 = self.dropout_fc2 = lambda x: x
 
                     def extra_repr(self):
-                        return 'model_dim=%d, hidden_size=%d, local_experts=%d, bias=%s, fc1_copies=%d' % (self.model_dim, self.hidden_size, self.local_experts, self.fc1_bias is not None, fc1_copies)
+                        return 'model_dim=%d, hidden_size=%d, local_experts=%d, bias=%s' % (self.model_dim, self.hidden_size, self.local_experts, self.fc1_bias is not None)
 
                     def forward(self, x):
                         if self.skip_expert:
                             return x
                         if fused_custom_fn is not None:
-                            x = fused_custom_fn(self, x)
-                        elif self.local_experts == 1:
+                            return fused_custom_fn(self, x)
+
+                        fc1_weight, fc2_weight, fc1_bias, fc2_bias = self.fc1_weight, self.fc2_weight, self.fc1_bias, self.fc2_bias
+                        if self.ffn_zero_group is not None:
+                            fc1_weight = C.PreAllreduceSum.apply(self.ffn_zero_group, self.fc1_weight)
+                            fc2_weight = C.PreAllreduceSum.apply(self.ffn_zero_group, self.fc2_weight)
+                            fc1_bias = C.PreAllreduceSum.apply(self.ffn_zero_group, self.fc1_bias)
+                            fc2_bias = C.PreAllreduceSum.apply(self.ffn_zero_group, self.fc2_bias)
+                            if fc2_bias.size(-1) != self.model_dim:
+                                fc2_bias = fc2_bias[:, :self.model_dim]
+
+                        if self.local_experts == 1:
                             original_shape, x = x.shape, x.view(-1, self.model_dim)
-                            x = torch.addmm(self.fc1_bias, x, self.fc1_weight)
+                            x = torch.addmm(fc1_bias.unsqueeze(0), x, fc1_weight.t())
                             x = activation_fn(x.unsqueeze(0)).squeeze(0)
                             x = self.dropout_fc1(x)
-                            x = torch.addmm(self.fc2_bias, x, self.fc2_weight)
+                            x = torch.addmm(fc2_bias.unsqueeze(0), x, fc2_weight)
                             x = self.dropout_fc2(x)
                             x = x.view(original_shape)
                         else:
                             x = x.permute(1, 0, 2, 3)
                             original_shape, x = x.shape, x.reshape(self.local_experts, -1, self.model_dim)
-                            x = torch.matmul(x, self.fc1_weight) + self.fc1_bias
+                            x = torch.matmul(x, fc1_weight.swapaxes(1, 2)) + fc1_bias
                             x = activation_fn(x)
                             x = self.dropout_fc1(x)
-                            x = torch.matmul(x, self.fc2_weight) + self.fc2_bias
+                            x = torch.matmul(x, fc2_weight) + fc2_bias
                             x = self.dropout_fc2(x)
                             x = x.reshape(self.local_experts, original_shape[1], original_shape[2], self.model_dim)
                             x = x.permute(1, 0, 2, 3)
@@ -345,7 +366,7 @@ class MOELayer(torch.nn.Module):
 
                 if seeds is not None and seeds[1] is not None:
                     torch.manual_seed(seeds[1])
-                self.experts = ModuleList([FusedExpertsNetwork(model_dim, experts['hidden_size_per_expert'], self.num_local_experts)])
+                self.experts = ModuleList([FusedExpertsNetwork(model_dim, experts['hidden_size_per_expert'], self.num_local_experts, self.ffn_zero_group)])
             else:
                 raise Exception('Builtin expert type is not recognized: %s' % experts['type'])
 
@@ -421,7 +442,7 @@ class MOELayer(torch.nn.Module):
             if reshaped_input.size(0) > self.expected_sample_size:
                 raise Exception('MoE JIT is designed to work on sample size = %s, while receiving sample size = %s (> %s)' % (self.expected_sample_size, reshaped_input.size(0), self.expected_sample_size))
             else:
-                if get_world_rank(self.group) == 0:
+                if C.get_world_rank(self.group) == 0:
                     logging.warning('MoE is initialized to keep working on sample size = %s, while receiving sample size = %s (will slow down this forward step)' % (self.expected_sample_size, reshaped_input.size(0)))
                 pad_input = torch.zeros([self.expected_sample_size, self.model_dim], dtype=reshaped_input.dtype, layout=reshaped_input.layout, device=reshaped_input.device)
                 pad_input[:reshaped_input.size(0)] = reshaped_input
