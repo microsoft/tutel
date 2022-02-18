@@ -226,8 +226,9 @@ class MOELayer(torch.nn.Module):
         num_devices = C.get_world_size(self.group)
         if self.num_local_experts < 0:
             sharded_count = -self.num_local_experts
-            assert experts['hidden_size_per_expert'] % sharded_count == 0, f"Cannot evenly divide hidden_size_per_expert ({experts['hidden_size_per_expert']}) to {sharded_count} slices."
+            assert num_devices >= sharded_count, f"Expected to use {sharded_count} devices to maintain 1 expert, while the number of global devices is only {num_devices}"
             assert num_devices % sharded_count == 0, f"Cannot evenly divide {num_devices} global devices by sharded experts each of whose slice count = {sharded_count}."
+            assert experts['hidden_size_per_expert'] % sharded_count == 0, f"Cannot evenly divide hidden_size_per_expert ({experts['hidden_size_per_expert']}) to {sharded_count} slices."
             self.num_global_experts = num_devices // sharded_count
             self.num_local_experts, experts['hidden_size_per_expert'] = 1, experts['hidden_size_per_expert'] // sharded_count
             self.sharded_count = sharded_count

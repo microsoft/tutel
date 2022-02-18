@@ -8,6 +8,10 @@ def main():
     host_rank = int(os.environ['OMPI_COMM_WORLD_RANK'])
     local_size = int(os.environ.get('LOCAL_SIZE', 1))
 
+    if 'TUTEL_ALLTOALL_ALGO' not in os.environ:
+        if host_size >= 64 and local_size >= 8:
+            os.environ['TUTEL_ALLTOALL_ALGO'] = '2D'
+
     master_addr = os.environ['MASTER_ADDR'] if host_size > 1 else 'localhost'
     master_port = int(os.environ.get('MASTER_PORT', 23232))
 

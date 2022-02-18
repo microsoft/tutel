@@ -59,8 +59,8 @@ class ExampleModel(torch.nn.Module):
         super().__init__()
 
         self._moe_layer = tutel_moe.moe_layer(
-            gate_type = {'type': 'megatron'},
-            experts = {'type': 'ffn', 'hidden_size_per_expert': hidden_size * num_local_experts, 'activation_fn': lambda x: F.relu(x)},
+            gate_type = {'type': 'top', 'k': 1},
+            experts = {'type': 'ffn', 'count_per_node': -parallel_env.global_size, 'hidden_size_per_expert': hidden_size * num_local_experts * parallel_env.global_size, 'activation_fn': lambda x: F.relu(x)},
             model_dim = model_dim,
             scan_expert_func = lambda name, param: setattr(param, 'skip_allreduce', True),
             seeds = (1, dist_rank + 1, 1),
