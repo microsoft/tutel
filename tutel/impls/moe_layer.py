@@ -71,6 +71,7 @@ class TopKGate(torch.nn.Module):
         if int(os.environ.get('BATCH_PRIO', 0)) != 0:
             self.batch_prioritized_routing = True
 
+        self.is_postnorm = kwargs.get('is_postnorm', True)
         input_dropout_p = kwargs.get('input_dropout_p', 0)
         self.input_dropout = torch.nn.Dropout(p=input_dropout_p) if input_dropout_p else None
 
@@ -133,7 +134,7 @@ class TopKGate(torch.nn.Module):
 
         if self.is_ones_gate:
             gates_s = [torch.ones_like(x) for x in gates_s]
-        self._fdr.update(indices_s, locations_s, gates_s, capacity=capacity)
+        self._fdr.update(indices_s, locations_s, gates_s, capacity=capacity, is_postnorm=self.is_postnorm)
 
         dispatched_input = self._fdr.encode(input)
         # dispatched_input = dispatched_input.repeat(sharded_count, 1)
