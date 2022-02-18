@@ -151,21 +151,25 @@ class AllToAllStatus:
                 AllToAllStatus.num_split)
             AllToAllStatus.initialized = True
 
+
+def all_to_all_single(input, group=None):
+    world_size = get_world_size(group)
+    if world_size <= 1:
+        return input
+    input = input.contiguous()
+    output = torch.empty_like(input)
+    if AllToAllStatus.algo:
+        AllToAllStatus.init(group, 1, -1, input)
+        tutel_custom_kernel.all_to_all_async(output, input, AllToAllStatus.algo)
+    else:
+        dist.all_to_all_single(output, input, group=group)
+    return output
+
 class AllToAll(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor):
         ctx.group = group
-        world_size = get_world_size(group)
-        if world_size <= 1:
-            return input
-        input = input.contiguous()
-        output = torch.empty_like(input)
-        if AllToAllStatus.algo:
-            AllToAllStatus.init(group, 1, -1, input)
-            tutel_custom_kernel.all_to_all_async(output, input, AllToAllStatus.algo)
-        else:
-            dist.all_to_all_single(output, input, group=group)
-        return output
+        return all_to_all_single(input, group)
 
     @staticmethod
     def backward(ctx: Any, grad_output: Tensor):
