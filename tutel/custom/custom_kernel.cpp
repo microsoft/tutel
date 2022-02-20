@@ -359,7 +359,11 @@ extern "C" __global__ void memStrideCopyKernel(
     CHECK_NE(-1, mem_stride_copy_char_fd);
     CHECK_NE(-1, mem_stride_copy_uint4_fd);
     CUfunction hfunc = jit::jit_activate(mem_stride_copy_uint4_fd, g_local_rank);
+#if !defined(HIP_VERSION) || HIP_VERSION > 402
     CHECK_EQ(0, cuOccupancyMaxPotentialBlockSize(&mem_stride_copy_gridsize, &mem_stride_copy_blocksize, hfunc, 0, 0, 0));
+#else
+    CHECK_EQ(0, hipOccupancyMaxPotentialBlockSize(&mem_stride_copy_gridsize, &mem_stride_copy_blocksize, hfunc, 0, 0U));
+#endif
   }
 }
 
