@@ -122,7 +122,6 @@ class AllToAllStatus:
     initialized = False
     num_split = 0
     split_dim = 0
-    algo = os.environ.get('TUTEL_ALLTOALL_ALGO', '').upper()
 
     @staticmethod
     def init(group: dist.ProcessGroup, num_split: int, split_dim: int) -> None:

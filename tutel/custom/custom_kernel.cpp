@@ -529,7 +529,7 @@ static torch::Tensor nccl_all_to_all_gather_async(
   return output;
 }
 
-static torch::Tensor nccl_all_to_all_2d_async(torch::Tensor &input, const char *algo) {
+static torch::Tensor nccl_all_to_all_2d_async(torch::Tensor &input) {
   CHECK_CUDA(input);
   CHECK_CONTIGUOUS(input);
 
@@ -554,7 +554,7 @@ static torch::Tensor nccl_all_to_all_2d_async(torch::Tensor &input, const char *
   void* input_buff = (void*)input.data_ptr();
   void* tmp_output_buff = (void*)tmp_output.data_ptr();
 
-  if (!(ngpus == 1 || nnodes == 1) && algo && !strcmp(algo, "2D")) {
+  if (!(ngpus == 1 || nnodes == 1)) {
     int node_rank = g_world_rank / ngpus, local_rank = g_local_rank;
 
     // phase 0. per-gpu (ngpus) stride copy
@@ -598,8 +598,8 @@ static torch::Tensor nccl_all_to_all_2d_async(torch::Tensor &input, const char *
   } else {
     CHECK_EQ(0, ncclGroupStart());
     for (int r = 0; r < nranks; r++) {
-      CHECK_EQ(0, ncclSend(((char*)tmp_output_buff) + r * slice_size, slice_size, ncclInt8, r, g_nccl_comm, get_nccl_stream().stream()));
-      CHECK_EQ(0, ncclRecv(((char*)input_buff) + r * slice_size, slice_size, ncclInt8, r, g_nccl_comm, get_nccl_stream().stream()));
+      CHECK_EQ(0, ncclSend(((char*)input_buff) + r * slice_size, slice_size, ncclInt8, r, g_nccl_comm, get_nccl_stream().stream()));
+      CHECK_EQ(0, ncclRecv(((char*)tmp_output_buff) + r * slice_size, slice_size, ncclInt8, r, g_nccl_comm, get_nccl_stream().stream()));
     }
     CHECK_EQ(0, ncclGroupEnd());
 
