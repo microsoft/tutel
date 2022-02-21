@@ -202,8 +202,8 @@ class TopKGate(torch.nn.Module):
                     for i, x in enumerate(expert_output_scattered)]
                 expert_output = torch.cat(expert_output_gathered_after_a2a, dim=split_dim)
             else:
-                expert_output_gathered_after_a2a = AllToAllGatherAsync.apply(*expert_output_scattered)
-                expert_output = CurrentStreamAcquire.apply(expert_output_gathered_after_a2a, 0)
+                expert_output_gathered_after_a2a = C.AllToAllGatherAsync.apply(*expert_output_scattered)
+                expert_output = C.CurrentStreamAcquire.apply(expert_output_gathered_after_a2a, 0)
 
         expert_output = expert_output.reshape(-1, GE, capacity, M)
         if expert_output.size(0) > 1:
