@@ -10,6 +10,7 @@
 #include <nccl.h>
 #endif
 
+#include <regex>
 #include <vector>
 #include <pwd.h>
 #include <sys/wait.h>
@@ -34,7 +35,7 @@
 
 namespace jit {
 
-static std::string file_read(const char *path) {
+inline static std::string file_read(const char *path) {
   FILE *fp = fopen(path, "rb");
   CHECK_EQ(true, fp != nullptr);
   fseek(fp, 0, SEEK_END);
@@ -47,14 +48,14 @@ static std::string file_read(const char *path) {
   return code;
 }
 
-static void file_write(const char *path, const std::string &code) {
+inline static void file_write(const char *path, const std::string &code) {
   FILE *fp = fopen(path, "wb");
   CHECK_EQ(true, fp != nullptr);
   CHECK_EQ(code.size(), fwrite((void*)code.data(), 1, code.size(), fp));
   fclose(fp);
 }
 
-static std::string get_cache_path() {
+inline static std::string get_cache_path() {
   char *home_path;
   struct stat st = {0};
   if ((home_path = getenv("HOME")) == NULL) {
@@ -137,13 +138,13 @@ static std::string nvrtc_compile(const char* code, const std::string &arch) {
 struct ModuleConfig {
   // Handling JIT compilation in Multi-gpu cases
   std::vector<CUfunction> hFunc;
-  std::string code;
+  std::string code, fname;
   dim3 blocks, threads;
 };
 
 static std::vector<ModuleConfig> _gms;
 
-static void jit_execute(const std::vector<const void*> &ppargs, int fd, int dev, const dim3 &blocks, const dim3 &threads) {
+inline static CUfunction jit_activate(int fd, int dev) {
   auto &gm = _gms[fd];
   if (gm.hFunc.size() <= dev)
     gm.hFunc.resize(dev + 1);
@@ -181,11 +182,17 @@ static void jit_execute(const std::vector<const void*> &ppargs, int fd, int dev,
     pos += 6; CHECK_NE(nullptr, (tail = strchr(pos, '(')));
 
     std::string fname = std::string(pos, tail - pos);
+    gm.fname = fname;
     CHECK_EQ(0, cuModuleGetFunction(&gm.hFunc[dev], hMod, fname.c_str()));
     CHECK_NE(nullptr, gm.hFunc[dev]);
   }
 
-  CHECK_EQ(0, cuLaunchKernel(gm.hFunc[dev], blocks.x, blocks.y, blocks.z, threads.x, threads.y, threads.z, 0, nullptr, (void**)ppargs.data(), nullptr));
+  return gm.hFunc[dev];
+}
+
+static void jit_execute(const std::vector<const void*> &ppargs, int fd, int dev, const dim3 &blocks, const dim3 &threads, cudaStream_t stream = 0) {
+  CUfunction hfunc = jit_activate(fd, dev);
+  CHECK_EQ(0, cuLaunchKernel(hfunc, blocks.x, blocks.y, blocks.z, threads.x, threads.y, threads.z, 0, stream, (void**)ppargs.data(), nullptr));
 }
 
 static int inject_source(const std::string &headless_code) {
@@ -196,7 +203,7 @@ static int inject_source(const std::string &headless_code) {
 #if !defined(__HIP_PLATFORM_HCC__)
   gm.code = "#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n" + headless_code;
 #else
-  gm.code = "#include <hip/hip_runtime.h>\n#include <hip/hip_fp16.h>\n" + headless_code;
+  gm.code = "#include <hip/hip_runtime.h>\n" + headless_code;
 #endif
 
   const char *source = headless_code.c_str();
@@ -211,23 +218,6 @@ static int inject_source(const std::string &headless_code) {
 }
 
 static void invoke(const std::vector<torch::Tensor> &ts, int fd) {
-#if 0
-  // Example:
-
-  int fd0 = jit::inject_source(R"(
-extern "C" __global__ void helloworld(float *data, int N) {
-  for (int i = blockIdx.x; i < N; i += gridDim.x)
-    data[i] = i + 1.2f;
-}
-)");
-  float *d_data, h_data[1]; int N = 1024;
-  cudaMalloc(&d_data, N * sizeof(*d_data));
-
-  jit::jit_execute({&d_data, &N}, fd0, ts[0].device().index(), dim3(4, 1, 1), dim3(1, 1, 1));
-  cudaMemcpy(h_data, d_data, sizeof(h_data), cudaMemcpyDeviceToHost);
-  cudaStreamSynchronize(nullptr);
-#endif
-
   std::vector<const void*> pargs(ts.size()), ppargs(ts.size());
   for (int i = 0; i < (int)ts.size(); ++i) {
     CHECK_CUDA(ts[i]);
@@ -236,7 +226,7 @@ extern "C" __global__ void helloworld(float *data, int N) {
 
   int dev = ts[0].device().index();
   CHECK_EQ(0, cudaSetDevice(dev));
-  jit_execute(ppargs, fd, dev, _gms[fd].blocks, _gms[fd].threads);
+  jit_execute(ppargs, fd, dev, _gms[fd].blocks, _gms[fd].threads, at::cuda::getDefaultCUDAStream().stream());
 }
 
 } // namespace jit
@@ -310,6 +300,12 @@ static int g_world_rank = 0;
 static int g_local_size = 0;
 static int g_local_rank = 0;
 
+// jit
+static int mem_stride_copy_char_fd = -1;
+static int mem_stride_copy_uint4_fd = -1;
+static int mem_stride_copy_gridsize = 1;
+static int mem_stride_copy_blocksize = 1;
+
 static size_t get_nccl_unique_id_size() {
   return sizeof(ncclUniqueId);
 }
@@ -348,6 +344,37 @@ static void init_nccl(
     CHECK_EQ(0, cudaGetDeviceCount(&g_local_size));
   }
   CHECK_EQ(0, ncclCommCuDevice(g_nccl_comm, &g_local_rank));
+
+  // jit for nccl
+  if (mem_stride_copy_uint4_fd == -1) {
+    std::string mem_stride_copy_cu = R"(
+extern "C" __global__ void memStrideCopyKernel(
+    $T *__restrict__ out, const $T *__restrict__ in,
+    const size_t size, const int height, const int width) {
+    const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    for (size_t i = tid; i < size * height * width; i += gridDim.x * blockDim.x) {
+        const size_t index = i / size, offset = i % size;
+        const size_t j = (width * (index % height) + (index / height)) * size + offset;
+        out[j] = in[i];
+    }
+}
+    )";
+    mem_stride_copy_char_fd = jit::inject_source(std::regex_replace(mem_stride_copy_cu, std::regex("\\$T"), "char"));
+    mem_stride_copy_uint4_fd = jit::inject_source(std::regex_replace(mem_stride_copy_cu, std::regex("\\$T"), "uint4"));
+    CHECK_NE(-1, mem_stride_copy_char_fd);
+    CHECK_NE(-1, mem_stride_copy_uint4_fd);
+    CUfunction hfunc = jit::jit_activate(mem_stride_copy_uint4_fd, g_local_rank);
+#if !defined(HIP_VERSION) || HIP_VERSION > 402
+    CHECK_EQ(0, cuOccupancyMaxPotentialBlockSize(&mem_stride_copy_gridsize, &mem_stride_copy_blocksize, hfunc, 0, 0, 0));
+#else
+    CHECK_EQ(0, hipOccupancyMaxPotentialBlockSize(&mem_stride_copy_gridsize, &mem_stride_copy_blocksize, hfunc, 0, 0U));
+#endif
+  }
+}
+
+static at::cuda::CUDAStream& get_default_stream() {
+  static at::cuda::CUDAStream default_stream = at::cuda::getDefaultCUDAStream();
+  return default_stream;
 }
 
 static at::cuda::CUDAStream& get_nccl_stream() {
@@ -507,12 +534,14 @@ static torch::Tensor nccl_all_to_all_gather_async(
   return output;
 }
 
-static torch::Tensor nccl_all_to_all_2d_async(torch::Tensor &input) {
+static torch::Tensor nccl_all_to_all_2d_async(torch::Tensor &input, const char *algo) {
   CHECK_CUDA(input);
+  CHECK_CONTIGUOUS(input);
 
   size_t length = input.nbytes();
   CHECK_EQ(0, length % g_world_size);
   size_t slice_size = length / g_world_size;
+  size_t slice_size_uint4 = slice_size / sizeof(uint4);
 
   // Save original stream and switch to NCCL stream
   // Output tensors must be allocated in NCCL stream context to prevent PyTorch Caching Allocator from recycling it
@@ -522,65 +551,54 @@ static torch::Tensor nccl_all_to_all_2d_async(torch::Tensor &input) {
   // Computation stream allocator will add blocking event to nccl stream after nccl kernels
   c10::cuda::CUDACachingAllocator::recordStream(input.storage().data_ptr(), get_nccl_stream());
 
-  torch::Tensor tmp_output = torch::empty_like(input, torch::MemoryFormat::Contiguous);
-
   int nranks = g_world_size, ngpus = g_local_size;
   CHECK_EQ(0, nranks % ngpus);
   int nnodes = nranks / ngpus;
 
-  int node_rank = g_world_rank / ngpus;
-  int local_rank = g_local_rank;
-
-  // phase 0. per-gpu (ngpus) stride copy
-  CHECK_EQ(0, memStrideCopy(tmp_output.data_ptr(), input.data_ptr(), slice_size, ngpus, nnodes, get_nccl_stream().stream()));
-
-  // phase 1. intra-node alltoall
-  CHECK_EQ(0, ncclGroupStart());
-  for (int g = 0; g < ngpus; g++) {
-    CHECK_EQ(0, ncclSend(
-        ((char*)tmp_output.data_ptr()) + g * nnodes * slice_size,
-        nnodes * slice_size,
-        ncclInt8,
-        g + node_rank * ngpus,
-        g_nccl_comm,
-        get_nccl_stream().stream()));
-    CHECK_EQ(0, ncclRecv(
-        ((char*)input.data_ptr()) + g * nnodes * slice_size,
-        nnodes * slice_size,
-        ncclInt8,
-        g + node_rank * ngpus,
-        g_nccl_comm,
-        get_nccl_stream().stream()));
+  if (!(ngpus == 1 || nnodes == 1) && algo && !strcmp(algo, "2D")) {
+    int node_rank = g_world_rank / ngpus, local_rank = g_local_rank;
+    torch::Tensor tmp_output = torch::empty_like(input, torch::MemoryFormat::Contiguous);
+    // phase 0. per-gpu (ngpus) stride copy
+    slice_size < sizeof(uint4)
+      ? jit::jit_execute(
+        {&(tmp_output.data_ptr()), &(input.data_ptr()), &slice_size, &ngpus, &nnodes}, mem_stride_copy_char_fd,
+        input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, get_nccl_stream().stream());
+      : jit::jit_execute(
+        {&(tmp_output.data_ptr()), &(input.data_ptr()), &slice_size_uint4, &ngpus, &nnodes}, mem_stride_copy_uint4_fd,
+        input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, get_nccl_stream().stream());
+    // phase 1. intra-node alltoall
+    CHECK_EQ(0, ncclGroupStart());
+    for (int g = 0; g < ngpus; g++) {
+      CHECK_EQ(0, ncclSend(((char*)tmp_output.data_ptr()) + g * nnodes * slice_size, nnodes * slice_size, ncclInt8, g + node_rank * ngpus, g_nccl_comm, get_nccl_stream.stream()));
+      CHECK_EQ(0, ncclRecv(((char*)input.data_ptr()) + g * nnodes * slice_size, nnodes * slice_size, ncclInt8, g + node_rank * ngpus, g_nccl_comm, get_nccl_stream.stream()));
+    }
+    CHECK_EQ(0, ncclGroupEnd());
+    // phase 2. per-gpu (nnodes) stride copy
+    slice_size < sizeof(uint4)
+      ? jit::jit_execute(
+        {&(tmp_output.data_ptr()), &(input.data_ptr()), &slice_size, &nnodes, &ngpus}, mem_stride_copy_char_fd,
+        input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, get_nccl_stream().stream());
+      : jit::jit_execute(
+        {&(tmp_output.data_ptr()), &(input.data_ptr()), &slice_size_uint4, &nnodes, &ngpus}, mem_stride_copy_uint4_fd,
+        input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, get_nccl_stream().stream());
+    // phase 3. inter-node alltoall
+    CHECK_EQ(0, ncclGroupStart());
+    for (int n = 0; n < nnodes; n++) {
+      CHECK_EQ(0, ncclSend(((char*)tmp_output.data_ptr()) + n * ngpus * slice_size, ngpus * slice_size, ncclInt8, n * ngpus + local_rank, g_nccl_comm, get_nccl_stream.stream()));
+      CHECK_EQ(0, ncclRecv(((char*)input.data_ptr()) + n * ngpus * slice_size, ngpus * slice_size, ncclInt8, n * ngpus + local_rank, g_nccl_comm, get_nccl_stream.stream()));
+    }
+    CHECK_EQ(0, ncclGroupEnd());
+  } else {
+    CHECK_EQ(0, ncclGroupStart());
+    for (int r = 0; r < nranks; r++) {
+      CHECK_EQ(0, ncclSend(((char*)sendbuff) + r * slice_size, slice_size, ncclInt8, r, g_nccl_comm, get_nccl_stream.stream()));
+      CHECK_EQ(0, ncclRecv(((char*)recvbuff) + r * slice_size, slice_size, ncclInt8, r, g_nccl_comm, get_nccl_stream.stream()));
+    }
+    CHECK_EQ(0, ncclGroupEnd());
   }
-  CHECK_EQ(0, ncclGroupEnd());
-
-  // phase 2. per-gpu (nnodes) stride copy
-  CHECK_EQ(0, memStrideCopy(tmp_output.data_ptr(), input.data_ptr(), slice_size, nnodes, ngpus, get_nccl_stream().stream()));
-
-  // phase 3. inter-node alltoall
-  CHECK_EQ(0, ncclGroupStart());
-  for (int n = 0; n < nnodes; n++) {
-    CHECK_EQ(0, ncclSend(
-        ((char*)tmp_output.data_ptr()) + n * ngpus * slice_size,
-        ngpus * slice_size,
-        ncclInt8,
-        n * ngpus + local_rank,
-        g_nccl_comm,
-        get_nccl_stream().stream()));
-    CHECK_EQ(0, ncclRecv(
-        ((char*)input.data_ptr()) + n * ngpus * slice_size,
-        ngpus * slice_size,
-        ncclInt8,
-        n * ngpus + local_rank,
-        g_nccl_comm,
-        get_nccl_stream().stream()));
-  }
-  CHECK_EQ(0, ncclGroupEnd());
 
   // Switch to original stream
   at::cuda::setCurrentCUDAStream(original_stream);
-
-  return input;
 }
 
 #endif

@@ -13,13 +13,13 @@ import torch.distributed as dist
 
 from .jit_compiler import tutel_custom_kernel
 
-def get_world_size(group):
+def get_world_size(group=None):
     try:
         return dist.get_world_size(group)
     except:
         return 1
 
-def get_world_rank(group):
+def get_world_rank(group=None):
     try:
         return dist.get_rank(group)
     except:
@@ -28,13 +28,14 @@ def get_world_rank(group):
 
 TUTEL_GROUPING_CACHE = {}
 
-def create_groups_from_world(group_count, include_init=False):
-    backend = include_init or next(iter(TUTEL_GROUPING_CACHE))
+def create_groups_from_world(group_count, include_init=None):
+    backend = TUTEL_GROUPING_CACHE.get('', include_init)
+    if include_init:
+        assert backend == include_init, "Only 1 backend type is allowed, get: %s v.s. %s" % (backend, include_init)
+        TUTEL_GROUPING_CACHE[''] = backend
 
-    if backend not in TUTEL_GROUPING_CACHE:
-        TUTEL_GROUPING_CACHE[backend] = {}
-    if group_count in TUTEL_GROUPING_CACHE[backend]:
-        return TUTEL_GROUPING_CACHE[backend][group_count]
+    if group_count in TUTEL_GROUPING_CACHE:
+        return TUTEL_GROUPING_CACHE[group_count]
 
     try:
       if ('LOCAL_RANK' not in os.environ) and ('OMPI_COMM_WORLD_SIZE' in os.environ):
@@ -101,6 +102,8 @@ def create_groups_from_world(group_count, include_init=False):
         torch.cuda.set_device(result.local_device)
     elif backend == 'gloo':
         result.local_device = torch.device('cpu')
+    elif backend is None:
+        result.local_device = None
     else:
         raise Exception('Unsupported backend type: %s' % backend)
 
@@ -111,7 +114,7 @@ def create_groups_from_world(group_count, include_init=False):
     result.is_distributed = is_distributed
     result.dist_print = dist_print
 
-    TUTEL_GROUPING_CACHE[backend][group_count] = result
+    TUTEL_GROUPING_CACHE[group_count] = result
     return result
 
 
@@ -119,6 +122,7 @@ class AllToAllStatus:
     initialized = False
     num_split = 0
     split_dim = 0
+    algo = os.environ.get('TUTEL_ALLTOALL_ALGO', '').upper()
 
     @staticmethod
     def init(group: dist.ProcessGroup, num_split: int, split_dim: int) -> None:
@@ -144,6 +148,7 @@ class AllToAllStatus:
                 world_rank,
                 AllToAllStatus.num_split)
             AllToAllStatus.initialized = True
+
 
 class AllToAll(torch.autograd.Function):
     @staticmethod
@@ -269,6 +274,19 @@ class AllToAllGatherAsync(torch.autograd.Function):
         return tuple(tutel_custom_kernel.nccl_all_to_all_scatter_async(grad_output, ctx.input_shape, ctx.num_slices_per_split, True))
 
 
+class BwdAllreduceSum(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, group, input):
+        ctx.group = group
+        return input
+
+    @staticmethod
+    def backward(ctx, doutput):
+        dinput = torch.clone(doutput).contiguous()
+        dist.all_reduce(dinput, op=torch.distributed.ReduceOp.SUM, group=ctx.group)
+        return (None, dinput)
+
+
 class PreAllreduceSum(torch.autograd.Function):
     @staticmethod
     def forward(ctx, group, input):
@@ -280,16 +298,16 @@ class PreAllreduceSum(torch.autograd.Function):
         output = torch.empty([ctx.num_nodes, input.numel()], device=input.device, dtype=input.dtype)
         tensor_list = [x.contiguous() for x in torch.chunk(output, chunks=ctx.num_nodes, dim=0)]
         dist.all_gather(tensor_list=tensor_list, tensor=input.contiguous(), group=group)
-        output = output.view(list(input.shape[:0]) + [input.shape[0] * ctx.num_nodes] + list(input.shape[1:]))
+        output = output.view([input.shape[0] * ctx.num_nodes] + list(input.shape[1:]))
         return output
     @staticmethod
     def backward(ctx, doutput):
-        if get_world_size(ctx.group) <= 1:
+        if ctx.num_nodes <= 1:
             return (None, doutput)
         dinput = torch.empty(ctx.input_shape, device=doutput.device, dtype=doutput.dtype)
         chunks = [x.contiguous() for x in torch.chunk(doutput.view(ctx.num_nodes, -1), chunks=ctx.num_nodes, dim=0)]
         dist.reduce_scatter(output=dinput, input_list=chunks, group=ctx.group)
-        return (None, dinput)
+        return (None, dinput, None)
 
 class PostAllreduceSum(torch.autograd.Function):
     @staticmethod
