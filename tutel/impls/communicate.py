@@ -232,6 +232,8 @@ class AllToAll2DAsync(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx: Any, grad_output: Tensor) -> Tensor:
+        if not AllToAllStatus.initialized:
+            return (grad_output, None)
         return tutel_custom_kernel.nccl_all_to_all_2d_async(grad_output)
 
 class AllToAllScatterAsync(torch.autograd.Function):
