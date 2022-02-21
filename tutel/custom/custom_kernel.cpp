@@ -671,7 +671,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     );
     m.def("nccl_all_to_all_2d_async",
         &nccl_all_to_all_2d_async,
-        "NCCL AllToAll (2D Async, In-place)"
+        "NCCL AllToAll (2D Async, In-place if 2DH A2A is enabled)"
     );
 #endif
 }
