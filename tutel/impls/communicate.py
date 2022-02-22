@@ -120,14 +120,11 @@ def create_groups_from_world(group_count, include_init=None):
 
 class AllToAllStatus:
     initialized = False
-    gather_tensor_shape = None
-    scatter_tensor_shape = None
     num_split = 0
     split_dim = 0
-    algo = os.environ.get('TUTEL_ALLTOALL_ALGO', '').upper()
 
     @staticmethod
-    def init(group: dist.ProcessGroup, num_split: int, split_dim: int, gather_tensor_ref: Tensor) -> None:
+    def init(group: dist.ProcessGroup, num_split: int, split_dim: int) -> None:
         world_size = get_world_size(group)
         if world_size <= 1:
             return
@@ -142,7 +139,7 @@ class AllToAllStatus:
             nccl_unique_id = torch.zeros([nccl_unique_id_size], dtype=torch.int8).cpu()
             if world_rank == 0:
                 tutel_custom_kernel.get_nccl_unique_id(nccl_unique_id)
-            nccl_unique_id = nccl_unique_id.to(gather_tensor_ref.device)
+            nccl_unique_id = nccl_unique_id.cuda()
             dist.broadcast(nccl_unique_id, 0, group)
             tutel_custom_kernel.init_nccl(
                 nccl_unique_id.cpu(),
@@ -152,24 +149,17 @@ class AllToAllStatus:
             AllToAllStatus.initialized = True
 
 
-def all_to_all_single(input, group=None):
-    world_size = get_world_size(group)
-    if world_size <= 1:
-        return input
-    input = input.contiguous()
-    output = torch.empty_like(input)
-    if AllToAllStatus.algo:
-        AllToAllStatus.init(group, 1, -1, input)
-        tutel_custom_kernel.all_to_all_async(output, input, AllToAllStatus.algo)
-    else:
-        dist.all_to_all_single(output, input, group=group)
-    return output
-
 class AllToAll(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor):
         ctx.group = group
-        return all_to_all_single(input, group)
+        world_size = get_world_size(group)
+        if world_size <= 1:
+            return input
+        input = input.contiguous()
+        output = torch.empty_like(input)
+        dist.all_to_all_single(output, input, group=group)
+        return output
 
     @staticmethod
     def backward(ctx: Any, grad_output: Tensor):
@@ -204,6 +194,47 @@ class CurrentStreamAcquire(torch.autograd.Function):
             return (grad_output, None)
         grad_output = grad_output.contiguous()
         return (tutel_custom_kernel.current_stream_release(grad_output, ctx.idx), None)
+
+class NcclStreamRelease(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, input: Tensor, idx: int) -> Tensor:
+        if not AllToAllStatus.initialized:
+            return input
+        ctx.idx = idx
+        return tutel_custom_kernel.nccl_stream_release(input, idx)
+
+    @staticmethod
+    def backward(ctx: Any, grad_output: Tensor) -> Tensor:
+        if not AllToAllStatus.initialized:
+            return (grad_output, None)
+        return (tutel_custom_kernel.nccl_stream_acquire(grad_output, ctx.idx), None)
+
+class NcclStreamAcquire(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, input: Tensor, idx: int) -> Tensor:
+        if not AllToAllStatus.initialized:
+            return input
+        ctx.idx = idx
+        return tutel_custom_kernel.nccl_stream_acquire(input, idx)
+
+    @staticmethod
+    def backward(ctx: Any, grad_output: Tensor) -> Tensor:
+        if not AllToAllStatus.initialized:
+            return (grad_output, None)
+        return (tutel_custom_kernel.nccl_stream_release(grad_output, ctx.idx), None)
+
+class AllToAll2DAsync(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, input: Tensor) -> Tensor:
+        if not AllToAllStatus.initialized:
+            return input
+        return tutel_custom_kernel.nccl_all_to_all_2d_async(input)
+
+    @staticmethod
+    def backward(ctx: Any, grad_output: Tensor) -> Tensor:
+        if not AllToAllStatus.initialized:
+            return (grad_output, None)
+        return tutel_custom_kernel.nccl_all_to_all_2d_async(grad_output)
 
 class AllToAllScatterAsync(torch.autograd.Function):
     @staticmethod

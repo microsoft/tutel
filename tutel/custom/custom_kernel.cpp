@@ -387,6 +387,16 @@ static torch::Tensor& current_stream_acquire(torch::Tensor &tensor, int idx) {
   return tensor;
 }
 
+static torch::Tensor& nccl_stream_release(torch::Tensor &tensor, int idx) {
+  g_cuda_events[idx].record(get_nccl_stream());
+  return tensor;
+}
+
+static torch::Tensor& nccl_stream_acquire(torch::Tensor &tensor, int idx) {
+  g_cuda_events[idx].block(get_nccl_stream());
+  return tensor;
+}
+
 static std::vector<torch::Tensor> nccl_all_to_all_scatter_async(
     const torch::Tensor &input,
     torch::IntArrayRef output_size,
@@ -519,62 +529,87 @@ static torch::Tensor nccl_all_to_all_gather_async(
   return output;
 }
 
-static void all_to_all_async(torch::Tensor &output, torch::Tensor &input, const char *algo) {
-  CHECK_CUDA(output);
+static torch::Tensor nccl_all_to_all_2d_async(torch::Tensor &input) {
   CHECK_CUDA(input);
-  CHECK_CONTIGUOUS(output);
   CHECK_CONTIGUOUS(input);
-  auto recvbuff = (void*)output.data_ptr();
-  auto sendbuff = (void*)input.data_ptr();
-  cudaStream_t stream = get_default_stream().stream();
 
   size_t length = input.nbytes();
   CHECK_EQ(0, length % g_world_size);
   size_t slice_size = length / g_world_size;
   size_t slice_size_uint4 = slice_size / sizeof(uint4);
 
+  // Save original stream and switch to NCCL stream
+  // Output tensors must be allocated in NCCL stream context to prevent PyTorch Caching Allocator from recycling it
+  const at::cuda::CUDAStream& original_stream = at::cuda::getCurrentCUDAStream();
+  at::cuda::setCurrentCUDAStream(get_nccl_stream());
+
+  // Computation stream allocator will add blocking event to nccl stream after nccl kernels
+  c10::cuda::CUDACachingAllocator::recordStream(input.storage().data_ptr(), get_nccl_stream());
+
   int nranks = g_world_size, ngpus = g_local_size;
   CHECK_EQ(0, nranks % ngpus);
   int nnodes = nranks / ngpus;
 
-  if (!(ngpus == 1 || nnodes == 1) && algo && !strcmp(algo, "2D")) {
+  torch::Tensor tmp_output = torch::empty_like(input, torch::MemoryFormat::Contiguous);
+  void* input_buff = (void*)input.data_ptr();
+  void* tmp_output_buff = (void*)tmp_output.data_ptr();
+
+  if (!(ngpus == 1 || nnodes == 1)) {
     int node_rank = g_world_rank / ngpus, local_rank = g_local_rank;
+
     // phase 0. per-gpu (ngpus) stride copy
     slice_size < sizeof(uint4)
       ? jit::jit_execute(
-        {&recvbuff, &sendbuff, &slice_size, &ngpus, &nnodes}, mem_stride_copy_char_fd,
-        input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, stream)
+        {&tmp_output_buff, &input_buff, &slice_size, &ngpus, &nnodes}, mem_stride_copy_char_fd,
+        input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, get_nccl_stream().stream())
       : jit::jit_execute(
-        {&recvbuff, &sendbuff, &slice_size_uint4, &ngpus, &nnodes}, mem_stride_copy_uint4_fd,
-        input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, stream);
+        {&tmp_output_buff, &input_buff, &slice_size_uint4, &ngpus, &nnodes}, mem_stride_copy_uint4_fd,
+        input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, get_nccl_stream().stream());
+
     // phase 1. intra-node alltoall
     CHECK_EQ(0, ncclGroupStart());
     for (int g = 0; g < ngpus; g++) {
-      CHECK_EQ(0, ncclSend(((char*)recvbuff) + g * nnodes * slice_size, nnodes * slice_size, ncclInt8, g + node_rank * ngpus, g_nccl_comm, stream));
-      CHECK_EQ(0, ncclRecv(((char*)sendbuff) + g * nnodes * slice_size, nnodes * slice_size, ncclInt8, g + node_rank * ngpus, g_nccl_comm, stream));
+      CHECK_EQ(0, ncclSend(((char*)tmp_output_buff) + g * nnodes * slice_size, nnodes * slice_size, ncclInt8, g + node_rank * ngpus, g_nccl_comm, get_nccl_stream().stream()));
+      CHECK_EQ(0, ncclRecv(((char*)input_buff) + g * nnodes * slice_size, nnodes * slice_size, ncclInt8, g + node_rank * ngpus, g_nccl_comm, get_nccl_stream().stream()));
     }
     CHECK_EQ(0, ncclGroupEnd());
+
     // phase 2. per-gpu (nnodes) stride copy
     slice_size < sizeof(uint4)
-      ? jit::jit_execute({&recvbuff, &sendbuff, &slice_size, &nnodes, &ngpus}, mem_stride_copy_char_fd,
-      input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, stream)
-      : jit::jit_execute({&recvbuff, &sendbuff, &slice_size_uint4, &nnodes, &ngpus}, mem_stride_copy_uint4_fd,
-      input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, stream);
+      ? jit::jit_execute(
+        {&tmp_output_buff, &input_buff, &slice_size, &nnodes, &ngpus}, mem_stride_copy_char_fd,
+        input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, get_nccl_stream().stream())
+      : jit::jit_execute(
+        {&tmp_output_buff, &input_buff, &slice_size_uint4, &nnodes, &ngpus}, mem_stride_copy_uint4_fd,
+        input.device().index(), mem_stride_copy_gridsize, mem_stride_copy_blocksize, get_nccl_stream().stream());
+
     // phase 3. inter-node alltoall
     CHECK_EQ(0, ncclGroupStart());
     for (int n = 0; n < nnodes; n++) {
-      CHECK_EQ(0, ncclSend(((char*)recvbuff) + n * ngpus * slice_size, ngpus * slice_size, ncclInt8, n * ngpus + local_rank, g_nccl_comm, stream));
-      CHECK_EQ(0, ncclRecv(((char*)sendbuff) + n * ngpus * slice_size, ngpus * slice_size, ncclInt8, n * ngpus + local_rank, g_nccl_comm, stream));
+      CHECK_EQ(0, ncclSend(((char*)tmp_output_buff) + n * ngpus * slice_size, ngpus * slice_size, ncclInt8, n * ngpus + local_rank, g_nccl_comm, get_nccl_stream().stream()));
+      CHECK_EQ(0, ncclRecv(((char*)input_buff) + n * ngpus * slice_size, ngpus * slice_size, ncclInt8, n * ngpus + local_rank, g_nccl_comm, get_nccl_stream().stream()));
     }
     CHECK_EQ(0, ncclGroupEnd());
-    CHECK_EQ(0, cudaMemcpyAsync(recvbuff, sendbuff, nranks * slice_size, cudaMemcpyDeviceToDevice, stream));
+
+    // Switch to original stream
+    at::cuda::setCurrentCUDAStream(original_stream);
+
+    return input;
   } else {
     CHECK_EQ(0, ncclGroupStart());
     for (int r = 0; r < nranks; r++) {
-      CHECK_EQ(0, ncclSend(((char*)sendbuff) + r * slice_size, slice_size, ncclInt8, r, g_nccl_comm, stream));
-      CHECK_EQ(0, ncclRecv(((char*)recvbuff) + r * slice_size, slice_size, ncclInt8, r, g_nccl_comm, stream));
+      CHECK_EQ(0, ncclSend(((char*)input_buff) + r * slice_size, slice_size, ncclInt8, r, g_nccl_comm, get_nccl_stream().stream()));
+      CHECK_EQ(0, ncclRecv(((char*)tmp_output_buff) + r * slice_size, slice_size, ncclInt8, r, g_nccl_comm, get_nccl_stream().stream()));
     }
     CHECK_EQ(0, ncclGroupEnd());
+
+    // NCCL stream allocator will add blocking event to computation stream after computation kernels
+    c10::cuda::CUDACachingAllocator::recordStream(tmp_output.storage().data_ptr(), original_stream);
+
+    // Switch to original stream
+    at::cuda::setCurrentCUDAStream(original_stream);
+
+    return tmp_output;
   }
 }
 
@@ -618,6 +653,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         &current_stream_acquire,
         "Let current stream wait CUDA event in i-th event slot"
     );
+    m.def("nccl_stream_release",
+        &nccl_stream_release,
+        "Record CUDA event on NCCL stream to i-th event slot"
+    );
+    m.def("nccl_stream_acquire",
+        &nccl_stream_acquire,
+        "Let NCCL stream wait CUDA event in i-th event slot"
+    );
     m.def("nccl_all_to_all_scatter_async",
         &nccl_all_to_all_scatter_async,
         "NCCL AllToAll (Scatter Async)"
@@ -626,9 +669,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         &nccl_all_to_all_gather_async,
         "NCCL AllToAll (Gather Async)"
     );
-    m.def("all_to_all_async",
-        &all_to_all_async,
-        "AllToAll (Async, will modify input if algo is 2D)"
+    m.def("nccl_all_to_all_2d_async",
+        &nccl_all_to_all_2d_async,
+        "NCCL AllToAll (2D Async, In-place if 2DH A2A is enabled)"
     );
 #endif
 }
