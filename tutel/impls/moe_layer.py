@@ -76,6 +76,7 @@ class TopKGate(torch.nn.Module):
         self.input_dropout = torch.nn.Dropout(p=input_dropout_p) if input_dropout_p else None
 
         self.a2a_ffn_overlap_degree = a2a_ffn_overlap_degree
+        self.use_2d_a2a = os.environ.get('TUTEL_ALLTOALL_ALGO', '').upper() == '2D'
 
     def compute_sorted_location(self, x, importance_scores):
         sorted_x = x[importance_scores.argsort(dim=0)]
@@ -147,25 +148,62 @@ class TopKGate(torch.nn.Module):
             expert_output = expert_fn(dispatched_input)
             expert_output = expert_output.to(input.dtype)
         elif self.a2a_ffn_overlap_degree == 1:
-            dispatched_input = C.AllToAll.apply(group, dispatched_input)
+            if self.use_2d_a2a:
+                C.AllToAllStatus.init(group, 1, -1)
+                dispatched_input = \
+                    C.CurrentStreamAcquire.apply(
+                        C.NcclStreamRelease.apply(
+                            C.AllToAll2DAsync.apply(
+                                C.NcclStreamAcquire.apply(
+                                    C.CurrentStreamRelease.apply(dispatched_input, 0), 0)), 0), 0)
+            else:
+                dispatched_input = C.AllToAll.apply(group, dispatched_input)
+
             expert_output = expert_fn(dispatched_input)
             expert_output = expert_output.to(input.dtype)
 
-            expert_output = C.AllToAll.apply(group, expert_output)
+            if self.use_2d_a2a:
+                expert_output = \
+                    C.CurrentStreamAcquire.apply(
+                        C.NcclStreamRelease.apply(
+                            C.AllToAll2DAsync.apply(
+                                C.NcclStreamAcquire.apply(
+                                    C.CurrentStreamRelease.apply(expert_output, 0), 0)), 0), 0)
+            else:
+                expert_output = C.AllToAll.apply(group, expert_output)
         else:
             split_dim = 2
+            C.AllToAllStatus.init(group, self.a2a_ffn_overlap_degree, split_dim)
 
-            C.AllToAllStatus.init(group, self.a2a_ffn_overlap_degree, split_dim, dispatched_input)
-
-            # Implicit x.contiguous() in C.CurrentStreamRelease.forward() and C.CurrentStreamAcquire.backward()
-            dispatched_input_ready = C.CurrentStreamRelease.apply(dispatched_input, 0)
-            dispatched_input_scattered_after_a2a = C.AllToAllScatterAsync.apply(dispatched_input_ready)
+            # Implicit x.contiguous() in CurrentStreamRelease.forward() and CurrentStreamAcquire.backward()
+            if self.use_2d_a2a:
+                split_size = dispatched_input.shape[split_dim] // self.a2a_ffn_overlap_degree
+                dispatched_input_split = dispatched_input.split(split_size, dim=split_dim)
+                dispatched_input_scattered_after_a2a = [
+                    C.NcclStreamRelease.apply(
+                        C.AllToAll2DAsync.apply(
+                            C.NcclStreamAcquire.apply(
+                                C.CurrentStreamRelease.apply(x, i), i)), i)
+                    for i, x in enumerate(dispatched_input_split)]
+            else:
+                dispatched_input_ready = C.CurrentStreamRelease.apply(dispatched_input, 0)
+                dispatched_input_scattered_after_a2a = C.AllToAllScatterAsync.apply(dispatched_input_ready)
 
             expert_output_scattered = [
                 C.CurrentStreamRelease.apply(expert_fn(C.CurrentStreamAcquire.apply(x, i)).to(input.dtype), i)
                 for i, x in enumerate(dispatched_input_scattered_after_a2a)]
-            expert_output_gathered_after_a2a = C.AllToAllGatherAsync.apply(*expert_output_scattered)
-            expert_output = C.CurrentStreamAcquire.apply(expert_output_gathered_after_a2a, 0)
+
+            if self.use_2d_a2a:
+                expert_output_gathered_after_a2a = [
+                    C.CurrentStreamAcquire.apply(
+                        C.NcclStreamRelease.apply(
+                            C.AllToAll2DAsync.apply(
+                                C.NcclStreamAcquire.apply(x, i)), i), i)
+                    for i, x in enumerate(expert_output_scattered)]
+                expert_output = torch.cat(expert_output_gathered_after_a2a, dim=split_dim)
+            else:
+                expert_output_gathered_after_a2a = C.AllToAllGatherAsync.apply(*expert_output_scattered)
+                expert_output = C.CurrentStreamAcquire.apply(expert_output_gathered_after_a2a, 0)
 
         expert_output = expert_output.reshape(-1, GE, capacity, M)
         if expert_output.size(0) > 1:
