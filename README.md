@@ -136,14 +136,26 @@ $ python3 -m tutel.examples.helloworld_ddp --batch_size=<batch_size>
 ...
 ```
 
-### Large-scale Tutel Experiments on Azure NDv4s
+### Large-scale Tutel Experiments on Azure NDv4s (80GB)
 <p align="center">
   <img src="LargeScale_StepTime.svg" width="640" height="480" /></a>
 </p>
-                                                                      
+
+How to enable 2D algorithm:
+```shell
+$ export TUTEL_ALLTOALL_ALGO=2D && python3 -m tutel.examples.helloworld --batch_size=<batch_size>
+```
+
+### GPU Memory Usage under one NDv4 node
 <p align="center">
   <img src="GPUMemory.svg" width="640" height="342" /></a>
 </p>
+
+How to reproduce these results:
+```shell
+$ python3 -m torch.distributed.launch --nproc_per_node=8 -m tutel.examples.helloworld --batch_size=16
+$ python3 -m torch.distributed.launch --nproc_per_node=8 -m tutel.examples.helloworld_deepspeed --batch_size=16
+```
 
 ## Contributing
 
