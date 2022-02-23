@@ -137,16 +137,9 @@ $ python3 -m tutel.examples.helloworld_ddp --batch_size=<batch_size>
 ```
 
 ### Large-scale Tutel Experiments on Azure NDv4s
-<table>
-  <tr>
-    <td>
-      <img src="images/NDv4_steptime.png>
-    </td>
-    <td>
-      <img src="images/SingleNode_GPUMemory.png>
-    </td>
-  </tr>
-</table>
+<p align="center">
+  <a href=Large Scale Step Time"><img src="images/NDv4_steptime.png" /></a>
+</p>
 ## Contributing
 
 This project welcomes contributions and suggestions.  Most contributions require you to agree to a
