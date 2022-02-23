@@ -5,6 +5,10 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation.
 - Supported Framework: Pytorch (recommend: >= 1.10)
 - Supported GPUs: CUDA(fp64/fp32/fp16/bfp16), ROCm(fp64/fp32/fp16)
 
+<p align="center">
+  <img src="figure.svg" /></a>
+</p>
+
 How to setup Tutel MoE for Pytorch:
 ```
 * Recommended Pytorch:
@@ -119,15 +123,15 @@ python3 -m tutel.examples.helloworld_deepspeed --top=1 --use_tutel
 
 
 ### Single-GPU Throughput (batches/sec) with default settings on NVIDIA A100 (40GB):
-| batch-size | helloworld (top2) | helloworld_ddp (top2) | helloworld_megatron (fc) | helloworld_deepspeed (top2) |
-| :--------: | :--------: | :------------: | :-----------------: | :------------------: |
-| 8  | 672.75 | 672.24 | 970.446 | 188.27 |
-| 16 | 715.86 | 714.95 | 1024.15 | 115.43 |
-| 24 | 725.95 | 725.04 | 1041.89 | 81.02 |
-| 32 | 729.02 | 729.02 | 1058.11 | OOM |
-| 64 | 687.92 | 686.31 | 1056.00 | OOM |
-| 128 | 619.75 | 619.03 | 1059.59 | OOM |
-| 256 | 577.08 | 577.49 | 1053.93 | OOM |
+| batch-size | helloworld (top2) | helloworld_ddp (top2) | helloworld_deepspeed (top2) |
+| :--------: | :--------: | :------------: | :------------------: |
+| 8  | 672.75 | 672.24 | 188.27 |
+| 16 | 715.86 | 714.95 | 115.43 |
+| 24 | 725.95 | 725.04 | 81.02 |
+| 32 | 729.02 | 729.02 | OOM |
+| 64 | 687.92 | 686.31 | OOM |
+| 128 | 619.75 | 619.03 | OOM |
+| 256 | 577.08 | 577.49 | OOM |
 
 How to reproduce these results:
 ```shell
