@@ -49,9 +49,10 @@ How to setup Tutel MoE for Pytorch:
         $ ssh <node-ip-1> python3 -m torch.distributed.launch --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=<node-ip-0> -m tutel.examples.helloworld --batch_size=16
 
         (Method B - Tutel launcher for `Multi-Node x Multi-GPU`, requiring package `openmpi-bin`:)
-        $ mpiexec -host <node-ip-0>,<node-ip-1>,.. \
-            -x LOCAL_SIZE=8 -x MASTER_ADDR=<node-ip-0> \
-            python3 -m tutel.launcher.run -m tutel.examples.helloworld --batch_size=16
+        # << Single Node >>
+        $ mpiexec -host localhost -x LOCAL_SIZE=8 python3 -m tutel.launcher.run -m tutel.examples.helloworld --batch_size=16
+        # << Cross Nodes >>
+        $ mpiexec -host <node-ip-0>,<node-ip-1>,.. -x MASTER_ADDR=<node-ip-0> -x LOCAL_SIZE=8 python3 -m tutel.launcher.run -m tutel.examples.helloworld --batch_size=16
 
 ```
 

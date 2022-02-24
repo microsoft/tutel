@@ -27,7 +27,8 @@ class HelloworldCaller():
         batch_size=16,
         is_round=True,
         a2a_ffn_overlap_degree=1,
-        num_steps=100
+        num_steps=100,
+        use_model_parallel=False,
         ):
         # Disable NCCL SHM because it's capacity is limited in Azure pipeline
         new_env = os.environ.copy()
@@ -35,8 +36,9 @@ class HelloworldCaller():
         """Run helloworld example"""
         if helloworld_file == 'helloworld':
             command = 'python3 -m torch.distributed.launch --nproc_per_node=' + str(nproc_per_node) + ' tutel/examples/helloworld.py --top ' + str(top) + ' --dtype ' + dtype + ' --num_local_experts ' + str(num_local_experts) + ' --hidden_size ' + str(hidden_size) + ' --batch_size ' + str(batch_size) + ' --a2a_ffn_overlap_degree ' + str(a2a_ffn_overlap_degree) + ' --num_steps ' + str(num_steps)
-        if helloworld_file == 'helloworld_megatron':
-            command = 'python3 -m torch.distributed.launch --nproc_per_node=' + str(nproc_per_node) + ' tutel/examples/helloworld_megatron.py --dtype ' + dtype + ' --num_local_experts ' + str(num_local_experts) + ' --hidden_size ' + str(hidden_size) + ' --batch_size ' + str(batch_size) + ' --num_steps ' + str(num_steps)
+            if use_model_parallel:
+                command += ' --use_model_parallel'
+
         p = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=new_env)
         losses = []
         while p.poll() is None:
@@ -130,11 +132,11 @@ class TutelTestCase(unittest.TestCase):
         """Test helloworld with top2 gate, float64 dtype and 2 expert(s)."""
         self.assertEqual(self.tutelCaller.run(nproc_per_node=1, helloworld_file='helloworld', top=2, dtype='float64', num_local_experts=2, show_step_time=False, batch_size=1), self.data[8]['losses'])
 
-    def test_compare_megatron_with_tutel(self):
-        """Test helloworld_megatron and helloworld which should have same result"""
+    def test_compare_data_model_parallel(self):
+        """Test helloworld data parallel and helloworld model parallel which should have same result"""
         self.assertEqual(
-            self.tutelCaller.run(nproc_per_node=2, helloworld_file='helloworld', top=2, dtype='float32', num_local_experts=-2, show_step_time=False),
-            self.tutelCaller.run(nproc_per_node=2, helloworld_file='helloworld_megatron', dtype='float32', num_local_experts=1, hidden_size=1024, show_step_time=False)
+            self.tutelCaller.run(nproc_per_node=2, helloworld_file='helloworld', top=2, dtype='float32', num_local_experts=-2, show_step_time=False, use_model_parallel=False),
+            self.tutelCaller.run(nproc_per_node=2, helloworld_file='helloworld', top=2, dtype='float32', num_local_experts=-2, show_step_time=False, use_model_parallel=True),
             )
 
     def test_a2a_ffn_overlap(self):
@@ -184,4 +186,5 @@ class TutelTestCase(unittest.TestCase):
                     }):
                         loss, step_time = get_loss_and_step_time(test_case)
                         self.assertEqual(loss, loss_expected)
+                        print('\nsubcase(ndevs=%s, dtype=%s, local_experts=%s, algo=%s): step_time = %s (expected = %s)' % (nproc_per_node, dtype, num_local_experts, algo, step_time, step_time_expected))
                         self.assertTrue(math.isclose(step_time, step_time_expected, rel_tol=0.01, abs_tol=0.01))
