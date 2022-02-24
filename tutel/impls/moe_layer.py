@@ -76,14 +76,14 @@ class TopKGate(torch.nn.Module):
         self.input_dropout = torch.nn.Dropout(p=input_dropout_p) if input_dropout_p else None
 
         self.a2a_ffn_overlap_degree = a2a_ffn_overlap_degree
-        self.use_2d_a2a = os.environ.get('TUTEL_ALLTOALL_ALGO', '').upper() == '2D'
+        self.use_2d_a2a = (os.environ.get('TUTEL_ALLTOALL_ALGO', '').upper() == '2D' and 'LOCAL_SIZE' in os.environ)
 
     def compute_sorted_location(self, x, importance_scores):
         sorted_x = x[importance_scores.argsort(dim=0)]
         sorted_cumsum = fast_cumsum_sub_one(sorted_x) * sorted_x
         return sorted_cumsum[importance_scores.argsort(dim=0).argsort(dim=0)]
 
-    def apply_on_expert_fn(self, input, expert_fn, group, sharded_count):
+    def apply_on_expert_fn(self, input, expert_fn, group, sharded_count, use_model_parallel):
         if self.input_dropout:
             input = self.input_dropout(input)
 
@@ -138,7 +138,10 @@ class TopKGate(torch.nn.Module):
         self._fdr.update(indices_s, locations_s, gates_s, capacity=capacity, is_postnorm=self.is_postnorm)
 
         dispatched_input = self._fdr.encode(input)
-        # dispatched_input = dispatched_input.repeat(sharded_count, 1)
+
+        if use_model_parallel:
+            dispatched_input = dispatched_input.reshape(GE, -1).repeat(1, sharded_count)
+
         if sharded_count > 1:
             dispatched_input = dispatched_input.reshape(world_size, 1, -1, M)
         else:
@@ -207,37 +210,11 @@ class TopKGate(torch.nn.Module):
 
         expert_output = expert_output.reshape(-1, GE, capacity, M)
         if expert_output.size(0) > 1:
-            expert_output = torch.sum(expert_output, dim=0)
+            expert_output = torch.sum(expert_output.view(GE, -1, capacity, M), dim=1)
         expert_output = expert_output.view(GE * self._fdr.capacity, M)
 
         result_output = self._fdr.decode(expert_output)
         return result_output, l_loss
-
-
-class MegatronLMGate(torch.nn.Module):
-    """Megatron-LM Tensor Parallel over MoE Gate Type
-    """
-
-    def __init__(
-        self,
-        **kwargs,
-    ):
-        self.l_zero = None
-        self._modules = dict()
-        self._parameters = dict()
-        self._buffers = dict()
-
-    def named_parameters(self):
-        return []
-
-    def apply_on_expert_fn(self, input, expert_fn, group, sharded_count):
-        if self.l_zero is None:
-            self.l_zero = torch.tensor(0, dtype=input.dtype, device=input.device)
-        assert sharded_count == 1
-        gathered_input = C.PreAllreduceSum.apply(group, input)
-        result_output = expert_fn(gathered_input)
-        result_output = C.PostAllreduceSum.apply(group, result_output)
-        return result_output, self.l_zero
 
 
 class MOELayer(torch.nn.Module):
@@ -275,6 +252,9 @@ class MOELayer(torch.nn.Module):
             self.num_global_experts = num_devices * self.num_local_experts
             sharded_count = 1
 
+        use_model_parallel = kwargs.get('use_model_parallel', False) and sharded_count > 1
+
+        self.use_model_parallel = use_model_parallel
         self.model_dim = model_dim
         self.sharded_count = sharded_count
 
@@ -330,13 +310,8 @@ class MOELayer(torch.nn.Module):
 
                         self.model_dim, self.hidden_size, self.local_experts = model_dim, hidden_size, local_experts
                         self.ffn_zero_group = ffn_zero_group
-                        if self.ffn_zero_group is not None:
+                        if self.ffn_zero_group is not None or self.local_experts == 1:
                             assert self.local_experts == 1
-                            fc1_weight = fc1_weight.view(self.hidden_size, self.model_dim)
-                            fc2_weight = fc2_weight.view(self.hidden_size, self.model_dim)
-                            fc1_bias = fc1_bias.view(self.hidden_size)
-                            fc2_bias = fc2_bias.view(-1)
-                        elif self.local_experts == 1:
                             fc1_weight = fc1_weight.view(self.hidden_size, self.model_dim)
                             fc2_weight = fc2_weight.view(self.hidden_size, self.model_dim)
                             fc1_bias = fc1_bias.view(self.hidden_size)
@@ -369,9 +344,12 @@ class MOELayer(torch.nn.Module):
 
                         fc1_weight, fc2_weight, fc1_bias, fc2_bias = self.fc1_weight, self.fc2_weight, self.fc1_bias, self.fc2_bias
                         if self.ffn_zero_group is not None:
-                            fc1_weight = C.PreAllreduceSum.apply(self.ffn_zero_group, self.fc1_weight)
-                            fc2_weight = C.PreAllreduceSum.apply(self.ffn_zero_group, self.fc2_weight)
-                            fc1_bias = C.PreAllreduceSum.apply(self.ffn_zero_group, self.fc1_bias)
+                            if not use_model_parallel:
+                                fc1_weight = C.PreAllreduceSum.apply(self.ffn_zero_group, self.fc1_weight)
+                                fc2_weight = C.PreAllreduceSum.apply(self.ffn_zero_group, self.fc2_weight)
+                                fc1_bias = C.PreAllreduceSum.apply(self.ffn_zero_group, self.fc1_bias)
+
+                            # Specially treat fc2_bias to make hybrid data & model parallels equivalent
                             fc2_bias = C.PreAllreduceSum.apply(self.ffn_zero_group, self.fc2_bias)
                             if fc2_bias.size(-1) != self.model_dim:
                                 fc2_bias = fc2_bias[:, :self.model_dim]
@@ -381,6 +359,8 @@ class MOELayer(torch.nn.Module):
                             x = torch.addmm(fc1_bias.unsqueeze(0), x, fc1_weight.t())
                             x = activation_fn(x.unsqueeze(0)).squeeze(0)
                             x = self.dropout_fc1(x)
+                            if use_model_parallel:
+                                fc2_bias = torch.mul(fc2_bias, 1.0 / sharded_count)
                             x = torch.addmm(fc2_bias.unsqueeze(0), x, fc2_weight)
                             x = self.dropout_fc2(x)
                             x = x.view(original_shape)
@@ -434,11 +414,6 @@ class MOELayer(torch.nn.Module):
                     single_gate_type["fp32_gate"] = kwargs["fp32_gate"]
 
                 self.gates += [TopKGate(model_dim=model_dim, top_k=single_gate_type['k'], num_global_experts=self.num_global_experts, a2a_ffn_overlap_degree=a2a_ffn_overlap_degree, **single_gate_type)]
-            elif single_gate_type['type'] == 'megatron':
-                self.gates += [MegatronLMGate(**single_gate_type)]
-                assert isinstance(experts, dict), "Gate type `megatron` requires dict-type expert description."
-                assert self.num_local_experts == 1, "Gate type `megatron` requires `count_per_node` == 1 in expert attributions."
-                assert experts['type'] == 'ffn', "Gate type `megatron` requires `type` == `ffn` in expert attributions."
             else:
                 raise Exception("Unrecognized gate_type: %s" % single_gate_type)
 
@@ -489,7 +464,7 @@ class MOELayer(torch.nn.Module):
                 reshaped_input = pad_input
 
         reshaped_input = reshaped_input.to(next(iter(self.experts.parameters())).dtype)
-        result_output, l_aux = self.gates[gate_index].apply_on_expert_fn(reshaped_input, self.expert_fn, self.group, sharded_count=self.sharded_count)
+        result_output, l_aux = self.gates[gate_index].apply_on_expert_fn(reshaped_input, self.expert_fn, self.group, sharded_count=self.sharded_count, use_model_parallel=self.use_model_parallel)
 
         result_output = result_output[:reshaped_input_samples, :]
         result_output = result_output.view(original_shape).to(original_dtype)
