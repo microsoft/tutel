@@ -76,17 +76,18 @@ class TopKGate(torch.nn.Module):
         self.input_dropout = torch.nn.Dropout(p=input_dropout_p) if input_dropout_p else None
 
         self.a2a_ffn_overlap_degree = a2a_ffn_overlap_degree
-        self.use_2d_a2a = (os.environ.get('TUTEL_ALLTOALL_ALGO', '').upper() == '2D' and 'LOCAL_SIZE' in os.environ)
+        self.use_2d_a2a = (os.environ.get('TUTEL_ALLTOALL_ALGO', '').upper() == '2D' and os.environ.get('LOCAL_SIZE', -1) == C.get_world_size())
 
     def compute_sorted_location(self, x, importance_scores):
         sorted_x = x[importance_scores.argsort(dim=0)]
         sorted_cumsum = fast_cumsum_sub_one(sorted_x) * sorted_x
         return sorted_cumsum[importance_scores.argsort(dim=0).argsort(dim=0)]
 
-    def apply_on_expert_fn(self, input, expert_fn, group, sharded_count, use_model_parallel):
+    def apply_on_expert_fn(self, input, ctx):
         if self.input_dropout:
             input = self.input_dropout(input)
 
+        group = ctx.group
         logits = self.wg(input.to(next(iter(self.wg.parameters())).dtype))
 
         topk_indices = torch.topk(logits, self.top_k, dim=1).indices
@@ -127,11 +128,9 @@ class TopKGate(torch.nn.Module):
         S, M, GE = input.size(0), input.size(1), self.num_global_experts
         world_size = C.get_world_size(group)
 
+        capacity = self.top_k * int(self.capacity_factor * ((S + self.num_global_experts - 1) // self.num_global_experts))
         if not hasattr(self, '_fdr'):
-            capacity = self.top_k * int(self.capacity_factor * ((S + self.num_global_experts - 1) // self.num_global_experts))
             self._fdr = fast_dispatcher(num_global_experts=GE, capacity=capacity, model_dim=M, dispatch_dtype=input.dtype)
-        else:
-            capacity = self._fdr.capacity
 
         if self.is_ones_gate:
             gates_s = [torch.ones_like(x) for x in gates_s]
@@ -139,16 +138,19 @@ class TopKGate(torch.nn.Module):
 
         dispatched_input = self._fdr.encode(input)
 
-        if use_model_parallel:
-            dispatched_input = dispatched_input.reshape(GE, -1).repeat(1, sharded_count)
+        if ctx.auto_parallel:
+            ctx.use_model_parallel = (dispatched_input.numel() < ctx.model_dim * ctx.hidden_size)
 
-        if sharded_count > 1:
+        if ctx.use_model_parallel:
+            dispatched_input = dispatched_input.reshape(GE, -1).repeat(1, ctx.sharded_count)
+
+        if ctx.sharded_count > 1:
             dispatched_input = dispatched_input.reshape(world_size, 1, -1, M)
         else:
             dispatched_input = dispatched_input.reshape(world_size, -1, capacity, M)
 
         if self.a2a_ffn_overlap_degree == -1:
-            expert_output = expert_fn(dispatched_input)
+            expert_output = ctx.expert_fn(dispatched_input)
             expert_output = expert_output.to(input.dtype)
         elif self.a2a_ffn_overlap_degree == 1:
             if self.use_2d_a2a:
@@ -162,7 +164,7 @@ class TopKGate(torch.nn.Module):
             else:
                 dispatched_input = C.AllToAll.apply(group, dispatched_input)
 
-            expert_output = expert_fn(dispatched_input)
+            expert_output = ctx.expert_fn(dispatched_input)
             expert_output = expert_output.to(input.dtype)
 
             if self.use_2d_a2a:
@@ -193,7 +195,7 @@ class TopKGate(torch.nn.Module):
                 dispatched_input_scattered_after_a2a = C.AllToAllScatterAsync.apply(dispatched_input_ready)
 
             expert_output_scattered = [
-                C.CurrentStreamRelease.apply(expert_fn(C.CurrentStreamAcquire.apply(x, i)).to(input.dtype), i)
+                C.CurrentStreamRelease.apply(ctx.expert_fn(C.CurrentStreamAcquire.apply(x, i)).to(input.dtype), i)
                 for i, x in enumerate(dispatched_input_scattered_after_a2a)]
 
             if self.use_2d_a2a:
@@ -231,8 +233,11 @@ class MOELayer(torch.nn.Module):
         self.skip_moe = (int(os.environ.get('SKIP_MOE', '0')) != 0)
 
         if not isinstance(experts, dict):
+            self.is_builtin_experts = False
+            assert sharded_count == 1, 'Shared experts not enabled for custom expert network'
             self.num_local_experts = len(self.experts)
         else:
+            self.is_builtin_experts = True
             self.num_local_experts = experts.get('count_per_node', 1)
             if not isinstance(self.num_local_experts, int):
                 self.num_local_experts = -int(1 / (self.num_local_experts + 1e-5))
@@ -252,20 +257,21 @@ class MOELayer(torch.nn.Module):
             self.num_global_experts = num_devices * self.num_local_experts
             sharded_count = 1
 
-        use_model_parallel = kwargs.get('use_model_parallel', False) and sharded_count > 1
+        parallel_type = kwargs.get('parallel_type', 'auto')
+        if sharded_count == 1 or not self.is_builtin_experts:
+            self.auto_parallel, self.use_model_parallel = False, False
+        elif parallel_type == 'auto':
+            self.auto_parallel, self.use_model_parallel = True, False
+        else:
+            self.auto_parallel, self.use_model_parallel = False, (parallel_type == 'model')
 
-        self.use_model_parallel = use_model_parallel
+        self.hidden_size = experts.get('hidden_size_per_expert', 'None')
         self.model_dim = model_dim
         self.sharded_count = sharded_count
 
         if not isinstance(experts, dict):
             self.experts = cast(ModuleList, experts) if type(experts) == ModuleList else ModuleList(experts)
         else:
-            experts = copy.deepcopy(experts)
-            if experts['type'] == 'attention':
-                experts['type'] = 'ffn'
-                experts['activation_fn'] = experts['attention_fn']
-                experts['hidden_size_per_expert'] = model_dim
 
             if experts['type'] == 'ffn':
                 ''' << Fused FFN Experts V1 >> (kernels = 5)
@@ -293,7 +299,7 @@ class MOELayer(torch.nn.Module):
                 implicit_dropout_p = experts.get('implicit_dropout_p', 0)
 
                 class FusedExpertsNetwork(torch.nn.Module):
-                    def __init__(self, model_dim, hidden_size, local_experts, ffn_zero_group):
+                    def __init__(self, model_dim, hidden_size, local_experts):
                         super().__init__()
                         self.skip_expert = (int(os.environ.get('SKIP_EXPERT', '0')) != 0)
 
@@ -309,9 +315,7 @@ class MOELayer(torch.nn.Module):
                             fc2_weight[0, i, :, :], fc2_bias[0, i, :, :] = fc2.weight.t(), fc2.bias[:fc2_bias.size(-1)]
 
                         self.model_dim, self.hidden_size, self.local_experts = model_dim, hidden_size, local_experts
-                        self.ffn_zero_group = ffn_zero_group
-                        if self.ffn_zero_group is not None or self.local_experts == 1:
-                            assert self.local_experts == 1
+                        if self.local_experts == 1:
                             fc1_weight = fc1_weight.view(self.hidden_size, self.model_dim)
                             fc2_weight = fc2_weight.view(self.hidden_size, self.model_dim)
                             fc1_bias = fc1_bias.view(self.hidden_size)
@@ -336,21 +340,21 @@ class MOELayer(torch.nn.Module):
                     def extra_repr(self):
                         return 'model_dim=%d, hidden_size=%d, local_experts=%d, bias=%s' % (self.model_dim, self.hidden_size, self.local_experts, self.fc1_bias is not None)
 
-                    def forward(self, x):
+                    def forward(self, x, ctx):
                         if self.skip_expert:
                             return x
                         if fused_custom_fn is not None:
                             return fused_custom_fn(self, x)
 
                         fc1_weight, fc2_weight, fc1_bias, fc2_bias = self.fc1_weight, self.fc2_weight, self.fc1_bias, self.fc2_bias
-                        if self.ffn_zero_group is not None:
-                            if not use_model_parallel:
-                                fc1_weight = C.PreAllreduceSum.apply(self.ffn_zero_group, self.fc1_weight)
-                                fc2_weight = C.PreAllreduceSum.apply(self.ffn_zero_group, self.fc2_weight)
-                                fc1_bias = C.PreAllreduceSum.apply(self.ffn_zero_group, self.fc1_bias)
+                        if ctx.ffn_zero_group is not None:
+                            if not ctx.use_model_parallel:
+                                fc1_weight = C.PreAllreduceSum.apply(ctx.ffn_zero_group, self.fc1_weight)
+                                fc2_weight = C.PreAllreduceSum.apply(ctx.ffn_zero_group, self.fc2_weight)
+                                fc1_bias = C.PreAllreduceSum.apply(ctx.ffn_zero_group, self.fc1_bias)
 
                             # Specially treat fc2_bias to make hybrid data & model parallels equivalent
-                            fc2_bias = C.PreAllreduceSum.apply(self.ffn_zero_group, self.fc2_bias)
+                            fc2_bias = C.PreAllreduceSum.apply(ctx.ffn_zero_group, self.fc2_bias)
                             if fc2_bias.size(-1) != self.model_dim:
                                 fc2_bias = fc2_bias[:, :self.model_dim]
 
@@ -359,7 +363,7 @@ class MOELayer(torch.nn.Module):
                             x = torch.addmm(fc1_bias.unsqueeze(0), x, fc1_weight.t())
                             x = activation_fn(x.unsqueeze(0)).squeeze(0)
                             x = self.dropout_fc1(x)
-                            if use_model_parallel:
+                            if ctx.use_model_parallel:
                                 fc2_bias = torch.mul(fc2_bias, 1.0 / sharded_count)
                             x = torch.addmm(fc2_bias.unsqueeze(0), x, fc2_weight)
                             x = self.dropout_fc2(x)
@@ -386,7 +390,7 @@ class MOELayer(torch.nn.Module):
 
                 if seeds is not None and seeds[1] is not None:
                     torch.manual_seed(seeds[1])
-                self.experts = ModuleList([FusedExpertsNetwork(model_dim, experts['hidden_size_per_expert'], self.num_local_experts, self.ffn_zero_group)])
+                self.experts = ModuleList([FusedExpertsNetwork(model_dim, self.hidden_size, self.num_local_experts)])
             else:
                 raise Exception('Builtin expert type is not recognized: %s' % experts['type'])
 
@@ -423,15 +427,15 @@ class MOELayer(torch.nn.Module):
             torch.manual_seed(seeds[2])
 
         def expert_fn(dispatched_input):
-            if len(self.experts) == 1:
-                expert_output = self.experts[0](dispatched_input)
+            if self.is_builtin_experts:
+                expert_output = self.experts[0](dispatched_input, self)
             else:
                 chunks = dispatched_input.chunk(self.num_local_experts, dim=1)
                 expert_output = torch.cat([expert(chunk) for chunk, expert in zip(chunks, self.experts)], dim=1)
             return expert_output
 
         self.expert_fn = expert_fn
-        self.expected_sample_size = 0
+        self.expected_sample_size = 0 if kwargs.get('scale_samples', False) else -1
 
     def get_parameter_iterator(self, param_type):
         if param_type == 'gate':
@@ -452,19 +456,19 @@ class MOELayer(torch.nn.Module):
         reshaped_input = input.reshape(-1, input.shape[-1])
         reshaped_input_samples = reshaped_input.shape[0]
 
-        self.expected_sample_size = self.expected_sample_size or reshaped_input.size(0)
-        if reshaped_input.size(0) != self.expected_sample_size:
-            if reshaped_input.size(0) > self.expected_sample_size:
-                raise Exception('MoE JIT is designed to work on sample size = %s, while receiving sample size = %s (> %s)' % (self.expected_sample_size, reshaped_input.size(0), self.expected_sample_size))
-            else:
+        if self.expected_sample_size >= 0:
+            self.expected_sample_size = self.expected_sample_size or reshaped_input.size(0)
+            if reshaped_input.size(0) != self.expected_sample_size:
                 if C.get_world_rank(self.group) == 0:
-                    logging.warning('MoE is initialized to keep working on sample size = %s, while receiving sample size = %s (will slow down this forward step)' % (self.expected_sample_size, reshaped_input.size(0)))
+                    logging.warning('MoE is scaled to work on sample size = %s, while receiving sample size = %s (will slow down this forward step)' % (self.expected_sample_size, reshaped_input.size(0)))
+                if reshaped_input.size(0) > self.expected_sample_size:
+                    self.expected_sample_size = reshaped_input.size(0)
                 pad_input = torch.zeros([self.expected_sample_size, self.model_dim], dtype=reshaped_input.dtype, layout=reshaped_input.layout, device=reshaped_input.device)
                 pad_input[:reshaped_input.size(0)] = reshaped_input
                 reshaped_input = pad_input
 
         reshaped_input = reshaped_input.to(next(iter(self.experts.parameters())).dtype)
-        result_output, l_aux = self.gates[gate_index].apply_on_expert_fn(reshaped_input, self.expert_fn, self.group, sharded_count=self.sharded_count, use_model_parallel=self.use_model_parallel)
+        result_output, l_aux = self.gates[gate_index].apply_on_expert_fn(reshaped_input, self)
 
         result_output = result_output[:reshaped_input_samples, :]
         result_output = result_output.view(original_shape).to(original_dtype)
