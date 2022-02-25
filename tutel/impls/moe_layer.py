@@ -435,7 +435,7 @@ class MOELayer(torch.nn.Module):
             return expert_output
 
         self.expert_fn = expert_fn
-        self.expected_sample_size = 0
+        self.expected_sample_size = 0 if kwargs.get('scale_samples', False) else -1
 
     def get_parameter_iterator(self, param_type):
         if param_type == 'gate':
@@ -456,15 +456,16 @@ class MOELayer(torch.nn.Module):
         reshaped_input = input.reshape(-1, input.shape[-1])
         reshaped_input_samples = reshaped_input.shape[0]
 
-        self.expected_sample_size = self.expected_sample_size or reshaped_input.size(0)
-        if reshaped_input.size(0) != self.expected_sample_size:
-            if C.get_world_rank(self.group) == 0:
-                logging.warning('MoE is scaled to work on sample size = %s, while receiving sample size = %s (will slow down this forward step)' % (self.expected_sample_size, reshaped_input.size(0)))
-            if reshaped_input.size(0) > self.expected_sample_size:
-                self.expected_sample_size = reshaped_input.size(0)
-            pad_input = torch.zeros([self.expected_sample_size, self.model_dim], dtype=reshaped_input.dtype, layout=reshaped_input.layout, device=reshaped_input.device)
-            pad_input[:reshaped_input.size(0)] = reshaped_input
-            reshaped_input = pad_input
+        if self.expected_sample_size >= 0:
+            self.expected_sample_size = self.expected_sample_size or reshaped_input.size(0)
+            if reshaped_input.size(0) != self.expected_sample_size:
+                if C.get_world_rank(self.group) == 0:
+                    logging.warning('MoE is scaled to work on sample size = %s, while receiving sample size = %s (will slow down this forward step)' % (self.expected_sample_size, reshaped_input.size(0)))
+                if reshaped_input.size(0) > self.expected_sample_size:
+                    self.expected_sample_size = reshaped_input.size(0)
+                pad_input = torch.zeros([self.expected_sample_size, self.model_dim], dtype=reshaped_input.dtype, layout=reshaped_input.layout, device=reshaped_input.device)
+                pad_input[:reshaped_input.size(0)] = reshaped_input
+                reshaped_input = pad_input
 
         reshaped_input = reshaped_input.to(next(iter(self.experts.parameters())).dtype)
         result_output, l_aux = self.gates[gate_index].apply_on_expert_fn(reshaped_input, self)
