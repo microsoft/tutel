@@ -72,7 +72,7 @@ class ExampleModel(torch.nn.Module):
             scan_expert_func = lambda name, param: setattr(param, 'skip_allreduce', True),
             seeds = (1, dist_rank + 1, 1),
             a2a_ffn_overlap_degree = a2a_ffn_overlap_degree,
-        ).to(device)
+        )
 
         # Summary of different parameter types: gate, local_experts
         local_count = sum([torch.numel(param) for name, param in self._moe_layer.get_parameter_iterator(param_type='local_experts')])
@@ -88,7 +88,7 @@ class ExampleModel(torch.nn.Module):
         self._ddp_params_and_buffers_to_ignore.append(param_name)
 
 
-model = ExampleModel()
+model = ExampleModel().to(device)
 
 for name, param in model.named_parameters():
     if hasattr(param, 'skip_allreduce'):
