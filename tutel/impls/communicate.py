@@ -150,8 +150,12 @@ class AllToAllStatus:
 
 
 class AllToAll(torch.autograd.Function):
+    _use_builtins = False
+
     @staticmethod
     def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor):
+        AllToAll._use_builtins = True
+
         ctx.group = group
         world_size = get_world_size(group)
         if world_size <= 1:
