@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
-import os
+import os, sys
 import re
 import logging
 
@@ -25,12 +25,19 @@ def init_affinity_at_program_beginning():
             logging.warning('Failed to set NUMA status: %s' % ex)
 
 def init_data_model_parallel(group_count=1, backend='nccl'):
-    from tutel.impls.communicate import create_groups_from_world
-    result = create_groups_from_world(group_count=group_count, include_init=backend)
-
-    # Temp work around for: https://github.com/pytorch/pytorch/issues/56390
-    import atexit
-    atexit.register(lambda *args: os._exit(0))
-
+    from tutel.impls import communicate as C
+    result = C.create_groups_from_world(group_count=group_count, include_init=backend)
     logging.critical(f'Registering device global rank {result.global_rank}: data_rank = {result.data_rank}, model_rank = {result.model_rank}')
+
+    def on_quit():
+        sys.stdout.flush()
+        sys.stderr.flush()
+        # Builtin dist.all_to_all_single in torch is unstable in some versions.
+        # Temp work around: https://github.com/pytorch/pytorch/issues/56390
+        if C.AllToAll._use_builtins:
+            os._exit(0)
+
+    import atexit
+    atexit.register(lambda *args: on_quit())
+
     return result

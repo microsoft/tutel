@@ -89,13 +89,13 @@ class TutelMoeFastDispatcher:
         self.original_dtype = dispatch_dtype
         self.aligned_dim = model_dim // (2 if self.dtype == torch.float16 else 1)
 
-    def update(self, indices_, locations_, gates_, capacity=None, is_postnorm=True):
+    def update(self, indices_, locations_, gates_, capacity=None, is_postscore=True):
         self.indices_ = [x.to(torch.int32).view(-1) for x in indices_]
         self.locations_ = [x.to(torch.int32) for x in locations_]
         self.gates_ = [x.to(self.dtype) for x in gates_]
         sample_size = int(self.indices_[0].size(0))
         capacity = int(capacity) or self.capacity
-        self.is_postnorm = is_postnorm
+        self.is_postscore = is_postscore
 
         if sample_size != self.expected_sample_size or capacity != self.capacity:
             self.expected_sample_size, self.capacity = sample_size, capacity
@@ -109,13 +109,13 @@ class TutelMoeFastDispatcher:
                 self.func_fwd, self.func_bwd_data, self.func_bwd_gate, self.ones_helper = self.kernel_pool[tuple((sample_size, capacity))]
 
     def encode(self, data):
-        if self.is_postnorm:
+        if self.is_postscore:
             return GatingEncoder.apply(self, data.to(self.dtype)).to(self.original_dtype)
         else:
             return GatingEncoder.apply(self, data.to(self.dtype), *self.gates_).to(self.original_dtype)
 
     def decode(self, data):
-        if self.is_postnorm:
+        if self.is_postscore:
             return GatingDecoder.apply(self, data.to(self.dtype), *self.gates_).to(self.original_dtype)
         else:
             return GatingDecoder.apply(self, data.to(self.dtype)).to(self.original_dtype)

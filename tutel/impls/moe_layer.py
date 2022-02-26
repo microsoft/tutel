@@ -48,20 +48,22 @@ class TopKGate(torch.nn.Module):
         num_global_experts,
         a2a_ffn_overlap_degree=1,
         capacity_factor=1.0,
-        top_k=2,
+        k=2,
         batch_prioritized_routing=False,
-        **kwargs,
+        fp32_gate=False,
+        is_postscore=True,
+        input_dropout_p=0,
     ):
         super().__init__()
-        top_k = min(top_k, num_global_experts)
-        self.top_k = top_k
+        k = min(k, num_global_experts)
+        self.top_k = k
         assert self.top_k > 0, "Top-k value %d is not valid." % self.top_k
 
         self.wg = torch.nn.Linear(model_dim, num_global_experts, bias=False)
 
-        self.fp32_gate = kwargs.get('fp32_gate', False)
+        self.fp32_gate = fp32_gate
         if self.fp32_gate:
-          self.wg = self.wg.float()
+            self.wg = self.wg.float()
 
         self.capacity_factor = float(os.environ.get('CAP_FACTOR', capacity_factor))
         self.is_ones_gate = (int(os.environ.get('ONES_GATE', 0)) == 1)
@@ -71,8 +73,7 @@ class TopKGate(torch.nn.Module):
         if int(os.environ.get('BATCH_PRIO', 0)) != 0:
             self.batch_prioritized_routing = True
 
-        self.is_postnorm = kwargs.get('is_postnorm', True)
-        input_dropout_p = kwargs.get('input_dropout_p', 0)
+        self.is_postscore = is_postscore
         self.input_dropout = torch.nn.Dropout(p=input_dropout_p) if input_dropout_p else None
 
         self.a2a_ffn_overlap_degree = a2a_ffn_overlap_degree
@@ -134,7 +135,7 @@ class TopKGate(torch.nn.Module):
 
         if self.is_ones_gate:
             gates_s = [torch.ones_like(x) for x in gates_s]
-        self._fdr.update(indices_s, locations_s, gates_s, capacity=capacity, is_postnorm=self.is_postnorm)
+        self._fdr.update(indices_s, locations_s, gates_s, capacity=capacity, is_postscore=self.is_postscore)
 
         dispatched_input = self._fdr.encode(input)
 
@@ -223,7 +224,19 @@ class MOELayer(torch.nn.Module):
     """Tutel optimized MOELayer
     """
 
-    def __init__(self, gate_type, model_dim: int, experts = None, scan_expert_func = None, result_func = None, group: Optional[Any] = None, seeds = None, a2a_ffn_overlap_degree = 1, **kwargs):
+    def __init__(
+        self,
+        gate_type,
+        model_dim: int,
+        experts=None,
+        scan_expert_func=None,
+        result_func=None,
+        group=None,
+        seeds=None,
+        a2a_ffn_overlap_degree=1,
+        parallel_type='auto',
+        pad_samples=False,
+    ):
         super().__init__()
         assert model_dim % 2 == 0, "Model_dim (%s) must be even value, while this Model_dim mod 2 > 0." % model_dim
         group = group or dist.group.WORLD
@@ -257,7 +270,6 @@ class MOELayer(torch.nn.Module):
             self.num_global_experts = num_devices * self.num_local_experts
             sharded_count = 1
 
-        parallel_type = kwargs.get('parallel_type', 'auto')
         if sharded_count == 1 or not self.is_builtin_experts:
             self.auto_parallel, self.use_model_parallel = False, False
         elif parallel_type == 'auto':
@@ -413,11 +425,9 @@ class MOELayer(torch.nn.Module):
             if single_gate_type['type'] == 'top':
                 if seeds is not None and seeds[0] is not None:
                     torch.manual_seed(seeds[0] + gi)
-                if "fp32_gate" in kwargs:
-                    logging.warning(f'`fp32_gate` option in tutel.moe_layer has been deprecated, please move this option to gate_type = {{.., "fp32_gate": {kwargs["fp32_gate"]}}} instead.')
-                    single_gate_type["fp32_gate"] = kwargs["fp32_gate"]
 
-                self.gates += [TopKGate(model_dim=model_dim, top_k=single_gate_type['k'], num_global_experts=self.num_global_experts, a2a_ffn_overlap_degree=a2a_ffn_overlap_degree, **single_gate_type)]
+                single_gate_type.pop('type')
+                self.gates += [TopKGate(model_dim=model_dim, num_global_experts=self.num_global_experts, a2a_ffn_overlap_degree=a2a_ffn_overlap_degree, **single_gate_type)]
             else:
                 raise Exception("Unrecognized gate_type: %s" % single_gate_type)
 
@@ -435,7 +445,7 @@ class MOELayer(torch.nn.Module):
             return expert_output
 
         self.expert_fn = expert_fn
-        self.expected_sample_size = 0 if kwargs.get('scale_samples', False) else -1
+        self.expected_sample_size = 0 if pad_samples else -1
 
     def get_parameter_iterator(self, param_type):
         if param_type == 'gate':
@@ -445,7 +455,7 @@ class MOELayer(torch.nn.Module):
         else:
             raise Exception("Specified parameter type is not recognized: %s. Valid `param_type` includes: gate, local_experts." % param_type)
 
-    def forward(self, input: Tensor, gate_index=0, **kwargs: Any):
+    def forward(self, input: Tensor, gate_index=0):
         if self.skip_moe:
             result_output = input
             result_output.l_aux = None
