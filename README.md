@@ -99,11 +99,14 @@ Usage of MOELayer:
                               or a list of dict-type gate descriptions, e.g. [{'type': 'top', 'k', 2}, {'type': 'top', 'k', 2}],
                               the value of k in top-gating can be also negative, like -2, which indicates one GPU will hold 1/(-k) parameters of an expert
         model_dim        : the number of channels for MOE's input tensor
-        experts          : a dict-type config for builtin expert network, or a torch.nn.Module-type custom expert network
+        experts          : a dict-type config for builtin expert network
         scan_expert_func : allow users to specify a lambda function to iterate each experts param, e.g. `scan_expert_func = lambda name, param: setattr(param, 'expert', True)`
         result_func      : allow users to specify a lambda function to format the MoE output and aux_loss, e.g. `result_func = lambda output: (output, output.l_aux)`
         group            : specify the explicit communication group of all_to_all
         seeds            : a tuple containing a tripple of int to specify manual seed of (shared params, local params, others params after MoE's)
+        a2a_ffn_overlap_degree : the value to control a2a overlap depth, 1 by default for no overlap, 2 for overlap a2a with half gemm, ..
+        parallel_type    : the parallel method to compute MoE, valid types: 'auto', 'data', 'model'
+        pad_samples      : whether do auto padding on newly coming input data to resize them into maximum size in history, which will slow down computation of short input data
 
 * Usage of dict-type Experts Config:
 
