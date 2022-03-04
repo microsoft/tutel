@@ -85,6 +85,7 @@ class TopKGate(torch.nn.Module):
         return sorted_cumsum[importance_scores.argsort(dim=0).argsort(dim=0)]
 
     def apply_on_expert_fn(self, input, ctx):
+        input = input.to(next(iter(ctx.experts.parameters())).dtype)
         if self.input_dropout:
             input = self.input_dropout(input)
 
@@ -163,7 +164,7 @@ class TopKGate(torch.nn.Module):
                                 C.NcclStreamAcquire.apply(
                                     C.CurrentStreamRelease.apply(dispatched_input, 0), 0)), 0), 0)
             else:
-                dispatched_input = C.AllToAll.apply(group, dispatched_input)
+                dispatched_input = C.PrimAllToAll.apply(group, dispatched_input)
 
             expert_output = ctx.expert_fn(dispatched_input)
             expert_output = expert_output.to(input.dtype)
@@ -176,7 +177,7 @@ class TopKGate(torch.nn.Module):
                                 C.NcclStreamAcquire.apply(
                                     C.CurrentStreamRelease.apply(expert_output, 0), 0)), 0), 0)
             else:
-                expert_output = C.AllToAll.apply(group, expert_output)
+                expert_output = C.PrimAllToAll.apply(group, expert_output)
         else:
             split_dim = 2
             C.AllToAllStatus.init(group, self.a2a_ffn_overlap_degree, split_dim)
@@ -361,12 +362,12 @@ class MOELayer(torch.nn.Module):
                         fc1_weight, fc2_weight, fc1_bias, fc2_bias = self.fc1_weight, self.fc2_weight, self.fc1_bias, self.fc2_bias
                         if ctx.ffn_zero_group is not None:
                             if not ctx.use_model_parallel:
-                                fc1_weight = C.PreAllreduceSum.apply(ctx.ffn_zero_group, self.fc1_weight)
-                                fc2_weight = C.PreAllreduceSum.apply(ctx.ffn_zero_group, self.fc2_weight)
-                                fc1_bias = C.PreAllreduceSum.apply(ctx.ffn_zero_group, self.fc1_bias)
+                                fc1_weight = C.PrimAllgather.apply(ctx.ffn_zero_group, self.fc1_weight, fused=True)
+                                fc2_weight = C.PrimAllgather.apply(ctx.ffn_zero_group, self.fc2_weight, fused=True)
+                                fc1_bias = C.PrimAllgather.apply(ctx.ffn_zero_group, self.fc1_bias, fused=True)
 
                             # Specially treat fc2_bias to make hybrid data & model parallels equivalent
-                            fc2_bias = C.PreAllreduceSum.apply(ctx.ffn_zero_group, self.fc2_bias)
+                            fc2_bias = C.PrimAllgather.apply(ctx.ffn_zero_group, self.fc2_bias, fused=True)
                             if fc2_bias.size(-1) != self.model_dim:
                                 fc2_bias = fc2_bias[:, :self.model_dim]
 
@@ -477,7 +478,6 @@ class MOELayer(torch.nn.Module):
                 pad_input[:reshaped_input.size(0)] = reshaped_input
                 reshaped_input = pad_input
 
-        reshaped_input = reshaped_input.to(next(iter(self.experts.parameters())).dtype)
         result_output, l_aux = self.gates[gate_index].apply_on_expert_fn(reshaped_input, self)
 
         result_output = result_output[:reshaped_input_samples, :]
