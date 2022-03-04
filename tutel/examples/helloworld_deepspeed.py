@@ -127,7 +127,7 @@ dist_print('[Benchmark] world_size = %s, dtype = %s, model_dim = %s, hidden_size
 
 average_time, num_steps = 0, args.num_steps
 
-params_for_all_reduce = [p for p in model.parameters() if not hasattr(p, 'skip_allreduce') and getattr(p, 'requires_grad', False) and p.grad is not None]
+params_for_all_reduce = [p for p in model.parameters() if not hasattr(p, 'skip_allreduce') and getattr(p, 'requires_grad', False)]
 
 for i in range(num_steps):
 
