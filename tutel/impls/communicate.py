@@ -93,10 +93,14 @@ def create_groups_from_world(group_count, include_init=None):
         pass
 
     result = ParallelPropStorage()
+
     result.global_size = glob_world_size
     result.global_rank = glob_world_rank
+
     result.group_count = dist_group_size
     result.data_rank = dist_group_rank
+
+    result.model_size = dist_world_size
     result.model_rank = dist_world_rank
 
     if backend == 'nccl':
@@ -322,6 +326,8 @@ class PrimAllToAll(torch.autograd.Function):
               -> (swap_axis) HZ [HY X LY LZ] -> (swap_axis) HZ [HY LY X LZ]
               -> (view) HZ [Y X LZ] -> (swap_axis) HZ [X Y LZ]
         """
+        if input_dim == output_dim:
+            return input
         reshaped_input = swap_axis(input, 0, output_dim)
         reshaped_input = PrimAllToAll.apply(group, reshaped_input)
         reshaped_input = reshaped_input.view([get_world_size(group), -1] + list(reshaped_input.shape[1:]))
