@@ -362,12 +362,12 @@ class MOELayer(torch.nn.Module):
                         fc1_weight, fc2_weight, fc1_bias, fc2_bias = self.fc1_weight, self.fc2_weight, self.fc1_bias, self.fc2_bias
                         if ctx.ffn_zero_group is not None:
                             if not ctx.use_model_parallel:
-                                fc1_weight = C.PrimAllgather.apply(ctx.ffn_zero_group, self.fc1_weight, fused=True)
-                                fc2_weight = C.PrimAllgather.apply(ctx.ffn_zero_group, self.fc2_weight, fused=True)
-                                fc1_bias = C.PrimAllgather.apply(ctx.ffn_zero_group, self.fc1_bias, fused=True)
+                                fc1_weight = C.PrimAllgather.apply(ctx.ffn_zero_group, self.fc1_weight, True)
+                                fc2_weight = C.PrimAllgather.apply(ctx.ffn_zero_group, self.fc2_weight, True)
+                                fc1_bias = C.PrimAllgather.apply(ctx.ffn_zero_group, self.fc1_bias, True)
 
                             # Specially treat fc2_bias to make hybrid data & model parallels equivalent
-                            fc2_bias = C.PrimAllgather.apply(ctx.ffn_zero_group, self.fc2_bias, fused=True)
+                            fc2_bias = C.PrimAllgather.apply(ctx.ffn_zero_group, self.fc2_bias, True)
                             if fc2_bias.size(-1) != self.model_dim:
                                 fc2_bias = fc2_bias[:, :self.model_dim]
 
