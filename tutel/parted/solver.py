@@ -16,7 +16,7 @@ def register_primitive(name=None):
     spmd_primitives_dict[name] = func
   return register_primitive_instance
 
-def solve_partition(compute_groups, input_nodes, split_pref, kwargs):
+def solve_partition(sess, compute_groups, input_nodes, split_pref, kwargs):
   marked_nodes, marked_comm = dict(), dict()
   last_node = compute_groups[-1][0][-1]
 
@@ -88,7 +88,7 @@ def solve_partition(compute_groups, input_nodes, split_pref, kwargs):
             rule_func = spmd_primitives_dict[key]
             try:
               merged_config = None
-              for rank, source_dims, connectors in rule_func(node, dim, group_size, None):
+              for rank, source_dims, connectors in rule_func(sess, node, dim, group_size, None):
                 merged_config = {node.name: (dim, f'{key}:{rank}')}
                 for input_id in source_dims:
                   state = source_dims[input_id]
@@ -111,10 +111,10 @@ def solve_partition(compute_groups, input_nodes, split_pref, kwargs):
 
           best_result = (float('inf'), None)
           for index, (prog, cfg) in enumerate(programs):
-            print(f'>> Try `{output_name}:{dim} [ENUM:{enum_inst}/{enum_nums}]` ({index}/{len(programs)}), config = {json.dumps(cfg)}')
+            print(f'>> Try `{output_name}:{dim} [ENUM:{enum_inst+1}/{enum_nums}]` ({index+1}/{len(programs)}), config = {json.dumps(cfg)}')
 
             # Evaluate Program
-            if (len(programs) == 1) and (output_name != last_node.name):
+            if enum_nums == 1 and (len(programs) == 1) and (output_name != last_node.name):
               model_cost = -1
             else:
               model_cost = prog.execute()
@@ -125,7 +125,7 @@ def solve_partition(compute_groups, input_nodes, split_pref, kwargs):
 
           if best_result[1] is not None:
             FL[output_name][dim] = best_result
-            print(f'>> FL_{output_name}_{dim} = {best_result}\n')
+            print(f'>> FL_{output_name}_{dim} [ENUM:{enum_inst+1}/{enum_nums}] = {best_result}\n')
 
       # Update enum history best
       for dim in FL[compute_nodes[-1].name]:
@@ -136,6 +136,7 @@ def solve_partition(compute_groups, input_nodes, split_pref, kwargs):
     for node in compute_nodes:
       FL[node.name] = None
     print(f'>> Updating Stage `{output_name}:{dim}`; Stage Enum = {enum_inst}/{enum_nums}; Valid FL_State[*] Count: {len(FL)}')
+    sys.stdout.flush()
     FL[compute_nodes[-1].name] = final_FL
 
   return [(dim, FL[last_node.name].get(dim, None)) for dim in range(-1, len(last_node.shape))]

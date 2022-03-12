@@ -8,7 +8,6 @@ import re
 import time
 import torch
 import logging
-import functools
 
 from torch import Tensor
 import torch.distributed as dist
@@ -408,8 +407,10 @@ class PrimAllgather(torch.autograd.Function):
 
     @staticmethod
     def zero_param(group, input, full_shape):
-        numel = functools.reduce((lambda x, y: x * y), full_shape)
-        input = PrimAllgather.apply(group, input)
+        numel = 1
+        for x in full_shape:
+            numel *= int(x)
+        input = PrimAllgather.apply(group, input, True)
         return input.view(-1)[:numel].view(full_shape)
 
 

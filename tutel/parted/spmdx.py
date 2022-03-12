@@ -293,13 +293,19 @@ class Custom:
         return inp
     raise Exception(f'Node input with name `{name}` not found!')
 
-  def autotune(self, **kwargs):
+  def autotune(self, config_file=None, **kwargs):
+    config = Config.load_from_file(config_file)
+    if config:
+        return config
     kwargs, results = optimize(self, **kwargs)
     valid_configs = [sol for dim, sol in results if sol is not None]
     if not valid_configs:
       raise Exception('No valid configuration found!')
     best_time, best_config = min(valid_configs)
-    return Config({'v': Config.VERSION, 't': best_time, 'b': best_config, 'kwargs': kwargs})
+    config = Config.create(best_config, kwargs, best_time)
+    if config_file is not None:
+      config.save(config_file)
+    return config
 
   def articulare_analyse(self):
     low, dfn, cut = dict(), dict(), dict()
@@ -363,6 +369,20 @@ class Custom:
             multi_used.add(y)
       compute_groups.append(([x for x in reversed(members)], multi_used))
     return compute_groups
+
+  def get_data_parallel_config(self, **kwargs):
+    visited = set()
+    config = dict()
+
+    def property_dfs(node):
+      visited.add(id(node))
+      for inp in node.inputs:
+        if id(inp) not in visited:
+          property_dfs(inp)
+      config[node.name] = [-1, ""] if node.op_type == 'param' else [0, "BAR:0"]
+
+    property_dfs(self)
+    return Config.create(config, environ_config(kwargs))
 
   def serialize(self, **kwargs):
     node = self
@@ -439,7 +459,7 @@ class Custom:
         conn_sol, conn_src = None, None
         try:
           valid_count = 0
-          for rank, source_dims, connectors in rule_func(node, output_dim, spmd_nodes, rank):
+          for rank, source_dims, connectors in rule_func(session, node, output_dim, spmd_nodes, rank):
             valid_count += 1
             assert valid_count <= 1, f"Ambiguous solution `{key}` for node with `{node.name}` at dimension {output_dim}"
             conn_sol, conn_src = connectors, source_dims
@@ -454,27 +474,19 @@ class Custom:
           from_state = config[item_name][0]
           prim_state = conn_src[index]
           if from_state != prim_state:
-            if from_state == -1:
-              assert prim_state >= 0
-              item_name = f'C.PrimSpatialSplit.transform(default_group, {item_name}, {prim_state})'
-            elif from_state == -2:
-              if prim_state == -1:
-                item_name = f'C.PrimAllgather.zero_param(default_group, {item_name}, {node.inputs[index].shape})'
-              else:
-                assert prim_state >= 0
-                item_name = f'C.PrimSpatialSplit.transform(default_group, C.PrimAllgather.zero_param(default_group, {item_name}, {node.inputs[index].shape}), {prim_state})'
+            extra = {'output_shape': node.inputs[index].shape, 'is_param': node.inputs[index].op_type == 'param'}
+            if from_state == -2 and prim_state >= 0:
+              item_name = session.backend.link(item_name, -2, -1, **extra)
+              item_name = session.backend.link(item_name, -1, prim_state, **extra)
             else:
-              assert from_state >= 0
-              if prim_state == -1:
-                item_name = f'C.PrimAllgather.transform(default_group, {item_name}, {from_state})'
-              else:
-                assert prim_state >= 0
-                item_name = f'C.PrimAllToAll.transform(default_group, {item_name}, input_dim={from_state}, output_dim={prim_state})'
+              item_name = session.backend.link(item_name, from_state, prim_state, **extra)
+
           if index in conn_sol:
-            item_remap = apply_communicate(item_name, conn_sol[index])
-            if item_remap:
+            item_name = apply_communicate(item_name, conn_sol[index]) or item_name
+
+          if item_name != input_item.name:
               temp_ids = temp_ids + 1
-              graph_prog[-1] = f'temp_{temp_ids} = {item_remap}; ' + re.sub(fr'\b{input_item.name}\b', f'temp_{temp_ids}', graph_prog[-1])
+              graph_prog[-1] = f'_temp{temp_ids} = {item_name}; ' + re.sub(fr'\b{input_item.name}\b', f'_temp{temp_ids}', graph_prog[-1])
 
         aggr_output = apply_communicate(node.name, conn_sol.get('', ''))
         if aggr_output:
@@ -483,7 +495,7 @@ class Custom:
     program_strings = session.backend.generate_framework_code(device_type, spmd_nodes, total_nodes // spmd_nodes, run_mode, self.name, session.headers, input_list, param_list, graph_prog)
     return Program(program_strings, kwargs)
 
-def optimize(node, **kwargs):
+def environ_config(kwargs):
   if 'spmd_nodes' not in kwargs:
     kwargs['spmd_nodes'] = kwargs['total_nodes']
   if 'device_type' not in kwargs:
@@ -491,6 +503,10 @@ def optimize(node, **kwargs):
   if 'run_mode' not in kwargs:
     kwargs['run_mode'] = os.environ.get('MODE', 'train')
   assert kwargs['total_nodes'] % kwargs['spmd_nodes'] == 0, "`total_nodes` must be exactly divided by `spmd_nodes`."
+  return kwargs
+
+def optimize(node, **kwargs):
+  kwargs = environ_config(kwargs)
 
   if session.is_strict_fmt:
     node = Id(node, op_name='Builtin')
@@ -503,16 +519,21 @@ def optimize(node, **kwargs):
   print('---------------------------------------------------')
   print('\n'.join([f'| {x.name} <- {", ".join([x.name for x in x.inputs])} | {x.dtype}{x.shape} | "{x.data}" | {getattr(x, "config", None)} |' for x in compute_nodes]))
   print('\n>> config = %s\n' % (json.dumps(config),))
-  return kwargs, solver.solve_partition(compute_groups, input_nodes=input_nodes, split_pref=config, kwargs=kwargs)
+  sys.stdout.flush()
+  return kwargs, solver.solve_partition(session, compute_groups, input_nodes=input_nodes, split_pref=config, kwargs=kwargs)
 
 class Config:
   VERSION = '0.1'
 
   @staticmethod
   def load_from_file(filename):
-    if os.path.exists(filename):
+    if filename is not None and os.path.exists(filename):
       return Config(filename)
     return None
+
+  @staticmethod
+  def create(config, environ, timecost=0):
+    return Config({'v': Config.VERSION, 't': timecost, 'b': config, 'kwargs': environ})
 
   def __init__(self, config):
     if isinstance(config, dict):
