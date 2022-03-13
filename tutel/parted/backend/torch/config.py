@@ -9,14 +9,14 @@ import torch
 def get_input_definition(name, shape, stat_dim, dtype, is_param, device=None):
   return f'E.sharded_randn({shape}, {stat_dim}, dtype=torch.{dtype}, requires_grad=True, is_param={is_param}, device={device})'
 
-def get_execute_cmd(group_size, glob_size, device_type, file_path):
+def get_execute_cmd(group_size, glob_size, device_type, program_path):
   if glob_size == 1:
-    os_command = f'PYTHONWARNINGS=ignore OMP_NUM_THREADS=1 {sys.executable} {file_path}'
+    os_command = f'PYTHONWARNINGS=ignore OMP_NUM_THREADS=1 {sys.executable} {program_path}'
   else:
     host_names = os.environ.get('HOSTS', 'localhost').split(',')
     assert glob_size % len(host_names) == 0, f"Cannot evenly launch {glob_size} instances on {len(host_names)} hosts."
     local_size = glob_size // len(host_names)
-    os_command = f'mpiexec -host {",".join(host_names)} -x MASTER_ADDR={host_names[0]} -x LOCAL_SIZE={local_size} {sys.executable} -m tutel.launcher.run {sys.executable} {file_path}'
+    os_command = f'mpiexec --allow-run-as-root -host {",".join(host_names)} -x MASTER_ADDR={host_names[0]} -x LOCAL_SIZE={local_size} {sys.executable} -m tutel.launcher.run {sys.executable} {program_path}'
   return os_command
 
 def link(name, input_dim, output_dim, is_param=False, output_shape=None):
@@ -44,9 +44,8 @@ def generate_framework_code(device_type, group_size, group_count, run_mode, comp
 
   param_list = '\n    '.join([f'self.register_parameter(name="{name}", param={code})' for name, code in param_list])
 
-  source = f'''import os
+  source = f'''import torch
 
-import torch
 from tutel.impls import communicate as C
 from tutel.parted.backend.torch import executor as E
 
@@ -70,7 +69,7 @@ class DistModel(torch.nn.Module):
 
 
 if __name__ == '__main__':
-  E.init_session(group_size={group_size}, group_count={group_count}, device_type=os.environ.get('DEVICE', '{device_type}'))
+  E.init_session(group_size={group_size}, group_count={group_count}, device_type='{device_type}')
   E.model_executor(DistModel, is_training={run_mode == 'train'})
 '''
   return source

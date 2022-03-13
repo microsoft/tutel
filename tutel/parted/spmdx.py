@@ -22,7 +22,6 @@ def init(backend_name):
     raise Exception('Only letters and digits are allowed for backend_name, get: %s' % backend_name)
   session = init
   session.backend = importlib.import_module('..backend.%s.config' % backend_name, __name__)
-  session.headers = []
   session.is_strict_fmt = int(os.environ.get('STRICT_FMT', 0)) > 0
   session.ptype = os.environ.get('PTYPE', '')
   session.custom_dict = dict()
@@ -37,10 +36,10 @@ def init(backend_name):
     extra = None
   return extra
 
-def register_function(func):
-  global session
-  if func not in session.headers:
-    session.headers += [func]
+def new_dependency(header_content, depends=[]):
+  header_content = header_content.strip() + '\n'
+  depends = depends if isinstance(depends, list) else [depends]
+  return {"data": header_content, "depends": depends}
 
 def product(arrlist):
   result = 1
@@ -125,6 +124,12 @@ class Program:
     self.code = code
     self.kwargs = kwargs
 
+  def save(self, path):
+    with open(path, 'w') as fp:
+      fp.write('# Copyright (c) Microsoft Corporation.\n')
+      fp.write('# Licensed under the MIT license.\n\n')
+      fp.write(self.code)
+
   def execute(self, save_file_path=None):
     is_tempfile = save_file_path is None
     if is_tempfile:
@@ -174,7 +179,7 @@ class Custom:
   __t_ids__ = dict()
   __t_ops__ = dict()
 
-  def __init__(self, data, fw_ops=None, inputs=None, op_name=None, shape_fn=None, flops=None):
+  def __init__(self, data, fw_ops=None, inputs=None, op_name=None, shape_fn=None, flops=None, depends=[]):
     self.op_type = op_name or inspect.currentframe().f_back.f_code.co_name
     if not re.match('^[a-zA-Z0-9]+$', self.op_type):
       self.op_type = 'Custom'
@@ -183,6 +188,7 @@ class Custom:
 
     rank_dict[self] = len(rank_dict)
     self.name = f'{self.op_type[0].lower()}{self.op_type[1:]}{rank_dict[self]}'
+    self.depends = depends if isinstance(depends, list) else [depends]
 
     if fw_ops is not None:
       self.fw_ops = fw_ops.replace('@@', '')
@@ -492,7 +498,20 @@ class Custom:
         if aggr_output:
           graph_prog += [f'{node.name} = {aggr_output}']
 
-    program_strings = session.backend.generate_framework_code(device_type, spmd_nodes, total_nodes // spmd_nodes, run_mode, self.name, session.headers, input_list, param_list, graph_prog)
+    depends, headers = set(), []
+    def compute_dependencies(nodes):
+        for node in nodes:
+            if id(node) in depends:
+                continue
+            depends.add(id(node))
+            for dep in node["depends"]:
+                compute_dependencies(dep)
+            headers.append(node["data"])
+
+    for node in compute_nodes:
+        compute_dependencies(node.depends)
+
+    program_strings = session.backend.generate_framework_code(device_type, spmd_nodes, total_nodes // spmd_nodes, run_mode, self.name, headers, input_list, param_list, graph_prog)
     return Program(program_strings, kwargs)
 
 def environ_config(kwargs):

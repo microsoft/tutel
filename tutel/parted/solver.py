@@ -117,6 +117,8 @@ def solve_partition(sess, compute_groups, input_nodes, split_pref, kwargs):
             if enum_nums == 1 and (len(programs) == 1) and (output_name != last_node.name):
               model_cost = -1
             else:
+              print('>> Program Snapshot:')
+              print(prog.code)
               model_cost = prog.execute()
               model_cost = model_cost.get('step_time', float('inf'))
 
