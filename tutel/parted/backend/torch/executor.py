@@ -41,7 +41,7 @@ def init_session(group_size, group_count=1, device_type='cuda'):
   global parallel_env, fusable_params
   parallel_env = system_init.init_data_model_parallel(group_count=group_count, backend='nccl' if device_type == 'cuda' else 'gloo')
   fusable_params = set()
-  assert parallel_env.model_size == group_size, f"This codegen is designed for distributed parallelism = {group_size}, while current session is {parallel_env.model_size}"
+  assert parallel_env.model_size == group_size, f"This codegen is designed for distributed parallelism = {group_size}, while current session only activates {parallel_env.model_size} device.\n\nPlease retry with command: mpiexec --allow-run-as-root -host localhost -x MASTER_ADDR=localhost -x LOCAL_SIZE={group_size} {sys.executable} -m tutel.launcher.run {sys.executable} {' '.join(sys.argv)}"
 
 def model_executor(module, is_training=True):
   name = module.compute_name
