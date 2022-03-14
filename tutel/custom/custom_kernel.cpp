@@ -217,11 +217,14 @@ static int inject_source(const std::string &headless_code) {
   return fd;
 }
 
-static void invoke(const std::vector<torch::Tensor> &ts, int fd) {
-  std::vector<const void*> pargs(ts.size()), ppargs(ts.size());
+static void invoke(const std::vector<torch::Tensor> &ts, const std::vector<long> &args, int fd) {
+  std::vector<const void*> pargs(ts.size() + args.size()), ppargs(ts.size() + args.size());
   for (int i = 0; i < (int)ts.size(); ++i) {
     CHECK_CUDA(ts[i]);
     pargs[i] = ts[i].data_ptr(), ppargs[i] = &pargs[i];
+  }
+  for (int i = (int)ts.size(); i < (int)pargs.size(); ++i) {
+    pargs[i] = (void*)args[i - ts.size()], ppargs[i] = &pargs[i];
   }
 
   int dev = ts[0].device().index();
@@ -231,56 +234,47 @@ static void invoke(const std::vector<torch::Tensor> &ts, int fd) {
 
 } // namespace jit
 
-template<typename dtype> static void invoke_cpu(const std::vector<torch::Tensor> &ts, const int &kernel_type, const int &capacity) {
-  int samples = ts[1].sizes()[0];
-  int hidden = ts[3].sizes()[1];
+template<typename dtype> static void invoke_cpu(const std::vector<torch::Tensor> &ts, const std::vector<int> &extra, int kernel_type) {
+  int samples = extra[0];
+  int hidden = extra[1];
+  int capacity = extra[2];
+  dtype *gates1_s = static_cast<dtype*>(ts[0].data_ptr());
+  int *indices1_s = static_cast<int*>(ts[1].data_ptr());
+  int *locations1_s = static_cast<int*>(ts[2].data_ptr());
+  dtype *reshaped_input = static_cast<dtype*>(ts[3].data_ptr());
+  dtype *dispatched_input = static_cast<dtype*>(ts[4].data_ptr());
+
+  for (int i = 0; i < (int)ts.size(); ++i)
+    CHECK_CONTIGUOUS(ts[i]);
+
   if (kernel_type == 0) { //forward
     for (int i = 0; i < samples; ++i) {
-      if ((ts[2][i].item<int>() < capacity) && (ts[1][i].item<int>() >= 0)) {
+      if (locations1_s[i] < capacity && indices1_s[i] >= 0) {
         for (int j = 0; j < hidden; ++j) {
-          if (ts[0].sizes().size() == 1) {
-            ts[4][ts[1][i].item<int>() * capacity + ts[2][i].item<int>()][j] += ts[0][i].item<dtype>() * ts[3][i][j].item<dtype>();
-          } else {
-            ts[4][ts[1][i].item<int>() * capacity + ts[2][i].item<int>()][j] += ts[0][i][0].item<dtype>() * ts[3][i][j].item<dtype>();
-          }
+          dispatched_input[(indices1_s[i] * capacity + locations1_s[i]) * (hidden) + j] += gates1_s[i] * reshaped_input[i * (hidden) + j];
         }
       }
     }
   } else if (kernel_type == 1) { //backward_data
     for (int i = 0; i < samples; ++i) {
-      if ((ts[2][i].item<int>() < capacity) && (ts[1][i].item<int>() >= 0)) {
+      if (locations1_s[i] < capacity && indices1_s[i] >= 0) {
         for (int j = 0; j < hidden; ++j) {
-          if (ts[0].sizes().size() == 1) {
-            ts[3][i][j] = ts[0][i].item<dtype>() * ts[4][ts[1][i].item<int>() * capacity + ts[2][i].item<int>()][j];
-          } else {
-            ts[3][i][j] = ts[0][i][0].item<dtype>() * ts[4][ts[1][i].item<int>() * capacity + ts[2][i].item<int>()][j];
-          }
+          reshaped_input[i * hidden + j] = gates1_s[i] * dispatched_input[(indices1_s[i] * capacity + locations1_s[i]) * (hidden) + j];
         }
       } else {
         for (int j = 0; j < hidden; ++j) {
-          ts[4][i][j] = 0;
+          reshaped_input[i * hidden + j] = 0;
         }
       }
     }
   } else { //backward_gate
-    for (int block = 0; block < samples; ++block) {
-      ts[0][block] = 0;
-      dtype grad_gates1_s_rf = 0.0;
-      for (int thread = 0; thread < 32; ++thread) {
-        if (ts[2][block].item<int>() >= capacity || ts[1][block].item<int>() < 0) {
-          if (thread == 0) {
-            if (ts[0].sizes().size() == 1)
-              ts[0][block] = 0;
-            else
-              ts[0][block][0] = 0;
-          }
-          return;
-        }
-        int indice = ts[1][block].item<int>() * capacity + ts[2][block].item<int>();
-        for (int i = thread; i < hidden; i += 32)
-          grad_gates1_s_rf += ts[4][indice][i].item<dtype>() * ts[3][block][i].item<dtype>();
+    for (int i = 0; i < samples; ++i) {
+      gates1_s[i] = 0;
+      if (locations1_s[i] >= capacity || indices1_s[i] < 0)
+        continue;
+      for (int j = 0; j < hidden; ++j) {
+        gates1_s[i] += dispatched_input[(indices1_s[i] * capacity + locations1_s[i]) * (hidden) + j] * reshaped_input[i * hidden + j];
       }
-      ts[0][block] = grad_gates1_s_rf;
     }
   }
 }
@@ -626,11 +620,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     );
     m.def("invoke_cpu_fp32",
         &invoke_cpu<float>,
-        "Generic Invoke (CPU)"
+        "Invoke for Sparse Ops (CPU)"
     );
     m.def("invoke_cpu_fp64",
         &invoke_cpu<double>,
-        "Generic Invoke (CPU)"
+        "Invoke for Sparse Ops (CPU)"
     );
 #if defined(USE_NCCL)
     m.def("get_nccl_unique_id_size",

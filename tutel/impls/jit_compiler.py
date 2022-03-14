@@ -22,8 +22,8 @@ class JitCompiler:
         torch.cuda.init()
         __ctx__ = tutel_custom_kernel.inject_source(source)
 
-        def func(*inputs):
-            tutel_custom_kernel.invoke(inputs, __ctx__)
+        def func(*inputs, extra=[]):
+            tutel_custom_kernel.invoke(inputs, extra, __ctx__)
         return func
 
     @staticmethod
@@ -33,12 +33,12 @@ class JitCompiler:
       return JitCompiler.create_raw(template)
 
     @staticmethod
-    def generate_cpu_kernel(capacity, kernel_type):
-      def func(*inputs):
+    def generate_cpu_kernel(kernel_type):
+      def func(*inputs, extra=[]):
         if inputs[0].dtype is torch.float32:
-          tutel_custom_kernel.invoke_cpu_fp32(inputs, kernel_type, capacity)
+          tutel_custom_kernel.invoke_cpu_fp32(inputs, extra, kernel_type)
         elif inputs[0].dtype is torch.float64:
-          tutel_custom_kernel.invoke_cpu_fp64(inputs, kernel_type, capacity)
+          tutel_custom_kernel.invoke_cpu_fp64(inputs, extra, kernel_type)
         else:
           raise Exception("CPU kernel only supports float32 and float64!")
         
