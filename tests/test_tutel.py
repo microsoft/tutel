@@ -57,7 +57,7 @@ class HelloworldCaller():
                 if show_step_time and line[0] == '[Summary]':
                     print('step time:', line[5])
         p.stdout.close()
-        assert len(losses) > 0, "No valid loss result found for this unit test."
+        assert len(losses) > 0, "No valid loss result found for this unit test: %s" % command
         return losses
 
 class TutelTestCase(unittest.TestCase):

@@ -14,16 +14,14 @@ def get_kernel_dtype(param_dtype):
       raise Exception("Unrecognized data type: %s" % param_dtype)
 
 
-def create_forward(samples, global_experts, capacity, aligned_dim, param_dtype, is_cuda = True):
+def create_forward(param_dtype, is_cuda=True):
   if not is_cuda:
-    return JitCompiler.generate_cpu_kernel(capacity = capacity, kernel_type = 0)
-  return JitCompiler.generate_kernel({'capacity': capacity, 'samples': samples, 'hidden': aligned_dim, 'dtype': get_kernel_dtype(param_dtype), 'IS_FLOAT': 1 if param_dtype == torch.float32 else 0}, '''
-    #define capacity (@capacity@)
-    #define samples (@samples@)
-    #define hidden (@hidden@)
+    return JitCompiler.generate_cpu_kernel(kernel_type=0)
+
+  return JitCompiler.generate_kernel({'dtype': get_kernel_dtype(param_dtype), 'IS_FLOAT': 1 if param_dtype == torch.float32 else 0}, '''
     #define __dtype @dtype@
 
-    extern "C" __global__ __launch_bounds__(1024) void execute(__dtype* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, __dtype* __restrict__ reshaped_input, __dtype* __restrict__ dispatched_input) {
+    extern "C" __global__ __launch_bounds__(1024) void execute(__dtype* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, __dtype* __restrict__ reshaped_input, __dtype* __restrict__ dispatched_input, int samples, int hidden, int capacity) {
       // [thread_extent] blockIdx.x = 128
       // [thread_extent] threadIdx.x = 1024
 
@@ -37,16 +35,14 @@ def create_forward(samples, global_experts, capacity, aligned_dim, param_dtype, 
   ''')
 
 
-def create_backward_data(samples, global_experts, capacity, aligned_dim, param_dtype, is_cuda = True):
+def create_backward_data(param_dtype, is_cuda=True):
   if not is_cuda:
-    return JitCompiler.generate_cpu_kernel(capacity = capacity, kernel_type = 1)
-  return JitCompiler.generate_kernel({'capacity': capacity, 'samples': samples, 'hidden': aligned_dim, 'dtype': get_kernel_dtype(param_dtype), 'IS_FLOAT': 1 if param_dtype == torch.float32 else 0}, '''
-    #define capacity (@capacity@)
-    #define samples (@samples@)
-    #define hidden (@hidden@)
+    return JitCompiler.generate_cpu_kernel(kernel_type=1)
+
+  return JitCompiler.generate_kernel({'dtype': get_kernel_dtype(param_dtype), 'IS_FLOAT': 1 if param_dtype == torch.float32 else 0}, '''
     #define __dtype @dtype@
 
-    extern "C" __global__ __launch_bounds__(1024) void execute(__dtype* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, __dtype* __restrict__ grad_reshaped_input, __dtype* __restrict__ dispatched_input) {
+    extern "C" __global__ __launch_bounds__(1024) void execute(__dtype* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, __dtype* __restrict__ grad_reshaped_input, __dtype* __restrict__ dispatched_input, int samples, int hidden, int capacity) {
       // [thread_extent] blockIdx.x = 128
       // [thread_extent] threadIdx.x = 1024
 
@@ -68,37 +64,36 @@ def create_backward_data(samples, global_experts, capacity, aligned_dim, param_d
   ''')
 
 
-def create_backward_gate(samples, global_experts, capacity, aligned_dim, param_dtype, is_cuda = True):
+def create_backward_gate(param_dtype, is_cuda=True):
   if not is_cuda:
-    return JitCompiler.generate_cpu_kernel(capacity = capacity, kernel_type = 2)
-  return JitCompiler.generate_kernel({'capacity': capacity, 'samples': samples, 'hidden': aligned_dim, 'dtype': get_kernel_dtype(param_dtype), 'IS_FLOAT': 1 if param_dtype == torch.float32 else 0}, '''
-    #define capacity (@capacity@)
-    #define samples (@samples@)
-    #define hidden (@hidden@)
-    #define __dtype @dtype@
+    return JitCompiler.generate_cpu_kernel(kernel_type=2)
 
-    extern "C" __global__ __launch_bounds__(32) void execute(void* __restrict__ grad_gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, __dtype* __restrict__ reshaped_input, __dtype* __restrict__ dispatched_input) {
-      // [thread_extent] blockIdx.x = @samples@
-      // [thread_extent] threadIdx.x = 32
-      if (locations1_s[(int)blockIdx.x] >= capacity || indices1_s[(int)blockIdx.x] < 0) {
+  return JitCompiler.generate_kernel({'dtype': get_kernel_dtype(param_dtype), 'IS_FLOAT': 1 if param_dtype == torch.float32 else 0}, '''
+  #define __dtype @dtype@
+
+  extern "C" __global__ __launch_bounds__(32) void execute(void* __restrict__ grad_gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, __dtype* __restrict__ reshaped_input, __dtype* __restrict__ dispatched_input, int samples, int hidden, int capacity) {
+    // [thread_extent] blockIdx.x = 256
+    // [thread_extent] threadIdx.x = 32
+    for (int index = blockIdx.x; index < samples; index += gridDim.x) {
+      if (locations1_s[index] >= capacity || indices1_s[index] < 0) {
         if (((int)threadIdx.x) == 0)
     #if @IS_FLOAT@
-          ((float*)grad_gates1_s)[(((int)blockIdx.x))] = 0;
+          ((float*)grad_gates1_s)[index] = 0;
     #else
-          ((half*)grad_gates1_s)[(((int)blockIdx.x))] = __float2half_rn(0.000000e+00f);
+          ((half*)grad_gates1_s)[index] = __float2half_rn(0.000000e+00f);
     #endif
         return;
       }
-      int indice = indices1_s[(int)blockIdx.x] * capacity + locations1_s[(int)blockIdx.x];
+      int indice = indices1_s[index] * capacity + locations1_s[index];
     #if @IS_FLOAT@
       __dtype grad_gates1_s_rf = 0.000000e+00f;
     #else
       __dtype grad_gates1_s_rf = __dtype(0, 0);
     #endif
       for (int i = threadIdx.x; i < hidden; i += 32)
-        grad_gates1_s_rf += dispatched_input[indice * (hidden) + i] * reshaped_input[((int)blockIdx.x) * (hidden) + i];
+        grad_gates1_s_rf += dispatched_input[indice * (hidden) + i] * reshaped_input[index * (hidden) + i];
 
-    #if !defined(__HIPCC__)
+  #if !defined(__HIPCC__)
       __dtype red_buf0[1];
       unsigned int mask[1];
       __dtype t0[1];
@@ -115,7 +110,7 @@ def create_backward_gate(samples, global_experts, capacity, aligned_dim, param_d
       t0[(0)] = __shfl_down_sync(mask[(0)], red_buf0[(0)], 1, 32);
       red_buf0[(0)] = (red_buf0[(0)] + t0[(0)]);
       red_buf0[(0)] = __shfl_sync(mask[(0)], red_buf0[(0)], 0, 32);
-    #else
+  #else
       __shared__ __dtype red_buf0[32];
       __syncthreads();
       ((volatile __dtype*)red_buf0)[(((int)threadIdx.x))] = grad_gates1_s_rf;
@@ -127,12 +122,13 @@ def create_backward_gate(samples, global_experts, capacity, aligned_dim, param_d
         ((volatile __dtype*)red_buf0)[(((int)threadIdx.x))] = ((__dtype)(((volatile __dtype*)red_buf0)[(((int)threadIdx.x))]) + (__dtype)(((volatile __dtype*)red_buf0)[((((int)threadIdx.x) + 1))]));
       }
       __syncthreads();
-    #endif
+  #endif
       if (((int)threadIdx.x) == 0)
-    #if @IS_FLOAT@
-        ((float*)grad_gates1_s)[(((int)blockIdx.x))] = red_buf0[(0)];
-    #else
-        ((half*)grad_gates1_s)[(((int)blockIdx.x))] = red_buf0[(0)].x + red_buf0[(0)].y;
-    #endif
+  #if @IS_FLOAT@
+        ((float*)grad_gates1_s)[index] = red_buf0[(0)];
+  #else
+        ((half*)grad_gates1_s)[index] = red_buf0[(0)].x + red_buf0[(0)].y;
+  #endif
     }
+  }
   ''')
