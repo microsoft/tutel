@@ -19,9 +19,10 @@ def main():
     else:
         os.environ['TUTEL_CUDA_SANDBOX'] = '1'
 
+    skip_numa = int(os.environ.get('OMP_NUM_THREADS', '1')) > 1
     cmd_args = []
     try:
-        if not os.path.exists('/usr/bin/numactl'):
+        if skip_numa or not os.path.exists('/usr/bin/numactl'):
             raise
         local_size = int(os.environ['LOCAL_SIZE'])
         cpu_nodes = sorted([str(x[4:]) for x in os.listdir('/sys/devices/system/node') if re.match('node[0-9]+', x)])

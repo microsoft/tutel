@@ -55,6 +55,8 @@ How to setup Tutel MoE for Pytorch:
         $ mpiexec -host localhost -x LOCAL_SIZE=8 python3 -m tutel.launcher.run -m tutel.examples.helloworld --batch_size=16
         # << Cross Nodes >>
         $ mpiexec -host <node-ip-0>,<node-ip-1>,.. -x MASTER_ADDR=<node-ip-0> -x LOCAL_SIZE=8 python3 -m tutel.launcher.run -m tutel.examples.helloworld --batch_size=16
+        # << For CPU-based Launch>>
+        $ mpiexec -host localhost -x LOCAL_SIZE=1 -bind-to none -x OMP_NUM_THREADS=1024 python3 -m tutel.launcher.run -m tutel.examples.helloworld --batch_size=16 --device cpu
 
 ```
 
