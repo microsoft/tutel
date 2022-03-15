@@ -2,9 +2,18 @@
 // Licensed under the MIT license.
 
 #include <torch/extension.h>
+
+#if defined(USE_CUDA)
 #include <ATen/cuda/CUDAContext.h>
 #include <ATen/cuda/CUDAEvent.h>
 #include <c10/cuda/CUDACachingAllocator.h>
+#include <cuda_runtime.h>
+#include <cuda_fp16.h>
+#include <cuda.h>
+#include <nvrtc.h>
+#else
+#undef USE_NCCL
+#endif
 
 #if defined(USE_NCCL)
 #include <nccl.h>
@@ -16,10 +25,6 @@
 #include <sys/wait.h>
 
 #include <dlfcn.h>
-#include <cuda_runtime.h>
-#include <cuda_fp16.h>
-#include <cuda.h>
-#include <nvrtc.h>
 
 #undef CHECK_EQ
 #undef CHECK_NE
@@ -33,6 +38,7 @@
 #define CHECK_CUDA(x) AT_ASSERTM(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) AT_ASSERTM(x.is_contiguous(), #x " must be contiguous")
 
+#if defined(USE_CUDA)
 namespace jit {
 
 inline static std::string file_read(const char *path) {
@@ -233,6 +239,7 @@ static void invoke(const std::vector<torch::Tensor> &ts, const std::vector<long>
 }
 
 } // namespace jit
+#endif
 
 template<typename dtype> static void invoke_cpu(const std::vector<torch::Tensor> &ts, const std::vector<int> &extra, int kernel_type) {
   int samples = extra[0];
@@ -610,6 +617,7 @@ static torch::Tensor nccl_all_to_all_2d_async(torch::Tensor &input) {
 #endif
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+#if defined(USE_CUDA)
     m.def("invoke",
         &jit::invoke,
         "Generic Invoke for GPU (CUDA)"
@@ -618,6 +626,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         &jit::inject_source,
         "Inject Source for GPU (CUDA)"
     );
+#endif
     m.def("invoke_cpu_fp32",
         &invoke_cpu<float>,
         "Invoke for Sparse Ops (CPU)"

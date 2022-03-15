@@ -18,6 +18,8 @@ How to setup Tutel MoE for Pytorch:
         python3 -m pip install --user torch==1.10.0+cu113 torchvision==0.11.1+cu113 -f https://download.pytorch.org/whl/torch_stable.html
         #   Pytorch for AMD ROCm == 4.2:
         python3 -m pip install --user torch==1.10.0+rocm4.2 torchvision==0.11.1+rocm4.2 -f https://download.pytorch.org/whl/torch_stable.html
+        #   Pytorch for CPU:
+        python3 -m pip install --user torch==1.10.0+cpu torchvision==0.11.1+cpu -f https://download.pytorch.org/whl/torch_stable.html
 
 * Install Tutel Online:
 

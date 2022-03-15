@@ -13,7 +13,7 @@ import subprocess
 from typing import List, Tuple
 
 from setuptools import setup, find_packages, Command
-from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CppExtension
 
 try:
     from torch.utils.cpp_extension import IS_HIP_EXTENSION
@@ -50,9 +50,16 @@ class Tester(Command):
         """Run pytest."""
         subprocess.check_call('python3 -m pytest -v -s tests/', shell=True)
 
-def install(use_nccl):
-    ext_libs = ['dl', 'cuda', 'nvrtc'] if not IS_HIP_EXTENSION else []
-    ext_args = {'cxx': ['-Wno-sign-compare', '-Wno-unused-but-set-variable']}
+def install(use_cuda, use_nccl):
+    ext_libs, ext_args = [], {'cxx': ['-Wno-sign-compare', '-Wno-unused-but-set-variable']}
+    if not use_cuda:
+        use_nccl = False
+        extension = CppExtension
+    else:
+        ext_libs += ['dl', 'cuda', 'nvrtc'] if not IS_HIP_EXTENSION else []
+        ext_args['cxx'] += ['-DUSE_CUDA']
+        extension = CUDAExtension
+
     if use_nccl:
         if IS_HIP_EXTENSION:
             ext_libs += ['rccl']
@@ -101,7 +108,7 @@ def install(use_nccl):
             ],
         },
         ext_modules=[
-            CUDAExtension('tutel_custom_kernel', [
+            extension('tutel_custom_kernel', [
                 './tutel/custom/custom_kernel.cpp',
             ],
             library_dirs=['/usr/local/cuda/lib64/stubs'],
@@ -119,7 +126,11 @@ def install(use_nccl):
     )
 
 try:
-    install(use_nccl=True)
+    install(use_cuda=True, use_nccl=True)
 except:
     print('Try installing without NCCL extension..')
-    install(use_nccl=False)
+    try:
+        install(use_cuda=True, use_nccl=False)
+    except:
+        print('Try installing without CUDA extension..')
+        install(use_cuda=False, use_nccl=False)

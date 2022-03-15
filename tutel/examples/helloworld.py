@@ -34,7 +34,7 @@ parser.add_argument('--a2a_ffn_overlap_degree', type=int, default=1)
 parser.add_argument('--num_steps', type=int, default=100)
 parser.add_argument('--parallel_type', type=str, default='auto')
 parser.add_argument('--save_load_checkpoint', default=False, action='store_true')
-parser.add_argument('--device', type=str, default='cuda')
+parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
 args = parser.parse_args()
 
 parallel_env = system_init.init_data_model_parallel(backend='nccl' if args.device == 'cuda' else 'gloo')
@@ -110,8 +110,8 @@ average_time, num_steps = 0, args.num_steps
 params_for_all_reduce = [p for p in model.parameters() if not hasattr(p, 'skip_allreduce') and getattr(p, 'requires_grad', False)]
 
 for i in range(num_steps):
-
-    torch.cuda.synchronize()
+    if x.is_cuda:
+        torch.cuda.synchronize()
     t_start = time.time()
     optimizer.zero_grad()
 
@@ -126,7 +126,8 @@ for i in range(num_steps):
             dist.all_reduce(p.grad)
     optimizer.step()
 
-    torch.cuda.synchronize()
+    if x.is_cuda:
+        torch.cuda.synchronize()
     t_stop = time.time()
     dist_print('STEP-%s: DONE, loss = %s, step_time = %s sec.' % (i, float(loss.data), t_stop - t_start))
 
