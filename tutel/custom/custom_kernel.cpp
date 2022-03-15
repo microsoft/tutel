@@ -3,7 +3,7 @@
 
 #include <torch/extension.h>
 
-#if defined(USE_CUDA)
+#if defined(USE_GPU)
 #include <ATen/cuda/CUDAContext.h>
 #include <ATen/cuda/CUDAEvent.h>
 #include <c10/cuda/CUDACachingAllocator.h>
@@ -38,7 +38,7 @@
 #define CHECK_CUDA(x) AT_ASSERTM(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) AT_ASSERTM(x.is_contiguous(), #x " must be contiguous")
 
-#if defined(USE_CUDA)
+#if defined(USE_GPU)
 namespace jit {
 
 inline static std::string file_read(const char *path) {
@@ -617,7 +617,7 @@ static torch::Tensor nccl_all_to_all_2d_async(torch::Tensor &input) {
 #endif
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-#if defined(USE_CUDA)
+#if defined(USE_GPU)
     m.def("invoke",
         &jit::invoke,
         "Generic Invoke for GPU (CUDA)"

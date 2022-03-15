@@ -22,7 +22,7 @@ def create_forward(param_dtype, is_cuda=True):
     #define __dtype @dtype@
 
     extern "C" __global__ __launch_bounds__(1024) void execute(__dtype* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, __dtype* __restrict__ reshaped_input, __dtype* __restrict__ dispatched_input, int samples, int hidden, int capacity) {
-      // [thread_extent] blockIdx.x = 128
+      // [thread_extent] blockIdx.x = 512
       // [thread_extent] threadIdx.x = 1024
 
       for (int i = blockIdx.x; i < samples; i += gridDim.x)
@@ -43,7 +43,7 @@ def create_backward_data(param_dtype, is_cuda=True):
     #define __dtype @dtype@
 
     extern "C" __global__ __launch_bounds__(1024) void execute(__dtype* __restrict__ gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, __dtype* __restrict__ grad_reshaped_input, __dtype* __restrict__ dispatched_input, int samples, int hidden, int capacity) {
-      // [thread_extent] blockIdx.x = 128
+      // [thread_extent] blockIdx.x = 512
       // [thread_extent] threadIdx.x = 1024
 
       for (int i = blockIdx.x; i < samples; i += gridDim.x)
@@ -72,7 +72,7 @@ def create_backward_gate(param_dtype, is_cuda=True):
   #define __dtype @dtype@
 
   extern "C" __global__ __launch_bounds__(32) void execute(void* __restrict__ grad_gates1_s, int* __restrict__ indices1_s, int* __restrict__ locations1_s, __dtype* __restrict__ reshaped_input, __dtype* __restrict__ dispatched_input, int samples, int hidden, int capacity) {
-    // [thread_extent] blockIdx.x = 256
+    // [thread_extent] blockIdx.x = 512
     // [thread_extent] threadIdx.x = 32
     for (int index = blockIdx.x; index < samples; index += gridDim.x) {
       if (locations1_s[index] >= capacity || indices1_s[index] < 0) {

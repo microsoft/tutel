@@ -36,7 +36,7 @@ class GatingEncoder(torch.autograd.Function):
         grad_gates = []
         if id(ctx.gates_h2[0]) != id(ctx.config.ones_helper):
           for i, l in zip(ctx.config.indices_, ctx.config.locations_):
-            grad_gates1_s = torch.empty([ctx.config.expected_sample_size,], dtype=dispatched_input.dtype, device=dispatched_input.device)
+            grad_gates1_s = torch.empty([ctx.config.sample_size,], dtype=dispatched_input.dtype, device=dispatched_input.device)
             ctx.config.func_bwd_gate(grad_gates1_s, i, l, ctx.reshaped_input, dispatched_input, extra=[ctx.config.indices_[0].size(0), ctx.config.aligned_dim, ctx.config.capacity])
             grad_gates.append(grad_gates1_s)
         return (None, last_result, *grad_gates)
@@ -54,7 +54,7 @@ class GatingDecoder(torch.autograd.Function):
 
         last_result = None
         for g, i, l in zip(ctx.gates_h2, ctx.config.indices_, ctx.config.locations_):
-          single_output = torch.empty([config.expected_sample_size, config.model_dim], dtype=expert_output.dtype, device=expert_output.device)
+          single_output = torch.empty([config.sample_size, config.model_dim], dtype=expert_output.dtype, device=expert_output.device)
           config.func_bwd_data(g, i, l, single_output, expert_output, extra=[ctx.config.indices_[0].size(0), ctx.config.aligned_dim, ctx.config.capacity])
           last_result = single_output if last_result is None else last_result + single_output
         return last_result
@@ -69,7 +69,7 @@ class GatingDecoder(torch.autograd.Function):
         grad_gates = []
         if id(ctx.gates_h2[0]) != id(ctx.config.ones_helper):
           for i, l in zip(ctx.config.indices_, ctx.config.locations_):
-            grad_gates1_s = torch.empty([ctx.config.expected_sample_size,], dtype=combined_output.dtype, device=combined_output.device)
+            grad_gates1_s = torch.empty([ctx.config.sample_size,], dtype=combined_output.dtype, device=combined_output.device)
             ctx.config.func_bwd_gate(grad_gates1_s, i, l, combined_output, ctx.expert_output, extra=[ctx.config.indices_[0].size(0), ctx.config.aligned_dim, ctx.config.capacity])
             grad_gates.append(grad_gates1_s)
         return (None, grad_expert_output, *grad_gates)
@@ -77,36 +77,36 @@ class GatingDecoder(torch.autograd.Function):
 
 class TutelMoeFastDispatcher:
 
+    kernel_pool = dict()
+
     def __init__(self, num_global_experts, capacity, model_dim, dispatch_dtype):
-        self.expected_sample_size = -1
         self.num_global_experts = int(num_global_experts)
         self.capacity = int(capacity)
         self.model_dim = int(model_dim)
-        self.kernel_pool = dict()
         self.dtype = dispatch_dtype
         if IS_HIP_EXTENSION or dispatch_dtype != torch.float16:
             self.dtype = torch.float32
         self.original_dtype = dispatch_dtype
         self.aligned_dim = model_dim // (2 if self.dtype == torch.float16 else 1)
+        self.is_cuda = None
 
     def update(self, indices_, locations_, gates_, capacity=None, is_postscore=True):
         self.indices_ = [x.to(torch.int32).view(-1) for x in indices_]
         self.locations_ = [x.to(torch.int32) for x in locations_]
         self.gates_ = [x.to(self.dtype) for x in gates_]
-        sample_size = int(self.indices_[0].size(0))
-        capacity = int(capacity) or self.capacity
         self.is_postscore = is_postscore
+        self.sample_size, self.capacity = int(self.indices_[0].size(0)), int(capacity) or self.capacity
 
-        if sample_size != self.expected_sample_size or capacity != self.capacity:
-            self.expected_sample_size, self.capacity = sample_size, capacity
-            if self.dtype not in self.kernel_pool:
+        if self.is_cuda != indices_[0].is_cuda:
+            self.is_cuda = indices_[0].is_cuda
+            if self.is_cuda not in TutelMoeFastDispatcher.kernel_pool:
                 self.func_fwd = jit_kernel.create_forward(self.dtype, indices_[0].is_cuda)
                 self.func_bwd_data = jit_kernel.create_backward_data(self.dtype, indices_[0].is_cuda)
                 self.func_bwd_gate = jit_kernel.create_backward_gate(self.dtype, indices_[0].is_cuda)
-                self.ones_helper = torch.ones([sample_size, 2], dtype=self.dtype, device=self.indices_[0].device)
-                self.kernel_pool[self.dtype] = self.func_fwd, self.func_bwd_data, self.func_bwd_gate, self.ones_helper
+                self.ones_helper = torch.ones([self.sample_size, 2], dtype=self.dtype, device=self.indices_[0].device)
+                TutelMoeFastDispatcher.kernel_pool[self.is_cuda] = self.func_fwd, self.func_bwd_data, self.func_bwd_gate, self.ones_helper
             else:
-                self.func_fwd, self.func_bwd_data, self.func_bwd_gate, self.ones_helper = self.kernel_pool[self.dtype]
+                self.func_fwd, self.func_bwd_data, self.func_bwd_gate, self.ones_helper = TutelMoeFastDispatcher.kernel_pool[self.is_cuda]
 
     def encode(self, data):
         if self.is_postscore:
