@@ -57,7 +57,7 @@ def install(use_cuda, use_nccl):
         extension = CppExtension
     else:
         ext_libs += ['dl', 'cuda', 'nvrtc'] if not IS_HIP_EXTENSION else []
-        ext_args['cxx'] += ['-DUSE_CUDA']
+        ext_args['cxx'] += ['-DUSE_GPU']
         extension = CUDAExtension
 
     if use_nccl:

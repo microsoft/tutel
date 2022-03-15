@@ -16,26 +16,8 @@ import torch.distributed as dist
 from torch.nn import ModuleList
 import torch.nn.functional as F
 
-from ..impls.fast_dispatch import fast_dispatcher
-from ..jit_kernels.gating import fast_cumsum_sub_one
+from ..impls.fast_dispatch import fast_dispatcher, extract_critical
 from ..impls import communicate as C
-
-
-def one_hot_with_dtype(data, num_classes, dtype):
-    result = torch.zeros([data.size(0), num_classes], device=data.device, dtype=dtype)
-    result.scatter_(1, data.unsqueeze(-1), 1)
-    return result
-
-def load_balance(gates, mask1, num_global_experts, fp32_gate):
-    if gates.dtype == torch.float32 or fp32_gate:
-        me = torch.sum(gates.float(), dim=0)
-        ce = torch.sum(mask1.to(me.dtype), dim=0)
-        l_loss = torch.sum(me * ce) * (num_global_experts / (gates.size(0) * gates.size(0)))
-    else:
-        me = torch.mean(gates, dim=0)
-        ce = torch.mean(mask1.to(gates.dtype), dim=0)
-        l_loss = torch.sum(me * ce) * num_global_experts
-    return l_loss
 
 
 class TopKGate(torch.nn.Module):
@@ -66,7 +48,6 @@ class TopKGate(torch.nn.Module):
             self.wg = self.wg.float()
 
         self.capacity_factor = float(os.environ.get('CAP_FACTOR', capacity_factor))
-        self.is_ones_gate = (int(os.environ.get('ONES_GATE', 0)) == 1)
         self.num_global_experts = num_global_experts
 
         self.batch_prioritized_routing = batch_prioritized_routing
@@ -79,11 +60,6 @@ class TopKGate(torch.nn.Module):
         self.a2a_ffn_overlap_degree = a2a_ffn_overlap_degree
         self.use_2d_a2a = (os.environ.get('TUTEL_ALLTOALL_ALGO', '').upper() == '2D' and os.environ.get('LOCAL_SIZE', -1) == C.get_world_size())
 
-    def compute_sorted_location(self, x, importance_scores):
-        sorted_x = x[importance_scores.argsort(dim=0)]
-        sorted_cumsum = fast_cumsum_sub_one(sorted_x) * sorted_x
-        return sorted_cumsum[importance_scores.argsort(dim=0).argsort(dim=0)]
-
     def apply_on_expert_fn(self, input, ctx):
         input = input.to(next(iter(ctx.experts.parameters())).dtype)
         if self.input_dropout:
@@ -92,51 +68,18 @@ class TopKGate(torch.nn.Module):
         group = ctx.group
         logits = self.wg(input.to(next(iter(self.wg.parameters())).dtype))
 
-        topk_indices = torch.topk(logits, self.top_k, dim=1).indices
-
-        indices_s = [x.view(-1) for x in topk_indices.chunk(self.top_k, dim=1)]
-        masks_se = [one_hot_with_dtype(x, num_classes=self.num_global_experts, dtype=x.dtype) for x in indices_s]
-
         gates = F.softmax(logits, dim=1)
-        gates_s = [(gates * x).sum(dim=1) for x in masks_se]
 
-        l_loss = load_balance(gates, masks_se[0], self.num_global_experts, self.fp32_gate)
+        critical_data, l_loss = extract_critical(gates, self.top_k, self.capacity_factor, self.fp32_gate, self.batch_prioritized_routing)
+        capacity = critical_data[-1]
 
-        if self.batch_prioritized_routing:
-            importance_scores = -1 * gates.max(dim=1)[0]
-            self.compute_location = lambda x: self.compute_sorted_location(x, importance_scores)
-        else:
-            self.compute_location = fast_cumsum_sub_one
-
-        locations1 = self.compute_location(masks_se[0])
-
-        locations_s = [torch.sum(locations1 * masks_se[0], dim=1).to(torch.int32)]
-
-        if self.top_k > 1:
-          acc_base = None
-
-          for k in range(1, self.top_k):
-            acc_base = torch.sum(masks_se[k - 1], dim=0, keepdim=True) if acc_base is None else acc_base + torch.sum(masks_se[k - 1], dim=0, keepdim=True)
-            locations2 = self.compute_location(masks_se[k])
-            locations2 += acc_base
-            locations_s.append(torch.sum(locations2 * masks_se[k], dim=1).to(torch.int32))
-
-          # Normalize Gate
-          denom_s = torch.clamp(sum(gates_s), min=torch.finfo(gates_s[0].dtype).eps)
-          gates_s = [x / denom_s for x in gates_s]
-
-        indices_s = [x.to(torch.int32) for x in indices_s]
-
-        S, M, GE = input.size(0), input.size(1), self.num_global_experts
+        S, M, g_experts = input.size(0), input.size(1), self.num_global_experts
         world_size = C.get_world_size(group)
 
-        capacity = self.top_k * int(self.capacity_factor * ((S + self.num_global_experts - 1) // self.num_global_experts))
         if not hasattr(self, '_fdr'):
-            self._fdr = fast_dispatcher(num_global_experts=GE, capacity=capacity, model_dim=M, dispatch_dtype=input.dtype)
+            self._fdr = fast_dispatcher(num_global_experts=g_experts, capacity=capacity, model_dim=M, dispatch_dtype=input.dtype)
 
-        if self.is_ones_gate:
-            gates_s = [torch.ones_like(x) for x in gates_s]
-        self._fdr.update(indices_s, locations_s, gates_s, capacity=capacity, is_postscore=self.is_postscore)
+        self._fdr.update(*critical_data[1:], is_postscore=self.is_postscore)
 
         dispatched_input = self._fdr.encode(input)
 
@@ -144,7 +87,7 @@ class TopKGate(torch.nn.Module):
             ctx.use_model_parallel = (dispatched_input.numel() < ctx.model_dim * ctx.hidden_size)
 
         if ctx.use_model_parallel:
-            dispatched_input = dispatched_input.reshape(GE, -1).repeat(1, ctx.sharded_count)
+            dispatched_input = dispatched_input.reshape(g_experts, -1).repeat(1, ctx.sharded_count)
 
         if ctx.sharded_count > 1:
             dispatched_input = dispatched_input.reshape(world_size, 1, -1, M)
@@ -212,10 +155,10 @@ class TopKGate(torch.nn.Module):
                 expert_output_gathered_after_a2a = C.AllToAllGatherAsync.apply(*expert_output_scattered)
                 expert_output = C.CurrentStreamAcquire.apply(expert_output_gathered_after_a2a, 0)
 
-        expert_output = expert_output.reshape(-1, GE, capacity, M)
+        expert_output = expert_output.reshape(-1, g_experts, capacity, M)
         if expert_output.size(0) > 1:
-            expert_output = torch.sum(expert_output.view(GE, -1, capacity, M), dim=1)
-        expert_output = expert_output.view(GE * self._fdr.capacity, M)
+            expert_output = torch.sum(expert_output.view(g_experts, -1, capacity, M), dim=1)
+        expert_output = expert_output.view(g_experts * capacity, M)
 
         result_output = self._fdr.decode(expert_output)
         return result_output, l_loss
