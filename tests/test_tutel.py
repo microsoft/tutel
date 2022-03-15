@@ -29,13 +29,14 @@ class HelloworldCaller():
         a2a_ffn_overlap_degree=1,
         num_steps=100,
         use_model_parallel=False,
+        device='cuda'
         ):
         # Disable NCCL SHM because it's capacity is limited in Azure pipeline
         new_env = os.environ.copy()
         new_env['NCCL_SHM_DISABLE'] = '1'
         """Run helloworld example"""
         if helloworld_file == 'helloworld':
-            command = 'python3 -m torch.distributed.launch --nproc_per_node=' + str(nproc_per_node) + ' tutel/examples/helloworld.py --top ' + str(top) + ' --dtype ' + dtype + ' --num_local_experts ' + str(num_local_experts) + ' --hidden_size ' + str(hidden_size) + ' --batch_size ' + str(batch_size) + ' --a2a_ffn_overlap_degree ' + str(a2a_ffn_overlap_degree) + ' --num_steps ' + str(num_steps)
+            command = 'python3 -m torch.distributed.launch --nproc_per_node=' + str(nproc_per_node) + ' tutel/examples/helloworld.py --top ' + str(top) + ' --dtype ' + dtype + ' --num_local_experts ' + str(num_local_experts) + ' --hidden_size ' + str(hidden_size) + ' --batch_size ' + str(batch_size) + ' --a2a_ffn_overlap_degree ' + str(a2a_ffn_overlap_degree) + ' --num_steps ' + str(num_steps) + ' --device ' + str(device)
             if use_model_parallel:
                 command += ' --parallel_type model'
             else:
@@ -74,6 +75,15 @@ class TutelTestCase(unittest.TestCase):
                 else:
                     self.data[i]['losses'][j] = round(float(self.data[i]['losses'][j]), 1)
         self.tutelCaller = HelloworldCaller()
+
+    def test_cpu_kernel(self):
+        """Test cpu kernel"""
+        cuda_losses = self.tutelCaller.run(nproc_per_node=1, num_steps=10, device='cuda')
+        cpu_losses = self.tutelCaller.run(nproc_per_node=1, num_steps=10, device='cpu')
+        for i in range(10):
+            cuda_losses[i] = round(cuda_losses[i],2)
+            cpu_losses[i] = round(cpu_losses[i],2)
+        self.assertEqual(cuda_losses, cpu_losses)
 
     def test_top1_fp32_1_expert(self):
         """Test helloworld with top1 gate, float32 dtype and 1 expert(s)."""
