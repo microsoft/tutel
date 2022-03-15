@@ -4,8 +4,6 @@
 import torch
 import os, tempfile
 
-assert torch.cuda.is_available() == True, "This version of Tutel MoE only supports CUDA. More backends will be supported soon."
-
 try:
     import tutel_custom_kernel
 except:
