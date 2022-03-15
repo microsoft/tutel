@@ -51,6 +51,9 @@ def model_executor(module, is_training=True):
   params = model.parameters()
 
   verbose = int(os.environ.get('VERBOSE', '0'))
+  is_cuda = (parallel_env.local_device.type == 'cuda')
+  is_training = is_training and isinstance(output, torch.Tensor)
+  start_result = output.contiguous().view(-1)[0] if isinstance(output, torch.Tensor) else -1
 
   if verbose:
     sys.stderr.write('[%d] %g %g .. %g (%s)\n' % (parallel_env.model_rank, output.flatten()[0], output.flatten()[1], output.flatten()[-1], output.shape))
@@ -67,7 +70,7 @@ def model_executor(module, is_training=True):
   def next_step():
     if parallel_env.group_count > 1:
       dist.barrier()
-    if output.is_cuda:
+    if is_cuda:
       torch.cuda.synchronize(parallel_env.local_device)
     t_start = time.time()
 
@@ -85,12 +88,12 @@ def model_executor(module, is_training=True):
             simple_all_reduce(p.grad, parallel_env.data_group)
       optimizer.step()
     else:
-      result = model(**inputs).contiguous()
-      result = result.view(-1)[0]
+      result = model(**inputs)
+      result = result.contiguous().view(-1)[0] if isinstance(result, torch.Tensor) else -1
 
     if parallel_env.group_count > 1:
       dist.barrier()
-    if output.is_cuda:
+    if is_cuda:
       torch.cuda.synchronize(parallel_env.local_device)
     t_stop = time.time()
 
@@ -103,7 +106,7 @@ def model_executor(module, is_training=True):
     next_step()
   average_step_time = sum([next_step() for _ in range(5)]) / 5
   if parallel_env.model_rank == 0:
-    sys.stderr.write('  [%s] digest = %g .., time = %g\n' % (name, output.flatten()[0], average_step_time))
+    sys.stderr.write('  [%s] digest = %g .., time = %g\n' % (name, start_result, average_step_time))
     result = json.dumps({'name': name, 'step_time': average_step_time})
     if 'CONFIG_STORE_PATH' in os.environ:
       with open(os.environ['CONFIG_STORE_PATH'], 'w') as fp:

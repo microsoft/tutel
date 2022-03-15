@@ -186,11 +186,11 @@ def fast_encode(data, critial_data, is_postscore=True):
     num_global_experts = critial_data[0]
     dispatcher = TutelMoeFastDispatcher(num_global_experts, 0, data.size(-1), data.dtype)
     dispatcher.update(*critial_data[1:], is_postscore=is_postscore)
-    return dispatcher.encode(data)
+    return dispatcher.encode(data).view(num_global_experts, -1, data.size(-1))
 
 def fast_decode(data, critial_data, is_postscore=True):
     num_global_experts = critial_data[0]
     dispatcher = TutelMoeFastDispatcher(num_global_experts, 0, data.size(-1), data.dtype)
     dispatcher.update(*critial_data[1:], is_postscore=is_postscore)
-    return dispatcher.decode(data)
+    return dispatcher.decode(data).view(-1, data.size(-1))
 
