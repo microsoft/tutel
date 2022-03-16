@@ -41,3 +41,7 @@ class JitCompiler:
           raise Exception("CPU kernel only supports float32 and float64!")
         
       return func
+
+def create_cuda_kernel(source, keyword_dict={}):
+  return JitCompiler.generate_kernel(keyword_dict, source)
+

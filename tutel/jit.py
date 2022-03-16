@@ -1,4 +1,4 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
-from . import system as system_init
+from .impls.jit_compiler import create_cuda_kernel
