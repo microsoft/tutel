@@ -436,3 +436,8 @@ class PrimSpatialSplit(torch.autograd.Function):
         input = swap_axis(input, 0, dim)
         return input
 
+def all_to_all(data, group=None):
+    if get_world_size(group) == 1:
+        logging.warning('all_to_all() was bypassed as distributed world size is 1.')
+        return data
+    return PrimAllToAll.apply(group, data)
