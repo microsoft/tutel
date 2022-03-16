@@ -4,7 +4,7 @@
 # Licensed under the MIT license.
 
 
-from tutel import system_init
+from tutel import system
 
 
 import os
@@ -36,7 +36,7 @@ parser.add_argument('--num_steps', type=int, default=100)
 parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
 args = parser.parse_args()
 
-parallel_env = system_init.init_data_model_parallel(backend='nccl' if args.device == 'cuda' else 'gloo')
+parallel_env = system.init_data_model_parallel(backend='nccl' if args.device == 'cuda' else 'gloo')
 dist_rank, dist_world_size, dist_print = parallel_env.global_rank, parallel_env.global_size, parallel_env.dist_print
 args.local_rank = parallel_env.local_device.index
 
@@ -124,7 +124,11 @@ for i in range(num_steps):
     if x.is_cuda:
         torch.cuda.synchronize()
     t_stop = time.time()
-    dist_print('STEP-%s: DONE, loss = %s, step_time = %s sec.' % (i, float(loss.data), t_stop - t_start))
+
+    num_global_experts = tutel_moe.moe_layer.global_expert_count(num_local_experts)
+    args.top = min(args.top, num_global_experts)
+    tflops = (batch_size * num_tokens * model_dim * hidden_size) * 4 * args.top * 3 * 1e-12 / (t_stop - t_start)
+    dist_print('STEP-%s: loss = %.5f, step_time = %.6f sec, perf = %.2f tflops.' % (i, float(loss.data), t_stop - t_start, tflops))
 
     if i + 10 >= num_steps:
         average_time += t_stop - t_start

@@ -46,15 +46,16 @@ class HelloworldCaller():
         losses = []
         while p.poll() is None:
             line = p.stdout.readline().decode("utf8").split()
-            if len(line) > 5:
-                if line[2] == 'loss':
+            for i in range(len(line) - 1):
+                if line[i] == 'loss':
                     if is_round:
                         if dtype == 'float32':
-                            losses.append(round(float(line[4][:-1]), 3))
+                            losses.append(round(float(line[i + 2][:-1]), 3))
                         else:
-                            losses.append(round(float(line[4][:-1]), 1))
+                            losses.append(round(float(line[i + 2][:-1]), 1))
                     else:
-                        losses.append(line[4][:-1])
+                        losses.append(line[i + 2][:-1])
+                    break
                 if show_step_time and line[0] == '[Summary]':
                     print('step time:', line[5])
         p.stdout.close()

@@ -25,7 +25,7 @@ def init_affinity_at_program_beginning():
             logging.warning('Failed to set NUMA status: %s' % ex)
 
 def init_data_model_parallel(group_count=1, backend='nccl'):
-    from tutel.impls import communicate as C
+    from tutel import net as C
     result = C.create_groups_from_world(group_count=group_count, include_init=backend)
     logging.critical(f'Registering device global rank {result.global_rank}: data_rank = {result.data_rank}, model_rank = {result.model_rank}')
 

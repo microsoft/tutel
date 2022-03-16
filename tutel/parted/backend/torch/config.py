@@ -46,7 +46,7 @@ def generate_framework_code(device_type, group_size, group_count, run_mode, comp
 
   source = f'''import torch
 
-from tutel.impls import communicate as C
+from tutel import net as C
 from tutel.parted.backend.torch import executor as E
 
 {headers}
