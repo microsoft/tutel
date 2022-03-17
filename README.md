@@ -36,10 +36,11 @@ How to setup Tutel MoE for Pytorch and [run examples](tutel/examples):
 
 * Quick Test on Single-GPU:
 
-        $ python3 -m tutel.examples.helloworld --batch_size=16               # To Test Tutel-optimized MoE + manual distribution
-        $ python3 -m tutel.examples.helloworld_ddp --batch_size=16           # To Test Tutel-optimized MoE + Pytorch DDP distribution (requires: Pytorch >= 1.8.0)
-        $ python3 -m tutel.examples.helloworld_amp --batch_size=16           # To Test Tutel-optimized MoE with AMP data type + manual distribution
-        $ python3 -m tutel.examples.helloworld_deepspeed --batch_size=16     # To Test Deepspeed (0.5.6) MoE + manual distribution
+        $ python3 -m tutel.examples.helloworld --batch_size=16               # Test Tutel-optimized MoE + manual distribution
+        $ python3 -m tutel.examples.helloworld_ddp --batch_size=16           # Test Tutel-optimized MoE + Pytorch DDP distribution (requires: Pytorch >= 1.8.0)
+        $ python3 -m tutel.examples.helloworld_amp --batch_size=16           # Test Tutel-optimized MoE with AMP data type + manual distribution
+        $ python3 -m tutel.examples.helloworld_deepspeed --batch_size=16     # Test Deepspeed (0.5.6) MoE + manual distribution
+        $ python3 -m tutel.examples.helloworld_from_scratch                  # Test Custom MoE implementation from scratch
 
         (If building from source, the following method also works:)
         $ python3 ./tutel/examples/helloworld.py --batch_size=16
