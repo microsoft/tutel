@@ -125,38 +125,49 @@ def create_groups_from_world(group_count, include_init=None):
 def swap_axis(t, x, y):
     return t if x == y else t.swapaxes(x, y)
 
-def simple_all_reduce(input, group, op=torch.distributed.ReduceOp.SUM):
+def simple_all_reduce(input, group=None, op=torch.distributed.ReduceOp.SUM):
+    world_size = get_world_size(group)
+    if world_size == 1:
+        return input
     output = torch.clone(input, memory_format=torch.contiguous_format)
     dist.all_reduce(output, op=op, group=group)
     return output
 
-def simple_all_to_all(input, group):
+def simple_all_to_all(input, group=None):
+    world_size = get_world_size(group)
+    if world_size == 1:
+        return input
     input = input.contiguous()
     output = torch.empty_like(input)
     dist.all_to_all_single(output, input, group=group)
     return output
 
-def simple_split(input, group):
+def simple_split(input, group=None):
     world_size = get_world_size(group)
+    if world_size == 1:
+        return input
     assert input.size(0) % world_size == 0, "Cannot evenly devide dim length %s into %s slices" % (input.size(0), world_size)
     input = input.contiguous()
     return input.chunk(chunks=world_size, dim=0)[get_world_rank(group)]
 
-def simple_reduce_scatter(input, group, op=torch.distributed.ReduceOp.SUM):
-    input = input.contiguous()
+def simple_reduce_scatter(input, group=None, op=torch.distributed.ReduceOp.SUM):
     world_size = get_world_size(group)
+    if world_size == 1:
+        return input
+    input = input.contiguous()
     assert input.size(0) % world_size == 0, "Cannot evenly devide dim length %s into %s slices" % (input.size(0), world_size)
     if not input.is_cuda:
       return simple_split(simple_all_reduce(input, group, op=op))
-
     chunks = list(input.chunk(chunks=world_size, dim=0))
     output = torch.empty_like(chunks[0])
     dist.reduce_scatter(output=output, input_list=chunks, group=group, op=op)
     return output
 
-def simple_all_gather(input, group):
-    input = input.contiguous()
+def simple_all_gather(input, group=None):
     world_size = get_world_size(group)
+    if world_size == 1:
+        return input
+    input = input.contiguous()
     output = torch.empty([world_size, input.numel()], device=input.device, dtype=input.dtype)
     tensor_list = list(torch.chunk(output, chunks=world_size, dim=0))
     dist.all_gather(tensor_list=tensor_list, tensor=input, group=group)
@@ -321,22 +332,29 @@ class PrimAllToAll(torch.autograd.Function):
     @staticmethod
     def transform(group, input, input_dim, output_dim):
         """
-          HY X LY Z -> HY [Z X LY] -> (all2all) HZ [HY LZ X LY]
-              -> (swap_axis) HZ [HY X LY LZ] -> (swap_axis) HZ [HY LY X LZ]
-              -> (view) HZ [Y X LZ] -> (swap_axis) HZ [X Y LZ]
+          [HY] X LY Z -> [HX] HY LX LY Z
         """
         if input_dim == output_dim:
             return input
-        reshaped_input = swap_axis(input, 0, output_dim)
-        reshaped_input = PrimAllToAll.apply(group, reshaped_input)
-        reshaped_input = reshaped_input.view([get_world_size(group), -1] + list(reshaped_input.shape[1:]))
-        reshaped_input = swap_axis(reshaped_input, 1, output_dim + 1)
-        if input_dim > 0:
-            reshaped_input = swap_axis(reshaped_input, 1, input_dim + 1)
-            reshaped_input = reshaped_input.contiguous().view([-1] + list(reshaped_input.shape[2:]))
-            reshaped_input = swap_axis(reshaped_input, 0, input_dim)
+
+        world_size = get_world_size(group)
+        if world_size == 1:
+            return input
+
+        if input_dim == 0:
+            reshaped_input = input.view(list(input.shape[:output_dim]) + [world_size, -1] + list(input.shape[output_dim + 1:]))
+            reshaped_input = reshaped_input.permute([output_dim] + list(range(output_dim)) + list(range(output_dim + 1, reshaped_input.dim())))
+            reshaped_input = PrimAllToAll.apply(group, reshaped_input)
+            reshaped_input = reshaped_input.view([-1] + list(reshaped_input.shape[2:]))
+        elif output_dim == 0:
+            reshaped_input = PrimAllToAll.apply(group, input)
+            reshaped_input = reshaped_input.view([world_size, -1] + list(reshaped_input.shape[1:]))
+            reshaped_input = reshaped_input.permute(list(range(1, input_dim + 1)) + [0] + list(range(input_dim + 1, reshaped_input.dim())))
+            reshaped_input = reshaped_input.contiguous().view(list(reshaped_input.shape[:input_dim]) + [-1] + list(reshaped_input.shape[input_dim + 2:]))
         else:
-            reshaped_input = reshaped_input.contiguous().view([-1] + list(reshaped_input.shape[2:]))
+            reshaped_input = swap_axis(input, 0, output_dim)
+            reshaped_input = PrimAllToAll.transform(group, reshaped_input, input_dim, 0)
+            reshaped_input = swap_axis(reshaped_input, 0, output_dim).contiguous()
         return reshaped_input
 
 class PrimBwdAllreduce(torch.autograd.Function):
@@ -362,15 +380,10 @@ class PrimReducescatter(torch.autograd.Function):
     @staticmethod
     def forward(ctx, group, input, op=torch.distributed.ReduceOp.SUM):
         ctx.group = group
-        ctx.num_nodes = get_world_size(ctx.group)
-        if ctx.num_nodes <= 1:
-            return input
         return simple_reduce_scatter(input, group, op=op)
 
     @staticmethod
     def backward(ctx, doutput):
-        if ctx.num_nodes <= 1:
-            return (None, doutput)
         return (None, simple_all_gather(doutput, ctx.group), None)
 
     @staticmethod
@@ -384,16 +397,11 @@ class PrimAllgather(torch.autograd.Function):
     @staticmethod
     def forward(ctx, group, input, fused=False):
         ctx.group = group
-        ctx.num_nodes = get_world_size(ctx.group)
-        if ctx.num_nodes <= 1:
-            return input
-        ctx.fused = True
+        ctx.fused = fused
         return simple_all_gather(input, group)
 
     @staticmethod
     def backward(ctx, doutput):
-        if ctx.num_nodes <= 1:
-            return (None, doutput)
         if ctx.fused:
             return (None, simple_reduce_scatter(doutput, ctx.group), None)
         return (None, simple_split(doutput, ctx.group), None)
@@ -436,8 +444,5 @@ class PrimSpatialSplit(torch.autograd.Function):
         input = swap_axis(input, 0, dim)
         return input
 
-def all_to_all(data, group=None):
-    if get_world_size(group) == 1:
-        logging.warning('all_to_all() was bypassed as distributed world size is 1.')
-        return data
-    return PrimAllToAll.apply(group, data)
+def all_to_all(data, input_dim, output_dim, group=None):
+    return PrimAllToAll.transform(group, data, input_dim, output_dim)
