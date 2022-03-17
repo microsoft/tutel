@@ -4,6 +4,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation.
 
 - Supported Framework: Pytorch (recommend: >= 1.10)
 - Supported GPUs: CUDA(fp64/fp32/fp16/bfp16), ROCm(fp64/fp32/fp16)
+- Supported CPU: fp64/fp32
 
 <p align="center">
   <img src="figure.svg" /></a>
@@ -11,7 +12,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation.
 
 How to setup Tutel MoE for Pytorch and [run examples](tutel/examples):
 ```
-* Recommended Pytorch:
+* Recommended Pytorch (minimize version == 1.8.0):
         #   Pytorch for NVIDIA CUDA >= 10.2:
         python3 -m pip install --user torch==1.10.0+cu102 torchvision==0.11.1+cu102 -f https://download.pytorch.org/whl/torch_stable.html
         #   Pytorch for NVIDIA CUDA >= 11.3:
@@ -37,6 +38,7 @@ How to setup Tutel MoE for Pytorch and [run examples](tutel/examples):
 
         $ python3 -m tutel.examples.helloworld --batch_size=16               # To Test Tutel-optimized MoE + manual distribution
         $ python3 -m tutel.examples.helloworld_ddp --batch_size=16           # To Test Tutel-optimized MoE + Pytorch DDP distribution (requires: Pytorch >= 1.8.0)
+        $ python3 -m tutel.examples.helloworld_amp --batch_size=16           # To Test Tutel-optimized MoE with AMP data type + manual distribution
         $ python3 -m tutel.examples.helloworld_deepspeed --batch_size=16     # To Test Deepspeed (0.5.6) MoE + manual distribution
 
         (If building from source, the following method also works:)
@@ -144,7 +146,7 @@ How to reproduce these results:
 ```shell
 $ python3 -m tutel.examples.helloworld --batch_size=<batch_size>
 $ python3 -m tutel.examples.helloworld_ddp --batch_size=<batch_size>
-...
+$ python3 -m tutel.examples.helloworld_deepspeed --batch_size=<batch_size>
 ```
 
 ## Contributing
