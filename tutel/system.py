@@ -34,7 +34,7 @@ def init_data_model_parallel(group_count=1, backend='nccl'):
         sys.stderr.flush()
         # Builtin dist.all_to_all_single in torch is unstable in some versions.
         # Temp work around: https://github.com/pytorch/pytorch/issues/56390
-        if C.PrimAllToAll._use_builtins:
+        if getattr(C.simple_all_to_all, '_use_builtins', False):
             os._exit(0)
 
     import atexit

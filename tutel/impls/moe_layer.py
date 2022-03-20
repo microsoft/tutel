@@ -107,7 +107,7 @@ class TopKGate(torch.nn.Module):
                                 C.NcclStreamAcquire.apply(
                                     C.CurrentStreamRelease.apply(dispatched_input, 0), 0)), 0), 0)
             else:
-                dispatched_input = C.PrimAllToAll.apply(group, dispatched_input)
+                dispatched_input = C.all_to_all_single(dispatched_input, group=group)
 
             expert_output = ctx.expert_fn(dispatched_input)
             expert_output = expert_output.to(input.dtype)
@@ -120,7 +120,7 @@ class TopKGate(torch.nn.Module):
                                 C.NcclStreamAcquire.apply(
                                     C.CurrentStreamRelease.apply(expert_output, 0), 0)), 0), 0)
             else:
-                expert_output = C.PrimAllToAll.apply(group, expert_output)
+                expert_output = C.all_to_all_single(expert_output, group=group)
         else:
             split_dim = 2
             C.AllToAllStatus.init(group, self.a2a_ffn_overlap_degree, split_dim)
@@ -310,12 +310,12 @@ class MOELayer(torch.nn.Module):
                         fc1_weight, fc2_weight, fc1_bias, fc2_bias = self.fc1_weight, self.fc2_weight, self.fc1_bias, self.fc2_bias
                         if ctx.ffn_zero_group is not None:
                             if not ctx.use_model_parallel:
-                                fc1_weight = C.PrimAllgather.apply(ctx.ffn_zero_group, self.fc1_weight, True)
-                                fc2_weight = C.PrimAllgather.apply(ctx.ffn_zero_group, self.fc2_weight, True)
-                                fc1_bias = C.PrimAllgather.apply(ctx.ffn_zero_group, self.fc1_bias, True)
+                                fc1_weight = C.zero_gather(self.fc1_weight, group=ctx.ffn_zero_group)
+                                fc2_weight = C.zero_gather(self.fc2_weight, group=ctx.ffn_zero_group)
+                                fc1_bias = C.zero_gather(self.fc1_bias, group=ctx.ffn_zero_group)
 
                             # Specially treat fc2_bias to make hybrid data & model parallels equivalent
-                            fc2_bias = C.PrimAllgather.apply(ctx.ffn_zero_group, self.fc2_bias, True)
+                            fc2_bias = C.zero_gather(self.fc2_bias, group=ctx.ffn_zero_group)
                             if fc2_bias.size(-1) != self.model_dim:
                                 fc2_bias = fc2_bias[:, :self.model_dim]
 
