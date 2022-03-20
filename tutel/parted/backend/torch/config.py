@@ -21,16 +21,16 @@ def get_execute_cmd(group_size, glob_size, device_type, program_path):
 
 def link(name, input_dim, output_dim, is_param=False, output_shape=None):
   if input_dim is None:
-    return f'C.PrimFwdAllreduce.apply(E.parallel_env.model_group, {name})' if output_dim == -1 else f'C.PrimReducescatter.transform(E.parallel_env.model_group, {name}, {output_dim})'
+    return f'C.allreduce_forward({name}, group=E.parallel_env.model_group)' if output_dim == -1 else f'C.reduce_scatter({name}, {output_dim}, E.parallel_env.model_group)'
   if output_dim is None:
     return f'E.warp_bwd_allreduce({name}, {is_param})'
   if input_dim == -2:
-    return f'C.PrimAllgather.zero_param(E.parallel_env.model_group, {name}, {output_shape})'
+    return f'C.zero_gather({name}, {output_shape}, E.parallel_env.model_group)'
   if input_dim == -1:
-    return f'C.PrimSpatialSplit.transform(E.parallel_env.model_group, {name}, {output_dim})'
+    return f'C.spatial_split({name}, {output_dim}, E.parallel_env.model_group)'
   if output_dim == -1:
-    return f'C.PrimAllgather.transform(E.parallel_env.model_group, {name}, {input_dim})'
-  return f'C.PrimAllToAll.transform(E.parallel_env.model_group, {name}, input_dim={input_dim}, output_dim={output_dim})'
+    return f'C.all_gather({name}, {input_dim}, E.parallel_env.model_group)'
+  return f'C.all_to_all({name}, {input_dim}, {output_dim}, E.parallel_env.model_group)'
 
 def generate_framework_code(device_type, group_size, group_count, run_mode, compute_name, headers, input_list, param_list, graph_prog):
   headers = '\n'.join(headers).strip() + '\n' if headers else ''
