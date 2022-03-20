@@ -5,6 +5,7 @@ import os, sys
 import time
 import json
 import torch
+import torch.distributed as dist
 
 from tutel import system
 from tutel import net as C

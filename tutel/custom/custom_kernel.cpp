@@ -127,7 +127,12 @@ static std::string nvrtc_compile(const char* code, const std::string &arch) {
   log.resize(log_size);
   CHECK_EQ(0, nvrtcGetProgramLog(prog, &log[0]));
   if (0 != res) {
-    LOG(ERROR) << log << " Failed to use NVRTC for JIT compilation in this Pytorch version, try another approach using CUDA compiler.. (To always disable NVRTC, please: export USE_NVRTC=0)";
+    static bool once_flag = false;
+    if (!once_flag) {
+      once_flag = true;
+      LOG(WARNING) << log << " Failed to use NVRTC for JIT compilation in this Pytorch version, try another approach using CUDA compiler.. (To always disable NVRTC, please: export USE_NVRTC=0)";
+    }
+    CHECK_EQ(0, nvrtcDestroyProgram(&prog));
     return "";
   }
 
@@ -368,12 +373,12 @@ extern "C" __global__ void memStrideCopyKernel(
   }
 }
 
-static at::cuda::CUDAStream& get_default_stream() {
+inline at::cuda::CUDAStream& get_default_stream() {
   static at::cuda::CUDAStream default_stream = at::cuda::getDefaultCUDAStream();
   return default_stream;
 }
 
-static at::cuda::CUDAStream& get_nccl_stream() {
+inline at::cuda::CUDAStream& get_nccl_stream() {
   static at::cuda::CUDAStream nccl_stream = at::cuda::getStreamFromPool();
   return nccl_stream;
 }
