@@ -317,20 +317,21 @@ class PrimAllToAll(torch.autograd.Function):
     _use_builtins = False
 
     @staticmethod
-    def forward(ctx: Any, group: dist.ProcessGroup, input: Tensor):
+    def forward(ctx, input, group=None):
         PrimAllToAll._use_builtins = True
         ctx.group = group
-        world_size = get_world_size(group)
-        if world_size <= 1:
-            return input
         return simple_all_to_all(input, group)
 
     @staticmethod
-    def backward(ctx: Any, grad_output: Tensor):
-        return (None, PrimAllToAll.apply(ctx.group, grad_output))
+    def backward(ctx, grad_output):
+        return (PrimAllToAll.apply(grad_output, ctx.group), None)
 
     @staticmethod
-    def transform(group, input, input_dim, output_dim):
+    def single(input, group=None):
+        return PrimAllToAll.apply(input, group)
+
+    @staticmethod
+    def transform(input, input_dim, output_dim, group=None):
         """
           [HY] X LY Z -> [HX] HY LX LY Z
         """
@@ -344,58 +345,63 @@ class PrimAllToAll(torch.autograd.Function):
         if input_dim == 0:
             reshaped_input = input.view(list(input.shape[:output_dim]) + [world_size, -1] + list(input.shape[output_dim + 1:]))
             reshaped_input = reshaped_input.permute([output_dim] + list(range(output_dim)) + list(range(output_dim + 1, reshaped_input.dim())))
-            reshaped_input = PrimAllToAll.apply(group, reshaped_input)
+            reshaped_input = PrimAllToAll.apply(reshaped_input, group)
             reshaped_input = reshaped_input.view([-1] + list(reshaped_input.shape[2:]))
         elif output_dim == 0:
-            reshaped_input = PrimAllToAll.apply(group, input)
+            reshaped_input = PrimAllToAll.apply(input, group)
             reshaped_input = reshaped_input.view([world_size, -1] + list(reshaped_input.shape[1:]))
             reshaped_input = reshaped_input.permute(list(range(1, input_dim + 1)) + [0] + list(range(input_dim + 1, reshaped_input.dim())))
             reshaped_input = reshaped_input.contiguous().view(list(reshaped_input.shape[:input_dim]) + [-1] + list(reshaped_input.shape[input_dim + 2:]))
         else:
             reshaped_input = swap_axis(input, 0, output_dim)
-            reshaped_input = PrimAllToAll.transform(group, reshaped_input, input_dim, 0)
+            reshaped_input = PrimAllToAll.transform(reshaped_input, input_dim, 0, group)
             reshaped_input = swap_axis(reshaped_input, 0, output_dim).contiguous()
         return reshaped_input
 
 class PrimBwdAllreduce(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, group, input, op=torch.distributed.ReduceOp.SUM):
+    def forward(ctx, input, op=torch.distributed.ReduceOp.SUM, group=None):
         ctx.group = group
         ctx.op = op
         return input
-
     @staticmethod
     def backward(ctx, doutput):
-        return (None, simple_all_reduce(doutput, ctx.group, op=ctx.op), None)
+        return (simple_all_reduce(doutput, ctx.group, op=ctx.op), None, None)
+    @staticmethod
+    def transform(input, op=torch.distributed.ReduceOp.SUM, group=None):
+        return PrimBwdAllreduce.apply(input, op, group)
 
 class PrimFwdAllreduce(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, group, input, op=torch.distributed.ReduceOp.SUM):
+    def forward(ctx, input, op=torch.distributed.ReduceOp.SUM, group=None):
         return simple_all_reduce(input, group=group)
     @staticmethod
     def backward(ctx, doutput):
-        return (None, doutput, None)
+        return (doutput, None, None)
+    @staticmethod
+    def transform(input, op=torch.distributed.ReduceOp.SUM, group=None):
+        return PrimFwdAllreduce.apply(input, op, group)
 
 class PrimReducescatter(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, group, input, op=torch.distributed.ReduceOp.SUM):
+    def forward(ctx, input, op=torch.distributed.ReduceOp.SUM, group=None):
         ctx.group = group
         return simple_reduce_scatter(input, group, op=op)
 
     @staticmethod
     def backward(ctx, doutput):
-        return (None, simple_all_gather(doutput, ctx.group), None)
+        return (simple_all_gather(doutput, ctx.group), None, None)
 
     @staticmethod
-    def transform(group, input, dim):
+    def transform(input, dim, group=None):
         input = swap_axis(input, 0, dim)
-        input = PrimReducescatter.apply(group, input)
+        input = PrimReducescatter.apply(input, group)
         input = swap_axis(input, 0, dim)
         return input
 
 class PrimAllgather(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, group, input, fused=False):
+    def forward(ctx, input, fused=False, group=None):
         ctx.group = group
         ctx.fused = fused
         return simple_all_gather(input, group)
@@ -403,46 +409,51 @@ class PrimAllgather(torch.autograd.Function):
     @staticmethod
     def backward(ctx, doutput):
         if ctx.fused:
-            return (None, simple_reduce_scatter(doutput, ctx.group), None)
-        return (None, simple_split(doutput, ctx.group), None)
+            return (simple_reduce_scatter(doutput, ctx.group), None, None)
+        return (simple_split(doutput, ctx.group), None, None)
 
     @staticmethod
-    def transform(group, input, dim):
+    def transform(input, dim, group=None):
         input = swap_axis(input, 0, dim)
-        input = PrimAllgather.apply(group, input)
+        input = PrimAllgather.apply(input, False, group)
         input = swap_axis(input, 0, dim)
         return input
 
     @staticmethod
-    def zero_param(group, input, full_shape):
+    def zero_gather(input, full_shape=None, group=None):
+        if not full_shape:
+            full_shape = [x for x in input.shape]
+            full_shape[0] *= get_world_size(group)
         numel = 1
         for x in full_shape:
             numel *= int(x)
-        input = PrimAllgather.apply(group, input, True)
+        input = PrimAllgather.apply(input, True, group)
         return input.view(-1)[:numel].view(full_shape)
 
 
 class PrimSpatialSplit(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, group, input):
+    def forward(ctx, input, group=None):
         ctx.group = group
-        ctx.num_nodes = get_world_size(ctx.group)
-        if ctx.num_nodes <= 1:
-            return input
         return simple_split(input, ctx.group)
 
     @staticmethod
     def backward(ctx, doutput):
-        if ctx.num_nodes <= 1:
-            return (None, doutput)
-        return (None, simple_all_gather(doutput, ctx.group))
+        return (simple_all_gather(doutput, ctx.group), None)
 
     @staticmethod
-    def transform(group, input, dim):
+    def transform(input, dim, group=None):
         input = swap_axis(input, 0, dim)
-        input = PrimSpatialSplit.apply(group, input)
+        input = PrimSpatialSplit.apply(input, group)
         input = swap_axis(input, 0, dim)
         return input
 
-def all_to_all(data, input_dim, output_dim, group=None):
-    return PrimAllToAll.transform(group, data, input_dim, output_dim)
+all_to_all = PrimAllToAll.transform
+all_to_all_single = PrimAllToAll.single
+zero_gather = PrimAllgather.zero_gather
+all_gather = PrimAllgather.transform
+spatial_split = PrimSpatialSplit.transform
+reduce_scatter = PrimReducescatter.transform
+allreduce_forward = PrimFwdAllreduce.transform
+allreduce_backward = PrimBwdAllreduce.transform
+

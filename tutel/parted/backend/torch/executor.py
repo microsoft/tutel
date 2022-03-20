@@ -12,8 +12,8 @@ from tutel import net as C
 def warp_bwd_allreduce(data, is_param):
     if is_param:
         fusable_params.add(id(data))
-        return C.PrimBwdAllreduce.apply(parallel_env.global_group, data)
-    return C.PrimBwdAllreduce.apply(parallel_env.model_group, data)
+        return C.allreduce_backward.apply(data, parallel_env.global_group)
+    return C.allreduce_backward.apply(data, parallel_env.model_group)
 
 def sharded_randn(shape, dim, dtype, requires_grad=False, is_param=False, device=None):
   if device is None:
