@@ -161,6 +161,7 @@ class Program:
 
     try:
       result = ''
+      logging.info('Executing: %s' % os_command)
       assert 0 == os.system(os_command), f"Failed to execute command: {os_command}"
       with open(log_file, 'r') as fp:
         result = fp.read().strip()
