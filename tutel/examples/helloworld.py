@@ -3,10 +3,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
-
-from tutel import system
-
-
 import os
 import time
 import torch
@@ -16,6 +12,7 @@ import torch.distributed as dist
 from torch import nn
 import argparse
 
+from tutel import system
 from tutel import moe as tutel_moe
 
 parser = argparse.ArgumentParser()
@@ -100,7 +97,7 @@ if args.save_load_checkpoint:
 optimizer = torch.optim.SGD(model.parameters(), lr=1e-5)
 
 torch.manual_seed(0)
-x = torch.tensor(torch.randn([batch_size, num_tokens, model_dim], dtype=torch.float32, device='cpu').detach().numpy(), dtype=torch.get_default_dtype(), requires_grad=True, device=device)
+x = torch.tensor(torch.randn([batch_size, num_tokens, model_dim], dtype=torch.float32, device='cpu').detach().numpy(), dtype=torch.get_default_dtype(), requires_grad=False, device=device)
 y = torch.LongTensor(batch_size).random_(1).to(device)
 
 tuples = (dist_world_size, args.dtype, model_dim, hidden_size, batch_size * num_tokens, num_local_experts, top_value, a2a_ffn_overlap_degree, args.parallel_type, device)
