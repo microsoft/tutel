@@ -82,7 +82,7 @@ def create_backward_gate(param_dtype, is_cuda=True):
     #else
           ((half*)grad_gates1_s)[index] = __float2half_rn(0.000000e+00f);
     #endif
-        return;
+        continue;
       }
       int indice = indices1_s[index] * capacity + locations1_s[index];
     #if @IS_FLOAT@
