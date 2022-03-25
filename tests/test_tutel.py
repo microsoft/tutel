@@ -11,8 +11,11 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-import GPUtil
-
+try:
+  import GPUtil
+  GPU_NAME = GPUtil.getGPUs()[0].name
+except:
+  GPU_NAME = 'unknown'
 
 class HelloworldCaller():
     """A class for run tutel helloworld example with different arguments"""
@@ -66,7 +69,7 @@ class TutelTestCase(unittest.TestCase):
     """A class for tutel test cases."""
     def setUp(self):
         """Hook method for setting up the test"""
-        self.GPUtype = GPUtil.getGPUs()[0].name
+        self.GPUtype = GPU_NAME
         with open('tests/test_baseline.json') as f:
             self.data = json.load(f)
         for i in range(9):
