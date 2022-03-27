@@ -82,8 +82,8 @@ class TutelTestCase(unittest.TestCase):
 
     def test_cpu_kernel(self):
         """Test cpu kernel"""
-        cuda_losses = self.tutelCaller.run(nproc_per_node=1, num_steps=10, device='cuda')
-        cpu_losses = self.tutelCaller.run(nproc_per_node=1, num_steps=10, device='cpu')
+        cuda_losses = self.tutelCaller.run(nproc_per_node=1, num_steps=10, device='cuda', show_step_time=False)
+        cpu_losses = self.tutelCaller.run(nproc_per_node=1, num_steps=10, device='cpu', show_step_time=False)
         for i in range(10):
             cuda_losses[i] = round(cuda_losses[i],2)
             cpu_losses[i] = round(cpu_losses[i],2)
