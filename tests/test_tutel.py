@@ -82,8 +82,8 @@ class TutelTestCase(unittest.TestCase):
 
     def test_cpu_kernel(self):
         """Test cpu kernel"""
-        cuda_losses = self.tutelCaller.run(nproc_per_node=1, num_steps=10, device='cuda')
-        cpu_losses = self.tutelCaller.run(nproc_per_node=1, num_steps=10, device='cpu')
+        cuda_losses = self.tutelCaller.run(nproc_per_node=1, num_steps=10, device='cuda', show_step_time=False)
+        cpu_losses = self.tutelCaller.run(nproc_per_node=1, num_steps=10, device='cpu', show_step_time=False)
         for i in range(10):
             cuda_losses[i] = round(cuda_losses[i],2)
             cpu_losses[i] = round(cpu_losses[i],2)
@@ -203,5 +203,5 @@ class TutelTestCase(unittest.TestCase):
                     }):
                         loss, step_time = get_loss_and_step_time(test_case)
                         self.assertEqual(loss, loss_expected)
-                        print('\nsubcase(ndevs=%s, dtype=%s, local_experts=%s, algo=%s): step_time = %s (expected = %s)' % (nproc_per_node, dtype, num_local_experts, algo, step_time, step_time_expected))
+                        print('\nsubcase(ndevs=%s, dtype=%s, local_experts=%s, algo=%s): step_time = %s (LINEAR = %s)' % (nproc_per_node, dtype, num_local_experts, algo, step_time, step_time_expected))
                         self.assertTrue(math.isclose(step_time, step_time_expected, rel_tol=0.01, abs_tol=0.01))
