@@ -135,8 +135,8 @@ for i in range(num_steps):
 
     torch.cuda.synchronize()
     t_start = time.time()
-    optimizer.zero_grad()
 
+    optimizer.zero_grad()
     output = model(x)
     loss = F.nll_loss(output, y)
     loss.backward()

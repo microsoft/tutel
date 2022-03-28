@@ -4,7 +4,6 @@
 # Licensed under the MIT license.
 
 import os
-import time
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
@@ -108,19 +107,15 @@ dist_print('[Benchmark] world_size = %s, dtype = %s, model_dim = %s, hidden_size
 average_time, num_steps = 0, args.num_steps
 
 for i in range(num_steps):
-    if x.is_cuda:
-        torch.cuda.synchronize()
-    t_start = time.time()
-    optimizer.zero_grad()
+    t_start = system.record_time()
 
+    optimizer.zero_grad()
     output = model(x)
     loss = F.nll_loss(output, y)
     loss.backward()
     optimizer.step()
 
-    if x.is_cuda:
-        torch.cuda.synchronize()
-    t_stop = time.time()
+    t_stop = system.record_time()
 
     num_global_experts = tutel_moe.moe_layer.global_expert_count(num_local_experts)
     args.top = min(args.top, num_global_experts)

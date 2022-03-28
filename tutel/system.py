@@ -27,7 +27,10 @@ def init_affinity_at_program_beginning():
 def init_data_model_parallel(group_count=1, backend='nccl'):
     from tutel import net as C
     result = C.create_groups_from_world(group_count=group_count, include_init=backend)
+    result.is_cuda = (result.local_device.type == 'cuda')
+
     logging.critical(f'Registering device global rank {result.global_rank}: data_rank = {result.data_rank}, model_rank = {result.model_rank}')
+    init_data_model_parallel.default_env = result
 
     def on_quit():
         sys.stdout.flush()
@@ -39,5 +42,16 @@ def init_data_model_parallel(group_count=1, backend='nccl'):
 
     import atexit
     atexit.register(lambda *args: on_quit())
-
     return result
+
+def get_local_session():
+    if not hasattr(init_data_model_parallel, 'default_env'):
+        raise Exception("Current session is not initialized with: system.init_data_model_parallel() from tutel")
+    return init_data_model_parallel.default_env
+
+def record_time():
+    import time
+    if get_local_session().is_cuda:
+        import torch
+        torch.cuda.synchronize()
+    return time.time()
