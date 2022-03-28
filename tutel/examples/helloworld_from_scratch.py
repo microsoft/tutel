@@ -3,26 +3,29 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
+import time
 import torch
+import torch.nn.functional as F
+
 from tutel import system
 from tutel import moe
 from tutel import net
 
 if torch.cuda.is_available():
-  pa_env = system.init_data_model_parallel(backend='nccl')
+  dist = system.init_data_model_parallel(backend='nccl')
 else:
-  pa_env = system.init_data_model_parallel(backend='gloo')
+  dist = system.init_data_model_parallel(backend='gloo')
 
-num_samples = 4096
-model_dim, hidden_size = 2048, 4096
-num_local_experts = 16
-num_global_experts = num_local_experts * pa_env.global_size
+num_samples = 16 * 1024
+model_dim, hidden_size = 2048, 2048
+num_local_experts = 2
+num_global_experts = num_local_experts * dist.global_size
 
 
 class CustomGate(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        torch.manual_seed(0)
+        torch.manual_seed(1)
         self.register_parameter(name='wg', param=torch.nn.Parameter(torch.randn([model_dim, num_global_experts]) * 1e-3))
 
     def forward(self, x):
@@ -31,17 +34,16 @@ class CustomGate(torch.nn.Module):
 class CustomExpert(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        torch.manual_seed(pa_env.global_rank)
+        torch.manual_seed(dist.global_rank + 1)
         self.register_parameter(name='batched_fc1_w', param=torch.nn.Parameter(torch.randn([num_local_experts, model_dim, hidden_size]) * 1e-3))
         self.register_parameter(name='batched_fc2_w', param=torch.nn.Parameter(torch.randn([num_local_experts, hidden_size, model_dim]) * 1e-3))
         self.register_parameter(name='batched_fc1_bias', param=torch.nn.Parameter(torch.zeros([num_local_experts, 1, hidden_size])))
         self.register_parameter(name='batched_fc2_bias', param=torch.nn.Parameter(torch.zeros([num_local_experts, 1, model_dim])))
-
         for x in self.parameters(): setattr(x, 'skip_allreduce', True)
 
     def forward(self, x):
         y = torch.add(torch.matmul(x, self.batched_fc1_w), self.batched_fc1_bias)
-        y = torch.nn.functional.relu(y)
+        y = F.relu(y)
         y = torch.add(torch.matmul(y, self.batched_fc2_w), self.batched_fc2_bias)
         return y
 
@@ -53,7 +55,7 @@ class CustomMoE(torch.nn.Module):
 
     def forward(self, x, k=2):
         logits = self.gate(x)
-        scores = torch.nn.functional.softmax(logits, dim=1)
+        scores = F.softmax(logits, dim=-1)
         crit, l_aux = moe.extract_critical(scores, top_k=k)
         y = moe.fast_encode(x, crit)
         y = net.all_to_all(y, 1, 0)
@@ -62,22 +64,26 @@ class CustomMoE(torch.nn.Module):
         output = moe.fast_decode(y, crit)
         return output, l_aux
 
-model = CustomMoE().to(pa_env.local_device)
+model = CustomMoE().to(dist.local_device)
 
-torch.manual_seed(0)
-data = torch.randn([num_samples, model_dim], device=pa_env.local_device)
-label = torch.LongTensor(num_samples).random_(1).to(pa_env.local_device)
-
-optimizer = torch.optim.SGD(model.parameters(), lr=1e-5)
+data = torch.randn([num_samples, model_dim], device=dist.local_device)
+label = torch.LongTensor(num_samples).random_(1).to(dist.local_device)
+optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
 
 for i in range(10):
+    t_start = system.record_time()
+
     optimizer.zero_grad()
     result, l_aux = model(data)
-    loss = torch.nn.functional.nll_loss(result, label) + 0.0001 * l_aux
+    result = F.log_softmax(result, dim=1)
+    loss = F.nll_loss(result, label) + 0.0001 * l_aux
     loss.backward()
     optimizer.step()
-    pa_env.dist_print(f'Step-{i}: custom MoE loss = {loss}')
 
     for p in model.parameters():
         if not hasattr(p, 'skip_allreduce'):
             p.grad = net.simple_all_reduce(p.grad)
+    t_stop = system.record_time()
+
+    dist.dist_print('STEP-%d: loss = %.5f, step_time = %.3f s' % (i, loss, t_stop - t_start))
+

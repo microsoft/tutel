@@ -4,7 +4,6 @@
 # Licensed under the MIT license.
 
 import os
-import time
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
@@ -97,9 +96,8 @@ average_time, num_steps = 0, args.num_steps
 params_for_all_reduce = [p for p in model.parameters() if not hasattr(p, 'skip_allreduce') and getattr(p, 'requires_grad', False)]
 
 for i in range(num_steps):
+    t_start = system.record_time()
 
-    torch.cuda.synchronize()
-    t_start = time.time()
     optimizer.zero_grad()
     with autocast():
         output = model(x)
@@ -113,8 +111,7 @@ for i in range(num_steps):
             dist.all_reduce(p.grad)
     optimizer.step()
 
-    torch.cuda.synchronize()
-    t_stop = time.time()
+    t_stop = system.record_time()
 
     num_global_experts = tutel_moe.moe_layer.global_expert_count(num_local_experts)
     args.top = min(args.top, num_global_experts)
