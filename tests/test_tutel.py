@@ -203,5 +203,5 @@ class TutelTestCase(unittest.TestCase):
                     }):
                         loss, step_time = get_loss_and_step_time(test_case)
                         self.assertEqual(loss, loss_expected)
-                        print('\nsubcase(ndevs=%s, dtype=%s, local_experts=%s, algo=%s): step_time = %s (expected = %s)' % (nproc_per_node, dtype, num_local_experts, algo, step_time, step_time_expected))
+                        print('\nsubcase(ndevs=%s, dtype=%s, local_experts=%s, algo=%s): step_time = %s (LINEAR = %s)' % (nproc_per_node, dtype, num_local_experts, algo, step_time, step_time_expected))
                         self.assertTrue(math.isclose(step_time, step_time_expected, rel_tol=0.01, abs_tol=0.01))
