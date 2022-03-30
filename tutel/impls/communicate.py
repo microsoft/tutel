@@ -133,13 +133,16 @@ def simple_all_reduce(input, group=None, op=torch.distributed.ReduceOp.SUM):
     dist.all_reduce(output, op=op, group=group)
     return output
 
-def simple_all_to_all(input, group=None):
+def simple_all_to_all(input, group=None, background=False):
     world_size = get_world_size(group)
     if world_size == 1:
-        return input
+        return input if not background else (input, lambda *args: None)
     simple_all_to_all._use_builtins = True
     input = input.contiguous()
     output = torch.empty_like(input)
+    if background:
+        future_op = dist.all_to_all_single(output, input, group=group, async_op=True)
+        return output, future_op.wait
     dist.all_to_all_single(output, input, group=group)
     return output
 
@@ -314,8 +317,19 @@ class AllToAllGatherAsync(torch.autograd.Function):
         return tuple(tutel_custom_kernel.nccl_all_to_all_scatter_async(grad_output, ctx.input_shape, ctx.num_slices_per_split, True))
 
 
-class PrimAllToAll(torch.autograd.Function):
+class RestoreBackward(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, input, output, group=None):
+        ctx.group = group
+        return input
 
+    @staticmethod
+    def backward(ctx: Any, grad_output):
+        grad_output = simple_all_to_all(grad_output, group=ctx.group)
+        return (None, grad_output)
+
+
+class PrimAllToAll(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, group=None):
         ctx.group = group
@@ -330,10 +344,43 @@ class PrimAllToAll(torch.autograd.Function):
         return PrimAllToAll.apply(input, group)
 
     @staticmethod
-    def transform(input, input_dim, output_dim, group=None):
+    def transform(input, input_dim, output_dim, group=None, background=False):
         """
           [HY] X LY Z -> [HX] HY LX LY Z
         """
+        if background:
+            world_size = get_world_size(group)
+            if input_dim == output_dim or world_size == 1:
+                return lambda *args: input
+
+            if input_dim == 0:
+                reshaped_input = input.view(list(input.shape[:output_dim]) + [world_size, -1] + list(input.shape[output_dim + 1:]))
+                reshaped_input = reshaped_input.permute([output_dim] + list(range(output_dim)) + list(range(output_dim + 1, reshaped_input.dim())))
+                output, f_wait = simple_all_to_all(reshaped_input, group, background=True)
+
+                def f_async():
+                    f_wait()
+                    local_input = RestoreBackward.apply(output, reshaped_input)
+                    local_input = local_input.view([-1] + list(local_input.shape[2:]))
+                    return local_input
+
+                return f_async
+            elif output_dim == 0:
+                reshaped_input = input
+                output, f_wait = simple_all_to_all(reshaped_input, group, background=True)
+
+                def f_async():
+                    f_wait()
+                    local_input = RestoreBackward.apply(output, reshaped_input)
+                    local_input = local_input.view([world_size, -1] + list(local_input.shape[1:]))
+                    local_input = local_input.permute(list(range(1, input_dim + 1)) + [0] + list(range(input_dim + 1, local_input.dim())))
+                    local_input = local_input.contiguous().view(list(local_input.shape[:input_dim]) + [-1] + list(local_input.shape[input_dim + 2:]))
+                    return local_input
+
+                return f_async
+            else:
+                raise Exception('Unhandle async branch case for flexible all_to_all()')
+
         if input_dim == output_dim:
             return input
 
@@ -342,15 +389,9 @@ class PrimAllToAll(torch.autograd.Function):
             return input
 
         if input_dim == 0:
-            reshaped_input = input.view(list(input.shape[:output_dim]) + [world_size, -1] + list(input.shape[output_dim + 1:]))
-            reshaped_input = reshaped_input.permute([output_dim] + list(range(output_dim)) + list(range(output_dim + 1, reshaped_input.dim())))
-            reshaped_input = PrimAllToAll.apply(reshaped_input, group)
-            reshaped_input = reshaped_input.view([-1] + list(reshaped_input.shape[2:]))
+            return all_to_all(input, input_dim, output_dim, group=group, background=True)()
         elif output_dim == 0:
-            reshaped_input = PrimAllToAll.apply(input, group)
-            reshaped_input = reshaped_input.view([world_size, -1] + list(reshaped_input.shape[1:]))
-            reshaped_input = reshaped_input.permute(list(range(1, input_dim + 1)) + [0] + list(range(input_dim + 1, reshaped_input.dim())))
-            reshaped_input = reshaped_input.contiguous().view(list(reshaped_input.shape[:input_dim]) + [-1] + list(reshaped_input.shape[input_dim + 2:]))
+            return all_to_all(input, input_dim, output_dim, group=group, background=True)()
         else:
             reshaped_input = swap_axis(input, 0, output_dim)
             reshaped_input = PrimAllToAll.transform(reshaped_input, input_dim, 0, group)

@@ -32,6 +32,7 @@ parser.add_argument('--num_steps', type=int, default=100)
 parser.add_argument('--parallel_type', type=str, default='auto')
 parser.add_argument('--save_load_checkpoint', default=False, action='store_true')
 parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
+parser.add_argument('--eval', default=False, action='store_true')
 args = parser.parse_args()
 
 parallel_env = system.init_data_model_parallel(backend='nccl' if args.device == 'cuda' else 'gloo')
@@ -112,23 +113,28 @@ else:
 for i in range(num_steps):
     t_start = system.record_time()
 
-    optimizer.zero_grad()
-    output = model(x)
-    loss = F.nll_loss(output, y)
-    if args.l_aux_wt:
-        loss += args.l_aux_wt * model._moe_layer.l_aux
-    loss.backward()
-    if dist_world_size > 1:
-        for p in params_for_all_reduce:
-            p.grad /= dist_world_size
-            dist.all_reduce(p.grad)
-    optimizer.step()
+    if not args.eval:
+        optimizer.zero_grad()
+        output = model(x)
+        loss = F.nll_loss(output, y)
+        if args.l_aux_wt:
+            loss += args.l_aux_wt * model._moe_layer.l_aux
+        loss.backward()
+        if dist_world_size > 1:
+            for p in params_for_all_reduce:
+                p.grad /= dist_world_size
+                dist.all_reduce(p.grad)
+        optimizer.step()
+    else:
+        with torch.no_grad():
+            output = model(x)
+            loss = F.nll_loss(output, y)
 
     t_stop = system.record_time()
 
     num_global_experts = tutel_moe.moe_layer.global_expert_count(num_local_experts)
-    args.top = min(args.top, num_global_experts)
-    tflops = (batch_size * num_tokens * model_dim * hidden_size) * 4 * args.top * 3 * 1e-12 / (t_stop - t_start)
+    mm_ceof, cap_ceof = 1 if args.eval else 3, min(args.top, num_global_experts)
+    tflops = (batch_size * num_tokens * model_dim * hidden_size) * 4 * mm_ceof * cap_ceof * 1e-12 / (t_stop - t_start)
     dist_print('STEP-%s: loss = %.5f, step_time = %.6f sec, perf = %.2f tflops.' % (i, float(loss.data), t_stop - t_start, tflops))
 
     if i + 10 >= num_steps:
