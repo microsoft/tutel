@@ -90,13 +90,20 @@ static std::string nvcc_compile(const char* code, const std::string &arch) {
 
   file_write(code_path, code);
   std::string fatbin_path = code_path + std::string(".fatbin");
+#if !defined(__HIP_PLATFORM_HCC__)
+  const char *entry = "/usr/local/cuda/bin/nvcc";
+#else
+  const char *entry = "/opt/rocm/bin/hipcc";
+#endif
 
+  if (access(entry, F_OK) != 0)
+    return "";
   pid_t  pid = fork();
   if (pid == 0) {
 #if !defined(__HIP_PLATFORM_HCC__)
-    CHECK_EQ(-1, execl("/usr/local/cuda/bin/nvcc", "/usr/local/cuda/bin/nvcc", code_path, "-o", fatbin_path.c_str(), "--fatbin", "-O4", "-gencode", ("arch=compute_" + arch + ",code=sm_" + arch).c_str(), (char *)NULL));
+    CHECK_EQ(-1, execl(entry, entry, code_path, "-o", fatbin_path.c_str(), "--fatbin", "-O4", "-gencode", ("arch=compute_" + arch + ",code=sm_" + arch).c_str(), (char *)NULL));
 #else
-    CHECK_EQ(-1, execl("/opt/rocm/bin/hipcc", "/opt/rocm/bin/hipcc", code_path, "-o", fatbin_path.c_str(), "--genco", "-O4", "-w" , ("--amdgpu-target=" + arch).c_str(), (char *)NULL));
+    CHECK_EQ(-1, execl(entry, entry, code_path, "-o", fatbin_path.c_str(), "--genco", "-O4", "-w" , ("--amdgpu-target=" + arch).c_str(), (char *)NULL));
 #endif
     exit(1);
   } else {
@@ -173,10 +180,10 @@ inline static CUfunction jit_activate(int fd, int dev) {
 #endif
     const char *source = gm.code.data(), *pos, *tail;
 
-    int use_nvrtc = getenv("USE_NVRTC") ? std::atoi(getenv("USE_NVRTC")) : 1;
+    int use_nvrtc = getenv("USE_NVRTC") ? std::atoi(getenv("USE_NVRTC")) : 0;
     std::string image;
-    if (!use_nvrtc || (image = nvrtc_compile(source, arch)) == "") {
-        image = nvcc_compile(source, arch);
+    if (use_nvrtc || (image = nvcc_compile(source, arch)) == "") {
+        image = nvrtc_compile(source, arch);
     }
 
     long launch_bound;
