@@ -171,7 +171,7 @@ class MOELayer(torch.nn.Module):
     def global_expert_count(num_local_experts, group=None):
         if not isinstance(num_local_experts, int):
             num_local_experts = -int(1 / (num_local_experts + 1e-5))
-        world_size = C.get_world_size(group)
+        world_size = C.get_world_size(group or dist.group.WORLD)
         if num_local_experts == 0:
             raise Exception("Invalid value of num_local_experts: %d" % num_local_experts)
         if num_local_experts > 0:
