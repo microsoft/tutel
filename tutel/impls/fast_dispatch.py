@@ -9,6 +9,7 @@ from torch import Tensor
 from .jit_compiler import IS_HIP_EXTENSION
 from ..jit_kernels import sparse as jit_kernel
 from ..jit_kernels.gating import fast_cumsum_sub_one
+from .communicate import simple_all_reduce
 
 class GatingEncoder(torch.autograd.Function):
     @staticmethod
@@ -178,7 +179,13 @@ def extract_critical(gates, top_k, capacity_factor=1.0, fp32_gate=False, batch_p
 
     indices_s = [x.to(torch.int32) for x in indices_s]
 
-    capacity = top_k * int(capacity_factor * ((gates.size(0) + num_global_experts - 1) // num_global_experts))
+    if capacity_factor > 0:
+        capacity = top_k * int(capacity_factor * ((int(gates.size(0)) + num_global_experts - 1) // num_global_experts))
+    else:
+        capacity = torch.max(torch.concat(locations_s, dim=0))
+        capacity = int(simple_all_reduce(capacity, op=torch.distributed.ReduceOp.MAX)) + 1
+        if capacity_factor < 0:
+            capacity = min(capacity, top_k * int(-capacity_factor * ((int(gates.size(0)) + num_global_experts - 1) // num_global_experts)))
     return (num_global_experts, indices_s, locations_s, gates_s, capacity), l_loss
 
 
