@@ -70,7 +70,7 @@ def create_groups_from_world(group_count, include_init=None):
     if is_distributed:
         global_group = model_group = data_group = dist.group.WORLD
 
-        if dist_group_size != glob_world_size:
+        if dist_world_size != glob_world_size:
             groups, inner_ranks = [], []
             for gr in range(dist_group_size):
                 group_ranks = [x for x in range(gr * dist_world_size, (gr + 1) * dist_world_size)]
@@ -78,7 +78,7 @@ def create_groups_from_world(group_count, include_init=None):
                 inner_ranks += [group_ranks]
             model_group = groups[dist_group_rank]
 
-        if dist_world_size != glob_world_size:
+        if dist_group_size != glob_world_size:
             groups, outer_ranks = [], []
             for gr in range(dist_world_size):
                 group_ranks = [x for x in range(gr, dist_world_size * dist_group_size, dist_world_size)]
