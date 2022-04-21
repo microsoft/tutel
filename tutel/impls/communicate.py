@@ -28,6 +28,7 @@ def get_world_rank(group=None):
 
 
 TUTEL_GROUPING_CACHE = {}
+TUTEL_SKIP_A2A = int(os.environ.get('SKIP_A2A', 0)) > 0
 
 def create_groups_from_world(group_count, include_init=None):
     backend = TUTEL_GROUPING_CACHE.get('', include_init)
@@ -60,7 +61,10 @@ def create_groups_from_world(group_count, include_init=None):
         is_distributed = False
         dist_print = print
 
-    assert glob_world_size % group_count == 0, f"Expected to evenly divide devices into {group_count} groups, while the world size of current sesion is {glob_world_size}."
+    original_group_count = group_count
+    if group_count < 0:
+        group_count = glob_world_size // -group_count
+    assert group_count > 0 and glob_world_size % group_count == 0, f"Expected to evenly divide devices into {group_count} groups, while the world size of current sesion is {glob_world_size}."
 
     dist_group_size = group_count
     dist_world_size = glob_world_size // dist_group_size
@@ -119,7 +123,7 @@ def create_groups_from_world(group_count, include_init=None):
     result.is_distributed = is_distributed
     result.dist_print = dist_print
 
-    TUTEL_GROUPING_CACHE[group_count] = result
+    TUTEL_GROUPING_CACHE[original_group_count] = result
     return result
 
 def swap_axis(t, x, y):
@@ -135,10 +139,10 @@ def simple_all_reduce(input, group=None, op=torch.distributed.ReduceOp.SUM):
 
 def simple_all_to_all(input, group=None, background=False):
     world_size = get_world_size(group)
-    if world_size == 1:
+    input = input.contiguous()
+    if world_size == 1 or TUTEL_SKIP_A2A:
         return input if not background else (input, lambda *args: None)
     simple_all_to_all._use_builtins = True
-    input = input.contiguous()
     output = torch.empty_like(input)
     if background:
         future_op = dist.all_to_all_single(output, input, group=group, async_op=True)
@@ -329,6 +333,26 @@ class RestoreBackward(torch.autograd.Function):
         return (None, grad_output)
 
 
+class PrimAllToAll2D(torch.autograd.Function):
+    LOCAL_SIZE = 0
+
+    @staticmethod
+    def forward(ctx, x, input_dim, output_dim):
+        if PrimAllToAll2D.LOCAL_SIZE == 0:
+            PrimAllToAll2D.LOCAL_SIZE = int(os.environ.get('LOCAL_SIZE', 1))
+            if PrimAllToAll2D.LOCAL_SIZE == 1:
+                logging.warning("LOCAL_SIZE (> 1) for AllToAll 2DH is not set, please set the correct LOCAL_SIZE variable, or using mpiexec to launch tutel.net")
+        ctx.input_dim = input_dim
+        ctx.output_dim = output_dim
+        dist = create_groups_from_world(-PrimAllToAll2D.LOCAL_SIZE)
+        y = all_to_all(x, input_dim, output_dim, group=dist.data_group)
+        y = all_to_all(y, input_dim, output_dim, group=dist.model_group)
+        y = y.view(list(y.shape[:input_dim]) + [get_world_size(dist.model_group), get_world_size(dist.data_group), -1] + list(y.shape[input_dim + 1:])).swapaxes(input_dim, input_dim + 1).contiguous().view(y.shape)
+        return y
+    @staticmethod
+    def backward(ctx, dy):
+        return (PrimAllToAll2D.apply(dy, ctx.output_dim, ctx.input_dim), None, None)
+
 class PrimAllToAll(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, group=None):
@@ -344,10 +368,14 @@ class PrimAllToAll(torch.autograd.Function):
         return PrimAllToAll.apply(input, group)
 
     @staticmethod
-    def transform(input, input_dim, output_dim, group=None, background=False):
+    def transform(input, input_dim, output_dim, group=None, background=False, use_2dh=False):
         """
           [HY] X LY Z -> [HX] HY LX LY Z
         """
+        if use_2dh:
+            assert background == False, "Background mode for AllToAll 2DH is not implemented."
+            return PrimAllToAll2D.apply(input, input_dim, output_dim)
+
         if background:
             world_size = get_world_size(group)
             if input_dim == output_dim or world_size == 1:

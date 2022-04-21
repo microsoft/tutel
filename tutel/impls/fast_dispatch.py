@@ -145,7 +145,7 @@ def load_balance(gates, mask1, num_global_experts, fp32_gate):
         l_loss = torch.sum(me * ce) * num_global_experts
     return l_loss
 
-def extract_critical(gates, top_k, capacity_factor=1.0, fp32_gate=False, batch_prioritized_routing=False):
+def extract_critical(gates, top_k, capacity_factor=1.0, fp32_gate=False, batch_prioritized_routing=False, alignment=1):
     topk_indices = torch.topk(gates, top_k, dim=1).indices
     num_global_experts = gates.size(1)
 
@@ -186,6 +186,10 @@ def extract_critical(gates, top_k, capacity_factor=1.0, fp32_gate=False, batch_p
         capacity = int(simple_all_reduce(capacity, op=torch.distributed.ReduceOp.MAX)) + 1
         if capacity_factor < 0:
             capacity = min(capacity, top_k * int(-capacity_factor * ((int(gates.size(0)) + num_global_experts - 1) // num_global_experts)))
+
+    remainder = capacity % alignment
+    if remainder > 0:
+        capacity = capacity + alignment - remainder
     return (num_global_experts, indices_s, locations_s, gates_s, capacity), l_loss
 
 
