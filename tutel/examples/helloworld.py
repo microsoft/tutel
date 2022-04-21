@@ -32,6 +32,7 @@ parser.add_argument('--num_steps', type=int, default=100)
 parser.add_argument('--parallel_type', type=str, default='auto')
 parser.add_argument('--save_load_checkpoint', default=False, action='store_true')
 parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
+parser.add_argument('--use_2dh', default=False, action='store_true')
 parser.add_argument('--eval', default=False, action='store_true')
 args = parser.parse_args()
 
@@ -72,6 +73,7 @@ class ExampleModel(torch.nn.Module):
             seeds = (1, dist_rank + 1, 1),
             a2a_ffn_overlap_degree = a2a_ffn_overlap_degree,
             parallel_type = args.parallel_type,
+            use_2dh=args.use_2dh,
         )
 
         # Summary of different parameter types: gate, local_experts
