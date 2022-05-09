@@ -234,7 +234,7 @@ class MOELayer(torch.nn.Module):
 
         original_shape, original_dtype  = input.shape, input.dtype
 
-        assert len(input.shape) >= 2, "Input data must be at least 2D tensor: (s)amples, .., (m)odel_dim"
+        assert len(original_shape) >= 2, "Input data must be at least 2D tensor: (s)amples, .., (m)odel_dim"
         reshaped_input = input.reshape(-1, input.size(-1))
 
         x = reshaped_input.to(next(iter(self.experts.parameters())).dtype)
