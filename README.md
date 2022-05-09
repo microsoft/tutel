@@ -25,11 +25,11 @@ How to setup Tutel MoE for Pytorch and [run examples](tutel/examples):
 * Install Tutel Online:
 
         $ python3 -m pip uninstall tutel -y
-        $ python3 -m pip install --user --upgrade git+https://github.com/microsoft/tutel@v0.1.x
+        $ python3 -m pip install --user --upgrade git+https://github.com/microsoft/tutel@main
 
 * Build Tutel from Source:
 
-        $ git clone https://github.com/microsoft/tutel --branch v0.1.x
+        $ git clone https://github.com/microsoft/tutel --branch main
 
         $ python3 -m pip uninstall tutel -y
         $ python3 ./tutel/setup.py install --user
@@ -101,9 +101,10 @@ Usage of MOELayer:
 ```
 * Usage of MOELayer Args:
 
-        gate_type        : dict-type gate description, e.g. {'type': 'top', 'k': 2, ..},
+        gate_type        : dict-type gate description, e.g. {'type': 'top', 'k': 2, 'capacity_factor': -1.5, ..},
                               or a list of dict-type gate descriptions, e.g. [{'type': 'top', 'k', 2}, {'type': 'top', 'k', 2}],
                               the value of k in top-gating can be also negative, like -2, which indicates one GPU will hold 1/(-k) parameters of an expert
+                              capacity_factor X can be positive (factor = X), zero (factor = max(needed_volumes)) or negative (factor = min(-X, max(needed_volumes))).
         model_dim        : the number of channels for MOE's input tensor
         experts          : a dict-type config for builtin expert network
         scan_expert_func : allow users to specify a lambda function to iterate each experts param, e.g. `scan_expert_func = lambda name, param: setattr(param, 'expert', True)`

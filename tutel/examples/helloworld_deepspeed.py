@@ -57,6 +57,8 @@ num_local_experts = args.num_local_experts
 top_value = args.top
 local_rank = args.local_rank
 
+if args.top != 1:
+    args.use_tutel = False
 
 device = torch.device('cuda', args.local_rank)
 
@@ -126,6 +128,7 @@ y = torch.LongTensor(batch_size).random_(1).to(device)
 
 tuples = (dist_world_size, args.dtype, model_dim, hidden_size, batch_size * num_tokens, num_local_experts, top_value, device)
 dist_print('[Benchmark] world_size = %s, dtype = %s, model_dim = %s, hidden_size = %s, samples = %s, num_local_experts = %s, topK = %s, device = `%s`' % tuples)
+logging.info('Tutel optimized Deepspeed MoE Top-%s = %s' % (top_value, args.use_tutel))
 
 average_time, num_steps = 0, args.num_steps
 
