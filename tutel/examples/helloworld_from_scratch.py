@@ -56,7 +56,7 @@ class CustomMoE(torch.nn.Module):
     def forward(self, x, k=2):
         logits = self.gate(x)
         scores = F.softmax(logits, dim=-1)
-        crit, l_aux = moe.extract_critical(scores, top_k=k)
+        crit, l_aux = moe.top_k_routing(scores, top_k=k)
         y = moe.fast_encode(x, crit)
         y = net.all_to_all(y, 1, 0)
         y = self.expert(y)
