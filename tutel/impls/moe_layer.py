@@ -166,7 +166,13 @@ class MOELayer(torch.nn.Module):
             self.experts = cast(ModuleList, experts) if type(experts) == ModuleList else ModuleList(experts)
         else:
             if experts['type'] == 'ffn':
-                activation_fn = experts.get('activation_fn', lambda x: F.relu(x))
+                activation_fn = experts.get('activation_fn', None)
+                activation_fn_with_self = experts.get('activation_fn_with_self', None)
+                if activation_fn_with_self is not None:
+                    assert activation_fn is None, "Option `activation_fn_with_self` has been specified, please keep exactly one of them."
+                    activation_fn = lambda x: activation_fn_with_self(x, self)
+                if activation_fn is None:
+                    activation_fn = lambda x: F.relu(x)
 
                 assert 'fused_custom_fn' not in experts, "`fused_custom_fn` option for Tutel Moe-layer has been deprecated, please follows helloworld_from_scratch.py for custom construction instead."
                 assert 'implicit_dropout_p' not in experts, "`implicit_dropout_p` option for Tutel Moe-layer has been deprecated, please use torch.nn.Dropout(p=implicit_dropout_p) on custom activation_fn (for fc1_dropout) and after Tutel Moe-layer (for fc2_dropout) instead."
