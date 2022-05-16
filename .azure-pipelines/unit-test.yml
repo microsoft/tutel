@@ -3,6 +3,7 @@
 
 trigger:
   - v0.1.x
+  - main
 
 pool:
   name: Tutel CI
