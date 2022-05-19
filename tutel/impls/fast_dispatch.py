@@ -80,6 +80,7 @@ class GatingDecoder(torch.autograd.Function):
 class TutelMoeFastDispatcher:
 
     kernel_pool = dict()
+    ones_helper = None
 
     def __init__(self, num_global_experts, capacity, model_dim, dispatch_dtype):
         self.num_global_experts = int(num_global_experts)
@@ -105,10 +106,13 @@ class TutelMoeFastDispatcher:
                 self.func_fwd = jit_kernel.create_forward(self.dtype, indices_[0].is_cuda)
                 self.func_bwd_data = jit_kernel.create_backward_data(self.dtype, indices_[0].is_cuda)
                 self.func_bwd_gate = jit_kernel.create_backward_gate(self.dtype, indices_[0].is_cuda)
-                self.ones_helper = torch.ones([self.sample_size, 2], dtype=self.dtype, device=self.indices_[0].device)
-                TutelMoeFastDispatcher.kernel_pool[self.is_cuda] = self.func_fwd, self.func_bwd_data, self.func_bwd_gate, self.ones_helper
+                TutelMoeFastDispatcher.kernel_pool[self.is_cuda] = self.func_fwd, self.func_bwd_data, self.func_bwd_gate
             else:
-                self.func_fwd, self.func_bwd_data, self.func_bwd_gate, self.ones_helper = TutelMoeFastDispatcher.kernel_pool[self.is_cuda]
+                self.func_fwd, self.func_bwd_data, self.func_bwd_gate = TutelMoeFastDispatcher.kernel_pool[self.is_cuda]
+
+        if TutelMoeFastDispatcher.ones_helper is None or TutelMoeFastDispatcher.ones_helper.size(0) < self.sample_size:
+            TutelMoeFastDispatcher.ones_helper = torch.ones([self.sample_size, 2], dtype=self.dtype, device=self.indices_[0].device)
+        self.ones_helper = TutelMoeFastDispatcher.ones_helper
 
     def encode(self, data):
         if self.is_postscore:
@@ -192,7 +196,6 @@ def extract_critical(gates, top_k, capacity_factor=1.0, fp32_gate=False, batch_p
         capacity = capacity + alignment - remainder
     return (num_global_experts, indices_s, locations_s, gates_s, capacity), l_loss
 
-
 def fast_encode(data, critial_data, is_postscore=True):
     num_global_experts = critial_data[0]
     dispatcher = TutelMoeFastDispatcher(num_global_experts, 0, data.size(-1), data.dtype)
@@ -204,4 +207,3 @@ def fast_decode(data, critial_data, is_postscore=True):
     dispatcher = TutelMoeFastDispatcher(num_global_experts, 0, data.size(-1), data.dtype)
     dispatcher.update(*critial_data[1:], is_postscore=is_postscore)
     return dispatcher.decode(data).view(-1, data.size(-1))
-
