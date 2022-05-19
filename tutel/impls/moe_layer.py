@@ -21,20 +21,21 @@ from ..impls.fast_dispatch import fast_encode, fast_decode, extract_critical
 
 
 class FusedExpertsNetwork(torch.nn.Module):
-    def __init__(self, model_dim, hidden_size, local_experts, sharded_count, activation_fn):
+    def __init__(self, model_dim, hidden_size, local_experts, sharded_count, activation_fn, output_dim=None):
         super().__init__()
+        output_dim = output_dim or model_dim
         self.skip_expert = (int(os.environ.get('SKIP_EXPERT', '0')) != 0)
-        self.model_dim, self.hidden_size, self.local_experts = model_dim, hidden_size, local_experts
+        self.model_dim, self.hidden_size, self.local_experts, self.output_dim = model_dim, hidden_size, local_experts, output_dim
         self.activation_fn = activation_fn
 
         fc1_weight = torch.empty(1, local_experts, hidden_size, model_dim)
-        fc2_weight = torch.empty(1, local_experts, hidden_size, model_dim)
+        fc2_weight = torch.empty(1, local_experts, hidden_size, output_dim)
         fc1_bias = torch.empty(1, local_experts, 1, hidden_size)
-        fc2_bias = torch.empty(1, local_experts, 1, (model_dim + sharded_count - 1) // sharded_count)
+        fc2_bias = torch.empty(1, local_experts, 1, (output_dim + sharded_count - 1) // sharded_count)
 
         for i in range(local_experts):
             fc1 = torch.nn.Linear(model_dim, hidden_size)
-            fc2 = torch.nn.Linear(hidden_size, model_dim)
+            fc2 = torch.nn.Linear(hidden_size, output_dim)
             fc1_weight[0, i, :, :], fc1_bias[0, i, :, :] = fc1.weight, fc1.bias
             fc2_weight[0, i, :, :], fc2_bias[0, i, :, :] = fc2.weight.t(), fc2.bias[:fc2_bias.size(-1)]
 
@@ -44,7 +45,9 @@ class FusedExpertsNetwork(torch.nn.Module):
         self.register_parameter(name='batched_fc2_bias', param=torch.nn.Parameter(fc2_bias.squeeze(0)))
 
     def extra_repr(self):
-        return 'model_dim=%d, hidden_size=%d, local_experts=%d' % (self.model_dim, self.hidden_size, self.local_experts)
+        return 'model_dim=%d, hidden_size=%d, output_dim=%d, local_experts=%d' % (
+            self.model_dim, self.hidden_size, self.output_dim, self.local_experts
+        )
 
     def forward(self, x, ctx):
         if self.skip_expert:
@@ -58,13 +61,13 @@ class FusedExpertsNetwork(torch.nn.Module):
         if ctx.ffn_zero_group is not None:
             if not ctx.use_model_parallel:
                 batched_fc1_w = C.zero_gather(batched_fc1_w, group=ctx.ffn_zero_group).view(1, -1, self.model_dim)
-                batched_fc2_w = C.zero_gather(batched_fc2_w, group=ctx.ffn_zero_group).view(1, -1, self.model_dim)
+                batched_fc2_w = C.zero_gather(batched_fc2_w, group=ctx.ffn_zero_group).view(1, -1, self.output_dim)
                 batched_fc1_bias = C.zero_gather(batched_fc1_bias, group=ctx.ffn_zero_group).view(1, 1, -1)
 
             batched_fc2_bias = C.zero_gather(batched_fc2_bias, group=ctx.ffn_zero_group)
             batched_fc2_bias = batched_fc2_bias.view(self.batched_fc2_bias.size(0), self.batched_fc2_bias.size(1), -1)
-            if batched_fc2_bias.size(-1) != self.model_dim:
-                batched_fc2_bias = batched_fc2_bias[:, :, :self.model_dim]
+            if batched_fc2_bias.size(-1) != self.output_dim:
+                batched_fc2_bias = batched_fc2_bias[:, :, :self.output_dim]
 
             if ctx.use_model_parallel:
                 batched_fc2_bias = torch.mul(batched_fc2_bias, 1.0 / ctx.sharded_count)
@@ -179,7 +182,24 @@ class MOELayer(torch.nn.Module):
 
                 if seeds is not None and seeds[1] is not None:
                     torch.manual_seed(seeds[1])
-                self.experts = FusedExpertsNetwork(model_dim, self.hidden_size, self.num_local_experts, self.sharded_count, activation_fn)
+
+                valid_expert_options = {
+                    'count_per_node',
+                    'hidden_size_per_expert',
+                    'output_dim',
+                    'activation_fn',
+                    'activation_fn_with_self',
+                    'fused_custom_fn',
+                    'implicit_dropout_p',
+                    'type',
+                }
+
+                for k in experts:
+                    if k not in valid_expert_options:
+                        raise Exception('Unrecognized argument provided to experts of Tutel Moe-layer: %s' % k)
+
+                output_dim = experts.get('output_dim', model_dim)
+                self.experts = FusedExpertsNetwork(model_dim, self.hidden_size, self.num_local_experts, self.sharded_count, activation_fn, output_dim)
             else:
                 raise Exception('Builtin expert type is not recognized: %s' % experts['type'])
 
@@ -223,6 +243,12 @@ class MOELayer(torch.nn.Module):
         if seeds is not None and len(seeds) > 2 and seeds[2] is not None:
             torch.manual_seed(seeds[2])
 
+    def extra_repr(self):
+        return 'Top-K(s) = %s, Total-Experts = %d [managed by %d device(s)],' % (
+            [x.top_k for x in self.gates],
+            self.num_global_experts,
+            self.world_size,
+        )
 
     def get_parameter_iterator(self, param_type):
         if param_type == 'gate':
@@ -238,7 +264,7 @@ class MOELayer(torch.nn.Module):
             result_output.l_aux = None
             return self.result_func(result_output) if self.result_func is not None else result_output
 
-        original_shape, original_dtype  = input.shape, input.dtype
+        original_shape, original_dtype  = list(input.shape), input.dtype
 
         assert len(original_shape) >= 2, "Input data must be at least 2D tensor: (s)amples, .., (m)odel_dim"
         reshaped_input = input.reshape(-1, input.size(-1))
@@ -378,6 +404,7 @@ class MOELayer(torch.nn.Module):
         result_output = self._fdr.decode(expert_output)
         '''
 
+        original_shape[-1] = result_output.size(-1)
         result_output = result_output.view(original_shape).to(original_dtype)
         self.l_aux = result_output.l_aux = l_aux
         return self.result_func(result_output) if self.result_func is not None else result_output
