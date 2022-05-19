@@ -46,12 +46,13 @@ def init_data_model_parallel(group_count=1, backend='nccl'):
 
 def get_local_session():
     if not hasattr(init_data_model_parallel, 'default_env'):
-        raise Exception("Current session is not initialized with: system.init_data_model_parallel() from tutel")
+        raise Exception("Current session is not initialized with: system.init_data_model_parallel() from tutel. Please try with: system.record_time(is_cuda=False)")
     return init_data_model_parallel.default_env
 
-def record_time():
+def record_time(is_cuda=None):
     import time
-    if get_local_session().is_cuda:
+    is_cuda = is_cuda if is_cuda is not None else get_local_session().is_cuda
+    if is_cuda:
         import torch
         torch.cuda.synchronize()
     return time.time()

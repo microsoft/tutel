@@ -20,8 +20,8 @@ class JitCompiler:
         torch.cuda.init()
         __ctx__ = tutel_custom_kernel.inject_source(source)
 
-        def func(*inputs, extra=[]):
-            tutel_custom_kernel.invoke(inputs, extra, __ctx__)
+        def func(*inputs, extra=[], blocks=[]):
+            tutel_custom_kernel.invoke(inputs, extra, blocks, __ctx__)
         return func
 
     @staticmethod
