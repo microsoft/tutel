@@ -235,7 +235,7 @@ static int inject_source(const std::string &headless_code) {
   return fd;
 }
 
-static void invoke(const std::vector<torch::Tensor> &ts, const std::vector<long> &args, int fd) {
+static void invoke(const std::vector<torch::Tensor> &ts, const std::vector<long> &args, const std::vector<int> &blocks, int fd) {
   std::vector<const void*> pargs(ts.size() + args.size()), ppargs(ts.size() + args.size());
   for (int i = 0; i < (int)ts.size(); ++i) {
     CHECK_CUDA(ts[i]);
@@ -247,7 +247,14 @@ static void invoke(const std::vector<torch::Tensor> &ts, const std::vector<long>
 
   int dev = ts[0].device().index();
   CHECK_EQ(0, cudaSetDevice(dev));
-  jit_execute(ppargs, fd, dev, _gms[fd].blocks, _gms[fd].threads, at::cuda::getDefaultCUDAStream().stream());
+  if (blocks.size() == 0)
+    jit_execute(ppargs, fd, dev, _gms[fd].blocks, _gms[fd].threads, at::cuda::getDefaultCUDAStream().stream());
+  else if (blocks.size() == 1)
+    jit_execute(ppargs, fd, dev, dim3(blocks[0]), _gms[fd].threads, at::cuda::getDefaultCUDAStream().stream());
+  else if (blocks.size() == 2)
+    jit_execute(ppargs, fd, dev, dim3(blocks[0], blocks[1]), _gms[fd].threads, at::cuda::getDefaultCUDAStream().stream());
+  else
+    jit_execute(ppargs, fd, dev, dim3(blocks[0], blocks[1], blocks[2]), _gms[fd].threads, at::cuda::getDefaultCUDAStream().stream());
 }
 
 } // namespace jit
