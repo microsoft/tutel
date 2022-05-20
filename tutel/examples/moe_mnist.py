@@ -76,6 +76,11 @@ def train(args, model, device, train_loader, optimizer, epoch):
         output = model(data)
         loss = F.nll_loss(output, target)
         loss.backward()
+
+        for p in model.parameters():
+            if not hasattr(p, 'skip_allreduce'):
+                p.grad = net.simple_all_reduce(p.grad)
+
         optimizer.step()
         if batch_idx % args.log_interval == 0:
             penv.dist_print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
@@ -164,10 +169,6 @@ def main():
         train(args, model, device, train_loader, optimizer, epoch)
         test(model, device, test_loader)
         scheduler.step()
-
-        for p in model.parameters():
-            if not hasattr(p, 'skip_allreduce'):
-                p.grad = net.simple_all_reduce(p.grad)
 
     if args.save_model:
         torch.save(model.state_dict(), "mnist_cnn.pt")
