@@ -7,12 +7,12 @@ import os
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
-import torch.distributed as dist
 from torch import nn
 import argparse
 
 from tutel import system
 from tutel import moe as tutel_moe
+from tutel import net
 
 parser = argparse.ArgumentParser()
 
@@ -125,7 +125,7 @@ for i in range(num_steps):
         if dist_world_size > 1:
             for p in params_for_all_reduce:
                 p.grad /= dist_world_size
-                dist.all_reduce(p.grad)
+                p.grad = net.simple_all_reduce(p.grad)
         optimizer.step()
     else:
         with torch.no_grad():

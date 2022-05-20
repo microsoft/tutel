@@ -66,6 +66,7 @@ class CustomMoE(torch.nn.Module):
 
 model = CustomMoE().to(dist.local_device)
 
+torch.manual_seed(dist.global_rank + 1)
 data = torch.randn([num_samples, model_dim], device=dist.local_device)
 label = torch.LongTensor(num_samples).random_(1).to(dist.local_device)
 optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
@@ -78,11 +79,12 @@ for i in range(10):
     result = F.log_softmax(result, dim=1)
     loss = F.nll_loss(result, label) + 0.0001 * l_aux
     loss.backward()
-    optimizer.step()
 
     for p in model.parameters():
         if not hasattr(p, 'skip_allreduce'):
             p.grad = net.simple_all_reduce(p.grad)
+    optimizer.step()
+
     t_stop = system.record_time()
 
     dist.dist_print('STEP-%d: loss = %.5f, step_time = %.3f s' % (i, loss, t_stop - t_start))
