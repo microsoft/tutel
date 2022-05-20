@@ -112,6 +112,8 @@ class TutelMoeFastDispatcher:
 
         if TutelMoeFastDispatcher.ones_helper is None or TutelMoeFastDispatcher.ones_helper.size(0) < self.sample_size:
             TutelMoeFastDispatcher.ones_helper = torch.ones([self.sample_size, 2], dtype=self.dtype, device=self.indices_[0].device)
+        if TutelMoeFastDispatcher.ones_helper.is_cuda != self.indices_[0].is_cuda:
+            TutelMoeFastDispatcher.ones_helper = torch.ones([TutelMoeFastDispatcher.ones_helper.size(0), 2], dtype=self.dtype, device=self.indices_[0].device)
         self.ones_helper = TutelMoeFastDispatcher.ones_helper
 
     def encode(self, data):
