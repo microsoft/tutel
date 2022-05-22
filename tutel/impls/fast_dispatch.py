@@ -3,13 +3,15 @@
 
 from typing import TYPE_CHECKING, Any, Optional, Tuple, Union, cast
 
+import logging
 import torch
 from torch import Tensor
 
 from .jit_compiler import IS_HIP_EXTENSION
 from ..jit_kernels import sparse as jit_kernel
 from ..jit_kernels.gating import fast_cumsum_sub_one
-from .communicate import simple_all_reduce
+from .communicate import get_world_rank, simple_all_reduce
+
 
 class GatingEncoder(torch.autograd.Function):
     @staticmethod
@@ -151,7 +153,7 @@ def load_balance(gates, mask1, num_global_experts, fp32_gate):
         l_loss = torch.sum(me * ce) * num_global_experts
     return l_loss
 
-def extract_critical(gates, top_k, capacity_factor=1.0, fp32_gate=False, batch_prioritized_routing=False, alignment=1):
+def extract_critical(gates, top_k, capacity_factor=1.0, fp32_gate=False, batch_prioritized_routing=False, group=None, alignment=1):
     topk_indices = torch.topk(gates, top_k, dim=1).indices
     num_global_experts = gates.size(1)
 
@@ -185,17 +187,21 @@ def extract_critical(gates, top_k, capacity_factor=1.0, fp32_gate=False, batch_p
 
     indices_s = [x.to(torch.int32) for x in indices_s]
 
+    samples_per_expert = ((int(gates.size(0)) + num_global_experts - 1) // num_global_experts)
     if capacity_factor > 0:
-        capacity = top_k * int(capacity_factor * ((int(gates.size(0)) + num_global_experts - 1) // num_global_experts))
+        capacity = top_k * int(capacity_factor * samples_per_expert)
     else:
         capacity = torch.max(torch.concat(locations_s, dim=0))
-        capacity = int(simple_all_reduce(capacity, op=torch.distributed.ReduceOp.MAX)) + 1
+        capacity = int(simple_all_reduce(capacity, group=group, op=torch.distributed.ReduceOp.MAX)) + 1
         if capacity_factor < 0:
             capacity = min(capacity, top_k * int(-capacity_factor * ((int(gates.size(0)) + num_global_experts - 1) // num_global_experts)))
 
     remainder = capacity % alignment
     if remainder > 0:
         capacity = capacity + alignment - remainder
+
+    if get_world_rank(group) == 0:
+        logging.info(f"Capacity = {capacity}, real-time capacity-factor = {capacity / (top_k * samples_per_expert)}")
     return (num_global_experts, indices_s, locations_s, gates_s, capacity), l_loss
 
 def fast_encode(data, critial_data, is_postscore=True):

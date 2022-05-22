@@ -19,9 +19,8 @@ import logging
 
 penv = system.init_data_model_parallel(backend='nccl' if torch.cuda.is_available() else 'gloo')
 
-
 class Net(nn.Module):
-    DATASET_TARGET = datasets.MNIST
+    DATASET_TARGET = datasets.CIFAR10
 
     def __init__(self, use_moe):
         super(Net, self).__init__()
@@ -29,43 +28,54 @@ class Net(nn.Module):
 
         if self.use_moe:
             self.moe_ffn = moe.moe_layer(
-                gate_type = {'type': 'top', 'k': 2, 'capacity_factor': -2.5},
+                gate_type = {'type': 'top', 'k': 1, 'capacity_factor': 0},
                 experts = {'type': 'ffn',
                     'count_per_node': 1,
-                    'hidden_size_per_expert': 128,
+                    'hidden_size_per_expert': 512,
                     'output_dim': 10,
-                    'activation_fn': lambda x: self.dropout2(F.relu(x))
+                    'activation_fn': lambda x: self.dropout3(F.relu(x))
                 },
-                model_dim = 9216,
+                model_dim = 2304,
                 seeds = (1, penv.global_rank + 1),
                 scan_expert_func = lambda name, param: setattr(param, 'skip_allreduce', True),
                 a2a_ffn_overlap_degree = 1,
             )
         else:
             torch.manual_seed(1)
-            self.fc1 = nn.Linear(9216, 128)
-            self.fc2 = nn.Linear(128, 10)
+            self.fc1 = nn.Linear(2304, 512)
+            self.fc2 = nn.Linear(512, 10)
 
         torch.manual_seed(1)
-        self.conv1 = nn.Conv2d(1, 32, 3, 1)
-        self.conv2 = nn.Conv2d(32, 64, 3, 1)
+        self.conv1 = nn.Conv2d(3, 32, 3, 1, padding=1)
+        self.conv2 = nn.Conv2d(32, 32, 3, 1)
+        self.conv3 = nn.Conv2d(32, 64, 3, 1, padding=1)
+        self.conv4 = nn.Conv2d(64, 64, 3, 1)
         self.dropout1 = nn.Dropout(0.25)
-        self.dropout2 = nn.Dropout(0.5)
+        self.dropout2 = nn.Dropout(0.25)
+        self.dropout3 = nn.Dropout(0.5)
 
-    def forward(self, x):
+    def forward(self, x, top_k=None):
         x = self.conv1(x)
         x = F.relu(x)
         x = self.conv2(x)
         x = F.relu(x)
         x = F.max_pool2d(x, 2)
         x = self.dropout1(x)
+
+        x = self.conv3(x)
+        x = F.relu(x)
+        x = self.conv4(x)
+        x = F.relu(x)
+        x = F.max_pool2d(x, 2)
+        x = self.dropout2(x)
+
         x = torch.flatten(x, 1)
 
         if self.use_moe:
-            x = self.moe_ffn(x)
+            x = self.moe_ffn(x, top_k=top_k)
         else:
             x = self.fc1(x)
-            x = self.dropout2(F.relu(x))
+            x = self.dropout3(F.relu(x))
             x = self.fc2(x)
 
         output = F.log_softmax(x, dim=1)
@@ -110,7 +120,7 @@ def test(model, device, test_loader):
     with torch.no_grad():
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
-            output = model(data)
+            output = model(data, top_k=2)
             test_loss += F.nll_loss(output, target, reduction='sum').item()
             pred = output.argmax(dim=1, keepdim=True)
             correct += pred.eq(target.view_as(pred)).sum().item()

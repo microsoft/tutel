@@ -280,6 +280,7 @@ class MOELayer(torch.nn.Module):
             capacity_factor = gctx.capacity_factor if capacity_factor is None else capacity_factor,
             fp32_gate = gctx.fp32_gate,
             batch_prioritized_routing = self.batch_prioritized_routing,
+            group=self.group,
             alignment = self.sharded_count
         )
 
@@ -299,9 +300,9 @@ class MOELayer(torch.nn.Module):
         if a2a_overlap_degree > 1:
             logging.warning(f"`a2a_overlap_degree` is currently not handled in this branch, please use `v0.1.x` instead.")
 
-        y = C.all_to_all(y, 1, 0, use_2dh=self.use_2dh)
+        y = C.all_to_all(y, 1, 0, use_2dh=self.use_2dh, group=self.group)
         y = self.experts(y, self)
-        y = C.all_to_all(y, 0, 1, use_2dh=self.use_2dh)
+        y = C.all_to_all(y, 0, 1, use_2dh=self.use_2dh, group=self.group)
 
         if self.num_global_experts < self.world_size:
             if self.use_model_parallel:

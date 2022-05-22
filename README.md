@@ -41,7 +41,8 @@ How to setup Tutel MoE for Pytorch and [run examples](tutel/examples):
         $ python3 -m tutel.examples.helloworld_amp --batch_size=16           # Test Tutel-optimized MoE with AMP data type + manual distribution
         $ python3 -m tutel.examples.helloworld_deepspeed --batch_size=16     # Test Deepspeed (0.5.6) MoE + manual distribution
         $ python3 -m tutel.examples.helloworld_from_scratch                  # Test Custom MoE implementation from scratch
-        $ python3 -m tutel.examples.moe_mnist                                # Test MoE layer in end-to-end MNIST model
+        $ python3 -m tutel.examples.moe_mnist                                # Test MoE layer in end-to-end MNIST dataset
+        $ python3 -m tutel.examples.moe_cifar10                              # Test MoE layer in end-to-end CIRAR10 dataset
 
         (If building from source, the following method also works:)
         $ python3 ./tutel/examples/helloworld.py --batch_size=16
@@ -57,6 +58,7 @@ How to setup Tutel MoE for Pytorch and [run examples](tutel/examples):
         # << Single Node >>
         $ mpiexec -bind-to none -host localhost -x LOCAL_SIZE=8 python3 -m tutel.launcher.run -m tutel.examples.helloworld --batch_size=16
         $ mpiexec -bind-to none -host localhost -x LOCAL_SIZE=8 python3 -m tutel.launcher.run -m tutel.examples.moe_mnist
+        $ mpiexec -bind-to none -host localhost -x LOCAL_SIZE=8 python3 -m tutel.launcher.run -m tutel.examples.moe_cifar10
         ...
 
         # << Cross Nodes >>
