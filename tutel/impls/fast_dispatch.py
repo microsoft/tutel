@@ -3,13 +3,15 @@
 
 from typing import TYPE_CHECKING, Any, Optional, Tuple, Union, cast
 
+import logging
 import torch
 from torch import Tensor
 
 from .jit_compiler import IS_HIP_EXTENSION
 from ..jit_kernels import sparse as jit_kernel
 from ..jit_kernels.gating import fast_cumsum_sub_one
-from .communicate import simple_all_reduce
+from .communicate import get_world_rank, simple_all_reduce
+from . import losses
 
 class GatingEncoder(torch.autograd.Function):
     @staticmethod
@@ -130,39 +132,25 @@ class TutelMoeFastDispatcher:
 
 fast_dispatcher = TutelMoeFastDispatcher
 
-def one_hot_with_dtype(data, num_classes, dtype):
-    result = torch.zeros([data.size(0), num_classes], device=data.device, dtype=dtype)
-    result.scatter_(1, data.unsqueeze(-1), 1)
-    return result
-
 def compute_sorted_location(x, importance_scores):
     sorted_x = x[importance_scores.argsort(dim=0)]
     sorted_cumsum = fast_cumsum_sub_one(sorted_x) * sorted_x
     return sorted_cumsum[importance_scores.argsort(dim=0).argsort(dim=0)]
 
-def load_balance(gates, mask1, num_global_experts, fp32_gate):
-    if gates.dtype == torch.float32 or fp32_gate:
-        me = torch.sum(gates.float(), dim=0)
-        ce = torch.sum(mask1.to(me.dtype), dim=0)
-        l_loss = torch.sum(me * ce) * (num_global_experts / (gates.size(0) * gates.size(0)))
-    else:
-        me = torch.mean(gates, dim=0)
-        ce = torch.mean(mask1.to(gates.dtype), dim=0)
-        l_loss = torch.sum(me * ce) * num_global_experts
-    return l_loss
-
-def extract_critical(gates, top_k, capacity_factor=1.0, fp32_gate=False, batch_prioritized_routing=False, alignment=1):
-    topk_indices = torch.topk(gates, top_k, dim=1).indices
-    num_global_experts = gates.size(1)
+def extract_critical(scores, top_k, loss_fn=losses.gshard_loss, capacity_factor=1.0, batch_prioritized_routing=False, normalize_gate=True, group=None, alignment=1):
+    num_global_experts = int(scores.size(1))
+    top_k = min(top_k, num_global_experts)
+    topk_indices = torch.topk(scores, top_k, dim=1).indices
 
     indices_s = [x.view(-1) for x in topk_indices.chunk(top_k, dim=1)]
-    masks_se = [one_hot_with_dtype(x, num_classes=num_global_experts, dtype=x.dtype) for x in indices_s]
-    gates_s = [(gates * x).sum(dim=1) for x in masks_se]
 
-    l_loss = load_balance(gates, masks_se[0], num_global_experts, fp32_gate)
+    masks_se = [losses._one_hot_with_dtype(x, num_classes=num_global_experts, dtype=x.dtype) for x in indices_s]
+    gates_s = [(scores * x).sum(dim=1) for x in masks_se]
+
+    l_loss = loss_fn(scores, topk_indices) if loss_fn is not None else None
 
     if batch_prioritized_routing:
-        importance_scores = -1 * gates.max(dim=1)[0]
+        importance_scores = -1 * scores.max(dim=1)[0]
         compute_location = lambda x: compute_sorted_location(x, importance_scores)
     else:
         compute_location = fast_cumsum_sub_one
@@ -179,23 +167,28 @@ def extract_critical(gates, top_k, capacity_factor=1.0, fp32_gate=False, batch_p
             locations2 += acc_base
             locations_s.append(torch.sum(locations2 * masks_se[k], dim=1).to(torch.int32))
 
-        # Normalize Gate
-        denom_s = torch.clamp(sum(gates_s), min=torch.finfo(gates_s[0].dtype).eps)
-        gates_s = [x / denom_s for x in gates_s]
+        if normalize_gate:
+            denom_s = torch.clamp(sum(gates_s), min=torch.finfo(gates_s[0].dtype).eps)
+            gates_s = [x / denom_s for x in gates_s]
 
     indices_s = [x.to(torch.int32) for x in indices_s]
 
+    samples_per_expert = ((int(scores.size(0)) + num_global_experts - 1) // num_global_experts)
     if capacity_factor > 0:
-        capacity = top_k * int(capacity_factor * ((int(gates.size(0)) + num_global_experts - 1) // num_global_experts))
+        capacity = top_k * int(capacity_factor * samples_per_expert)
     else:
         capacity = torch.max(torch.concat(locations_s, dim=0))
-        capacity = int(simple_all_reduce(capacity, op=torch.distributed.ReduceOp.MAX)) + 1
+        capacity = int(simple_all_reduce(capacity, group=group, op=torch.distributed.ReduceOp.MAX)) + 1
         if capacity_factor < 0:
-            capacity = min(capacity, top_k * int(-capacity_factor * ((int(gates.size(0)) + num_global_experts - 1) // num_global_experts)))
+            capacity = min(capacity, top_k * int(-capacity_factor * ((int(scores.size(0)) + num_global_experts - 1) // num_global_experts)))
 
     remainder = capacity % alignment
     if remainder > 0:
         capacity = capacity + alignment - remainder
+
+    if get_world_rank(group) == 0:
+        logging.info(f"Capacity = {capacity}, real-time capacity-factor for top-{top_k} = {capacity / (top_k * samples_per_expert)}")
+
     return (num_global_experts, indices_s, locations_s, gates_s, capacity), l_loss
 
 def fast_encode(data, critial_data, is_postscore=True):
