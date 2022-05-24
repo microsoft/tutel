@@ -230,9 +230,13 @@ class MOELayer(torch.nn.Module):
             except ModuleNotFoundError:
                 raise Exception("Unrecognized gate_type: %s" % gate_type)
 
-            gate_noise = single_gate_type.get('gate_noise', 0.0)
-            self.gates += [single_gate.Gate(model_dim=self.model_dim, num_global_experts=self.num_global_experts, **single_gate_type)]
-            setattr(self.gates[-1], 'gate_noise', gate_noise)
+            gate_module = single_gate.Gate(model_dim=self.model_dim, num_global_experts=self.num_global_experts, **single_gate_type)
+            if not hasattr(gate_module, 'gate_noise'):
+                gate_module.gate_noise = single_gate_type.get('gate_noise', 0.0)
+            if not hasattr(gate_module, 'capacity_factor'):
+                gate_module.capacity_factor = single_gate_type.get('capacity_factor', float(os.environ.get('CAP_FACTOR', 1.0)))
+
+            self.gates += [gate_module]
 
         self.gates = ModuleList(self.gates)
 
