@@ -9,6 +9,7 @@ import re
 import time
 import logging 
 import collections
+import importlib
 
 import torch
 from torch import Tensor
@@ -18,7 +19,7 @@ import torch.nn.functional as F
 
 from ..impls import communicate as C
 from ..impls.fast_dispatch import fast_encode, fast_decode, extract_critical
-
+from . import losses
 
 class FusedExpertsNetwork(torch.nn.Module):
     def __init__(self, model_dim, hidden_size, local_experts, sharded_count, activation_fn, output_dim=None):
@@ -218,25 +219,20 @@ class MOELayer(torch.nn.Module):
 
         self.gates = []
         for gi, single_gate_type in enumerate(gate_type):
-            if single_gate_type['type'] == 'top':
-                if seeds is not None and seeds[0] is not None:
-                    torch.manual_seed(seeds[0] + gi)
+            gate_type = single_gate_type['type']
+            single_gate_type.pop('type')
+            assert re.match(r'[a-zA-Z0-9\_]+', gate_type), "Gate type must contain digits, letters and underline only characters."
 
-                single_gate_type.pop('type')
-                assert 'input_dropout_p' not in single_gate_type, "`input_dropout_p` option for Tutel Moe-layer has been deprecated, please use torch.nn.Dropout(p=input_dropout_p) before Tutel Moe-layer instead."
+            if seeds is not None and seeds[0] is not None:
+                torch.manual_seed(seeds[0] + gi)
+            try:
+                single_gate = importlib.import_module(f'...gates.{gate_type}', __name__)
+            except ModuleNotFoundError:
+                raise Exception("Unrecognized gate_type: %s" % gate_type)
 
-                # Create Gating Module
-                fp32_gate = single_gate_type.get('fp32_gate', False)
-                single_gate = torch.nn.Linear(model_dim, self.num_global_experts, bias=False, dtype=torch.float32 if fp32_gate else None)
-                single_gate.fp32_gate = fp32_gate
-                single_gate.capacity_factor = float(os.environ.get('CAP_FACTOR', single_gate_type.get('capacity_factor', 1.0)))
-                single_gate.top_k = min(self.num_global_experts, int(single_gate_type.get('k', 2)))
-                for k in single_gate_type:
-                    if k not in ('fp32_gate', 'capacity_factor', 'k'):
-                        raise Exception('Unrecognized argument provided to gate_type of Tutel Moe-layer: %s' % k)
-                self.gates += [single_gate]
-            else:
-                raise Exception("Unrecognized gate_type: %s" % single_gate_type)
+            gate_noise = single_gate_type.get('gate_noise', 0.0)
+            self.gates += [single_gate.Gate(model_dim=self.model_dim, num_global_experts=self.num_global_experts, **single_gate_type)]
+            setattr(self.gates[-1], 'gate_noise', gate_noise)
 
         self.gates = ModuleList(self.gates)
 
@@ -245,7 +241,7 @@ class MOELayer(torch.nn.Module):
 
     def extra_repr(self):
         return 'Top-K(s) = %s, Total-Experts = %d [managed by %d device(s)],' % (
-            [x.top_k for x in self.gates],
+            [f'k={x.top_k}, noise={x.gate_noise}' for x in self.gates],
             self.num_global_experts,
             self.world_size,
         )
@@ -270,20 +266,35 @@ class MOELayer(torch.nn.Module):
         reshaped_input = input.reshape(-1, input.size(-1))
 
         x = reshaped_input.to(next(iter(self.experts.parameters())).dtype)
-
         gctx = self.gates[gate_index]
-        logits = gctx(x.to(next(iter(gctx.parameters())).dtype))
-        scores = F.softmax(logits, dim=1)
 
-        crit, l_aux = extract_critical(scores,
-            top_k = gctx.top_k if top_k is None else top_k,
-            capacity_factor = gctx.capacity_factor if capacity_factor is None else capacity_factor,
-            fp32_gate = gctx.fp32_gate,
-            batch_prioritized_routing = self.batch_prioritized_routing,
-            alignment = self.sharded_count
-        )
+        def routing():
+            logits = gctx(x.to(next(iter(gctx.parameters())).dtype))
 
-        y = fast_encode(x, crit, self.is_postscore)
+            if self.training and gctx.gate_noise > 0:
+                logits_w_noise = logits + gctx.gate_noise * torch.randn_like(logits) / self.num_global_experts
+            else:
+                logits_w_noise = logits
+
+            scores = F.softmax(logits_w_noise, dim=1)
+
+            return logits.dtype, extract_critical(scores,
+                top_k = gctx.top_k if top_k is None else top_k,
+                loss_fn = lambda gates, topk_ids: losses.gshard_loss(gates, topk_ids),
+                capacity_factor = gctx.capacity_factor if capacity_factor is None else capacity_factor,
+                batch_prioritized_routing = self.batch_prioritized_routing,
+                group=self.group,
+                alignment = self.sharded_count
+            )
+
+
+        if x.is_cuda:
+            with torch.cuda.amp.autocast(enabled=False):
+                logits_dtype, (crit, l_aux) = routing()
+        else:
+            logits_dtype, (crit, l_aux) = routing()
+
+        y = fast_encode(x.to(logits_dtype), crit, self.is_postscore).to(x.dtype)
 
         if self.auto_parallel:
             self.use_model_parallel = (y.numel() * (self.sharded_count - 1) < self.model_dim * self.hidden_size * self.sharded_count)
@@ -299,9 +310,9 @@ class MOELayer(torch.nn.Module):
         if a2a_overlap_degree > 1:
             logging.warning(f"`a2a_overlap_degree` is currently not handled in this branch, please use `v0.1.x` instead.")
 
-        y = C.all_to_all(y, 1, 0, use_2dh=self.use_2dh)
+        y = C.all_to_all(y, 1, 0, use_2dh=self.use_2dh, group=self.group)
         y = self.experts(y, self)
-        y = C.all_to_all(y, 0, 1, use_2dh=self.use_2dh)
+        y = C.all_to_all(y, 0, 1, use_2dh=self.use_2dh, group=self.group)
 
         if self.num_global_experts < self.world_size:
             if self.use_model_parallel:
@@ -309,7 +320,7 @@ class MOELayer(torch.nn.Module):
             else:
                 y = y.view(self.num_global_experts, -1, y.size(2))
 
-        y = fast_decode(y, crit, self.is_postscore)
+        y = fast_decode(y.to(logits_dtype), crit, self.is_postscore)
         result_output = y
 
         '''
