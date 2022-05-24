@@ -26,6 +26,11 @@ def get_world_rank(group=None):
     except:
         return 0
 
+def barrier(group=None):
+    if get_world_size(group) == 1:
+        return
+    dist.barrier(group=group)
+
 
 TUTEL_GROUPING_CACHE = {}
 TUTEL_SKIP_A2A = int(os.environ.get('SKIP_A2A', 0)) > 0
