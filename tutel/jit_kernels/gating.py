@@ -7,7 +7,7 @@ import logging
 from ..impls.jit_compiler import JitCompiler
 
 
-disable_fast_cumsum = int(os.environ.get('FAST_CUMSUM', '1')) == 0
+use_fast_cumsum = int(os.environ.get('FAST_CUMSUM', '1'))
 cumsum_kernels = dict()
 
 def torch_cumsum_sub_one(mask1):
@@ -15,9 +15,11 @@ def torch_cumsum_sub_one(mask1):
   return locations1
 
 def get_cumsum_kernel(samples, global_experts):
-
-  if disable_fast_cumsum:
-    logging.warning("Optimized cumsum is disabled, and may result in big performance regression.")
+  global use_fast_cumsum
+  if use_fast_cumsum <= 0:
+    if use_fast_cumsum == 0:
+      logging.warning("Optimized cumsum is disabled, and may result in big performance regression.")
+    use_fast_cumsum = -1
     return torch_cumsum_sub_one
 
   global cumsum_kernels
