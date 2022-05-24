@@ -177,14 +177,14 @@ def main():
                            transform=transform)
         dataset2 = Net.DATASET_TARGET('/tmp/data', train=False,
                            transform=transform)
-        torch.distributed.barrier()
+        net.barrier()
     else:
-        torch.distributed.barrier()
+        net.barrier()
         dataset1 = Net.DATASET_TARGET('/tmp/data', train=True, download=False,
                            transform=transform)
         dataset2 = Net.DATASET_TARGET('/tmp/data', train=False,
                            transform=transform)
-    torch.distributed.barrier()
+    net.barrier()
 
     train_loader = torch.utils.data.DataLoader(dataset1,**train_kwargs)
     test_loader = torch.utils.data.DataLoader(dataset2, **test_kwargs)
