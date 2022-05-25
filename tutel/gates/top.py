@@ -2,7 +2,6 @@
 # Licensed under the MIT license.
 
 import torch
-import os
 
 class LinearTopKGate(torch.nn.Module):
     def __init__(self, model_dim, num_global_experts, k=1, fp32_gate=False, **options):

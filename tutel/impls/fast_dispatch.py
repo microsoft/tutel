@@ -139,7 +139,7 @@ def compute_sorted_location(x, importance_scores):
 
 def extract_critical(scores, top_k, loss_fn=losses.gshard_loss, capacity_factor=1.0, batch_prioritized_routing=False, normalize_gate=True, group=None, alignment=1):
     num_global_experts = int(scores.size(1))
-    top_k = min(top_k, num_global_experts)
+    top_k, top_k_original = min(top_k, num_global_experts), top_k
     topk_indices = torch.topk(scores, top_k, dim=1).indices
 
     indices_s = [x.view(-1) for x in topk_indices.chunk(top_k, dim=1)]
@@ -187,7 +187,7 @@ def extract_critical(scores, top_k, loss_fn=losses.gshard_loss, capacity_factor=
         capacity = capacity + alignment - remainder
 
     if get_world_rank(group) == 0:
-        logging.info(f"Capacity = {capacity}, real-time capacity-factor for top-{top_k} = {capacity / (top_k * samples_per_expert)}")
+        logging.info(f"Capacity = {capacity}, real-time capacity-factor for top-{top_k_original} = {capacity / (top_k * samples_per_expert)}")
 
     return (num_global_experts, indices_s, locations_s, gates_s, capacity), l_loss
 
