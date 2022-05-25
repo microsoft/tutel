@@ -21,71 +21,6 @@ from ..impls import communicate as C
 from ..impls.fast_dispatch import fast_encode, fast_decode, extract_critical
 from . import losses
 
-class FusedExpertsNetwork(torch.nn.Module):
-    def __init__(self, model_dim, hidden_size, local_experts, sharded_count, activation_fn, output_dim=None):
-        super().__init__()
-        output_dim = output_dim or model_dim
-        self.skip_expert = (int(os.environ.get('SKIP_EXPERT', '0')) != 0)
-        self.model_dim, self.hidden_size, self.local_experts, self.output_dim = model_dim, hidden_size, local_experts, output_dim
-        self.activation_fn = activation_fn
-
-        fc1_weight = torch.empty(1, local_experts, hidden_size, model_dim)
-        fc2_weight = torch.empty(1, local_experts, hidden_size, output_dim)
-        fc1_bias = torch.empty(1, local_experts, 1, hidden_size)
-        fc2_bias = torch.empty(1, local_experts, 1, (output_dim + sharded_count - 1) // sharded_count)
-
-        for i in range(local_experts):
-            fc1 = torch.nn.Linear(model_dim, hidden_size)
-            fc2 = torch.nn.Linear(hidden_size, output_dim)
-            fc1_weight[0, i, :, :], fc1_bias[0, i, :, :] = fc1.weight, fc1.bias
-            fc2_weight[0, i, :, :], fc2_bias[0, i, :, :] = fc2.weight.t(), fc2.bias[:fc2_bias.size(-1)]
-
-        self.register_parameter(name='batched_fc1_w', param=torch.nn.Parameter(fc1_weight.squeeze(0)))
-        self.register_parameter(name='batched_fc2_w', param=torch.nn.Parameter(fc2_weight.squeeze(0)))
-        self.register_parameter(name='batched_fc1_bias', param=torch.nn.Parameter(fc1_bias.squeeze(0)))
-        self.register_parameter(name='batched_fc2_bias', param=torch.nn.Parameter(fc2_bias.squeeze(0)))
-
-    def extra_repr(self):
-        return 'model_dim=%d, hidden_size=%d, output_dim=%d, local_experts=%d' % (
-            self.model_dim, self.hidden_size, self.output_dim, self.local_experts
-        )
-
-    def forward(self, x, ctx):
-        if self.skip_expert:
-            return x
-
-        batched_fc1_w = self.batched_fc1_w
-        batched_fc2_w = self.batched_fc2_w
-        batched_fc1_bias = self.batched_fc1_bias
-        batched_fc2_bias = self.batched_fc2_bias
-
-        if ctx.ffn_zero_group is not None:
-            if not ctx.use_model_parallel:
-                batched_fc1_w = C.zero_gather(batched_fc1_w, group=ctx.ffn_zero_group).view(1, -1, self.model_dim)
-                batched_fc2_w = C.zero_gather(batched_fc2_w, group=ctx.ffn_zero_group).view(1, -1, self.output_dim)
-                batched_fc1_bias = C.zero_gather(batched_fc1_bias, group=ctx.ffn_zero_group).view(1, 1, -1)
-
-            batched_fc2_bias = C.zero_gather(batched_fc2_bias, group=ctx.ffn_zero_group)
-            batched_fc2_bias = batched_fc2_bias.view(self.batched_fc2_bias.size(0), self.batched_fc2_bias.size(1), -1)
-            if batched_fc2_bias.size(-1) != self.output_dim:
-                batched_fc2_bias = batched_fc2_bias[:, :, :self.output_dim]
-
-            if ctx.use_model_parallel:
-                batched_fc2_bias = torch.mul(batched_fc2_bias, 1.0 / ctx.sharded_count)
-
-        y = torch.add(torch.matmul(x, batched_fc1_w.permute(0, 2, 1)), batched_fc1_bias)
-        y = self.activation_fn(y)
-        y = torch.add(torch.matmul(y, batched_fc2_w), batched_fc2_bias)
-        return y
-
-    def to(self, *args, **kwargs):
-        self = super().to(*args, **kwargs)
-        self.fc1_weight = self.fc1_weight.to(*args, **kwargs)
-        self.fc2_weight = self.fc2_weight.to(*args, **kwargs)
-        self.fc1_bias = self.fc1_bias.to(*args, **kwargs)
-        self.fc2_bias = self.fc2_bias.to(*args, **kwargs)
-        return self
-
 
 class MOELayer(torch.nn.Module):
     """Tutel optimized MOELayer
@@ -132,16 +67,13 @@ class MOELayer(torch.nn.Module):
         self.result_func = result_func
         self.skip_moe = (int(os.environ.get('SKIP_MOE', '0')) != 0)
 
-        assert isinstance(experts, dict), "Non-builtin experts module is not supported by standalone Tutel Moe-layer, please follows helloworld_from_scratch.py for custom construction instead."
-
-        self.num_local_experts = experts.get('count_per_node', 1)
+        self.num_local_experts = experts.pop('count_per_node', 1)
         self.num_global_experts = MOELayer.global_expert_count(self.num_local_experts, self.group)
 
         self.world_size = C.get_world_size(self.group)
         if self.num_global_experts < self.world_size:
             sharded_count = self.world_size // self.num_global_experts
-            assert experts['hidden_size_per_expert'] % sharded_count == 0, f"Can't evenly divide hidden_size_per_expert ({experts['hidden_size_per_expert']}) to {sharded_count} slices"
-            self.num_local_experts, experts['hidden_size_per_expert'] = 1, experts['hidden_size_per_expert'] // sharded_count
+            self.num_local_experts = 1
             self.ffn_zero_group = C.create_groups_from_world(group_count=self.num_global_experts).model_group
         else:
             sharded_count = 1
@@ -154,7 +86,6 @@ class MOELayer(torch.nn.Module):
         else:
             self.auto_parallel, self.use_model_parallel = False, (parallel_type == 'model')
 
-        self.hidden_size = experts['hidden_size_per_expert']
         self.model_dim = model_dim
         self.sharded_count = sharded_count
 
@@ -166,43 +97,26 @@ class MOELayer(torch.nn.Module):
         self.a2a_ffn_overlap_degree = a2a_ffn_overlap_degree
         self.use_2dh = use_2dh
 
-        if not isinstance(experts, dict):
-            self.experts = cast(ModuleList, experts) if type(experts) == ModuleList else ModuleList(experts)
-        else:
-            if experts['type'] == 'ffn':
-                activation_fn = experts.get('activation_fn', None)
-                activation_fn_with_self = experts.get('activation_fn_with_self', None)
-                if activation_fn_with_self is not None:
-                    assert activation_fn is None, "Option `activation_fn_with_self` has been specified, please keep exactly one of them."
-                    activation_fn = lambda x: activation_fn_with_self(x, self)
-                if activation_fn is None:
-                    activation_fn = lambda x: F.relu(x)
+        if seeds is not None and seeds[1] is not None:
+            torch.manual_seed(seeds[1])
 
+        experts_type = experts.pop('type')
+        if experts_type == 'custom':
+            self.experts = cast(ModuleList, experts['module'])
+        else:
+            assert re.match(r'[a-zA-Z0-9\_]+', experts_type), "Expert type must only include digits, letters and underline characters."
+            try:
+                fused_experts = importlib.import_module(f'...experts.{experts_type}', __name__)
+            except ModuleNotFoundError:
+                raise Exception('Builtin expert type is not recognized: %s' % experts_type)
+
+            if experts_type == 'ffn':
                 assert 'fused_custom_fn' not in experts, "`fused_custom_fn` option for Tutel Moe-layer has been deprecated, please follows helloworld_from_scratch.py for custom construction instead."
                 assert 'implicit_dropout_p' not in experts, "`implicit_dropout_p` option for Tutel Moe-layer has been deprecated, please use torch.nn.Dropout(p=implicit_dropout_p) on custom activation_fn (for fc1_dropout) and after Tutel Moe-layer (for fc2_dropout) instead."
 
-                if seeds is not None and seeds[1] is not None:
-                    torch.manual_seed(seeds[1])
+            self.experts = fused_experts.ExpertModule(**experts)
 
-                valid_expert_options = {
-                    'count_per_node',
-                    'hidden_size_per_expert',
-                    'output_dim',
-                    'activation_fn',
-                    'activation_fn_with_self',
-                    'fused_custom_fn',
-                    'implicit_dropout_p',
-                    'type',
-                }
-
-                for k in experts:
-                    if k not in valid_expert_options:
-                        raise Exception('Unrecognized argument provided to experts of Tutel Moe-layer: %s' % k)
-
-                output_dim = experts.get('output_dim', model_dim)
-                self.experts = FusedExpertsNetwork(model_dim, self.hidden_size, self.num_local_experts, self.sharded_count, activation_fn, output_dim)
-            else:
-                raise Exception('Builtin expert type is not recognized: %s' % experts['type'])
+        self.experts.update(self)
 
         if scan_expert_func is not None:
             for n, p in self.experts.named_parameters():
@@ -221,7 +135,7 @@ class MOELayer(torch.nn.Module):
         for gi, single_gate_type in enumerate(gate_type):
             gate_type = single_gate_type['type']
             single_gate_type.pop('type')
-            assert re.match(r'[a-zA-Z0-9\_]+', gate_type), "Gate type must contain digits, letters and underline only characters."
+            assert re.match(r'[a-zA-Z0-9\_]+', gate_type), "Gate type must only include digits, letters and underline characters."
 
             if seeds is not None and seeds[0] is not None:
                 torch.manual_seed(seeds[0] + gi)
@@ -258,19 +172,26 @@ class MOELayer(torch.nn.Module):
         else:
             raise Exception("Specified parameter type is not recognized: %s. Valid `param_type` includes: gate, local_experts." % param_type)
 
-    def forward(self, input: Tensor, gate_index=0, capacity_factor=None, top_k=None, a2a_overlap_degree=None):
+    def expert_local(self, x, reserve_shape):
+        y = self.experts(x.view(x.size(0), x.size(1), *reserve_shape), self)
+        self.protected_shape = y.shape
+        return y.reshape(y.size(0), y.size(1), -1)
+
+    def forward(self, input: Tensor, gate_index=0, capacity_factor=None, top_k=None, a2a_ffn_overlap_degree=None, reserve_dims=1):
         if self.skip_moe:
             result_output = input
             result_output.l_aux = None
             return self.result_func(result_output) if self.result_func is not None else result_output
 
-        original_shape, original_dtype  = list(input.shape), input.dtype
-
+        original_shape, original_dtype  = input.shape, input.dtype
         assert len(original_shape) >= 2, "Input data must be at least 2D tensor: (s)amples, .., (m)odel_dim"
-        reshaped_input = input.reshape(-1, input.size(-1))
 
-        x = reshaped_input.to(next(iter(self.experts.parameters())).dtype)
+        x = input.reshape(-1, original_shape[-reserve_dims:].numel())
+        for p in self.experts.parameters():
+            x = x.to(p.dtype)
+            break
         gctx = self.gates[gate_index]
+        a2a_ffn_overlap_degree = a2a_ffn_overlap_degree if a2a_ffn_overlap_degree is not None else self.a2a_ffn_overlap_degree
 
         def routing():
             logits = gctx(x.to(next(iter(gctx.parameters())).dtype))
@@ -287,8 +208,8 @@ class MOELayer(torch.nn.Module):
                 loss_fn = lambda gates, topk_ids: losses.gshard_loss(gates, topk_ids),
                 capacity_factor = gctx.capacity_factor if capacity_factor is None else capacity_factor,
                 batch_prioritized_routing = self.batch_prioritized_routing,
-                group=self.group,
-                alignment = self.sharded_count
+                group = self.group,
+                alignment = self.sharded_count,
             )
 
 
@@ -301,7 +222,7 @@ class MOELayer(torch.nn.Module):
         y = fast_encode(x.to(logits_dtype), crit, self.is_postscore).to(x.dtype)
 
         if self.auto_parallel:
-            self.use_model_parallel = (y.numel() * (self.sharded_count - 1) < self.model_dim * self.hidden_size * self.sharded_count)
+            self.use_model_parallel = (y.numel() * (self.sharded_count - 1) * 2 < sum([x.numel() for x in self.experts.parameters()]))
 
         if self.num_global_experts < self.world_size:
             if self.use_model_parallel:
@@ -309,14 +230,17 @@ class MOELayer(torch.nn.Module):
             else:
                 y = y.view(self.world_size, -1, y.size(2))
 
-        a2a_overlap_degree = a2a_overlap_degree if a2a_overlap_degree is not None else self.a2a_ffn_overlap_degree
-        # TODO: Overlap (only need to implement degree == 1 and degree > 1)
-        if a2a_overlap_degree > 1:
+        if a2a_ffn_overlap_degree > 1 and y.is_cuda:
             logging.warning(f"`a2a_overlap_degree` is currently not handled in this branch, please use `v0.1.x` instead.")
 
-        y = C.all_to_all(y, 1, 0, use_2dh=self.use_2dh, group=self.group)
-        y = self.experts(y, self)
-        y = C.all_to_all(y, 0, 1, use_2dh=self.use_2dh, group=self.group)
+            # TODO: Overlap for degree > 1
+            y = C.all_to_all(y, 1, 0, use_2dh=self.use_2dh, group=self.group)
+            y = self.expert_local(y, original_shape[-reserve_dims:])
+            y = C.all_to_all(y, 0, 1, use_2dh=self.use_2dh, group=self.group)
+        else:
+            y = C.all_to_all(y, 1, 0, use_2dh=self.use_2dh, group=self.group)
+            y = self.expert_local(y, original_shape[-reserve_dims:])
+            y = C.all_to_all(y, 0, 1, use_2dh=self.use_2dh, group=self.group)
 
         if self.num_global_experts < self.world_size:
             if self.use_model_parallel:
@@ -325,103 +249,9 @@ class MOELayer(torch.nn.Module):
                 y = y.view(self.num_global_experts, -1, y.size(2))
 
         y = fast_decode(y.to(logits_dtype), crit, self.is_postscore)
-        result_output = y
 
-        '''
-        group = ctx.group
-        S, M, g_experts = input.size(0), input.size(1), self.num_global_experts
-        world_size = C.get_world_size(group)
-
-        if not hasattr(self, '_fdr'):
-            self._fdr = fast_dispatcher(num_global_experts=g_experts, capacity=capacity, model_dim=M, dispatch_dtype=input.dtype)
-
-        self._fdr.update(*crit[1:], is_postscore=self.is_postscore)
-
-        dispatched_input = self._fdr.encode(input)
-
-        if ctx.auto_parallel:
-            ctx.use_model_parallel = (dispatched_input.numel() < ctx.model_dim * ctx.hidden_size)
-
-        if ctx.use_model_parallel:
-            dispatched_input = dispatched_input.reshape(g_experts, -1).repeat(1, ctx.sharded_count)
-
-        if ctx.sharded_count > 1:
-            dispatched_input = dispatched_input.reshape(world_size, 1, -1, M)
-        else:
-            dispatched_input = dispatched_input.reshape(world_size, -1, capacity, M)
-
-        if self.a2a_ffn_overlap_degree == -1:
-            expert_output = ctx.experts(dispatched_input, ctx)
-            expert_output = expert_output.to(input.dtype)
-        elif self.a2a_ffn_overlap_degree == 1:
-            if self.use_2d_a2a:
-                C.AllToAllStatus.init(group, 1, -1)
-                dispatched_input = \
-                    C.CurrentStreamAcquire.apply(
-                        C.NcclStreamRelease.apply(
-                            C.AllToAll2DAsync.apply(
-                                C.NcclStreamAcquire.apply(
-                                    C.CurrentStreamRelease.apply(dispatched_input, 0), 0)), 0), 0)
-            else:
-                dispatched_input = C.all_to_all_single(dispatched_input, group=group)
-
-            expert_output = ctx.experts(dispatched_input, ctx)
-            expert_output = expert_output.to(input.dtype)
-
-            if self.use_2d_a2a:
-                expert_output = \
-                    C.CurrentStreamAcquire.apply(
-                        C.NcclStreamRelease.apply(
-                            C.AllToAll2DAsync.apply(
-                                C.NcclStreamAcquire.apply(
-                                    C.CurrentStreamRelease.apply(expert_output, 0), 0)), 0), 0)
-            else:
-                expert_output = C.all_to_all_single(expert_output, group=group)
-        else:
-            split_dim = 2
-            C.AllToAllStatus.init(group, self.a2a_ffn_overlap_degree, split_dim)
-
-            # Implicit x.contiguous() in CurrentStreamRelease.forward() and CurrentStreamAcquire.backward()
-            if self.use_2d_a2a:
-                split_size = dispatched_input.shape[split_dim] // self.a2a_ffn_overlap_degree
-                dispatched_input_split = dispatched_input.split(split_size, dim=split_dim)
-                dispatched_input_scattered_after_a2a = [
-                    C.NcclStreamRelease.apply(
-                        C.AllToAll2DAsync.apply(
-                            C.NcclStreamAcquire.apply(
-                                C.CurrentStreamRelease.apply(x, i), i)), i)
-                    for i, x in enumerate(dispatched_input_split)]
-            else:
-                dispatched_input_ready = C.CurrentStreamRelease.apply(dispatched_input, 0)
-                dispatched_input_scattered_after_a2a = C.AllToAllScatterAsync.apply(dispatched_input_ready)
-
-            expert_output_scattered = [
-                C.CurrentStreamRelease.apply(ctx.experts(C.CurrentStreamAcquire.apply(x, i), ctx).to(input.dtype), i)
-                for i, x in enumerate(dispatched_input_scattered_after_a2a)]
-
-            if self.use_2d_a2a:
-                expert_output_gathered_after_a2a = [
-                    C.CurrentStreamAcquire.apply(
-                        C.NcclStreamRelease.apply(
-                            C.AllToAll2DAsync.apply(
-                                C.NcclStreamAcquire.apply(x, i)), i), i)
-                    for i, x in enumerate(expert_output_scattered)]
-                expert_output = torch.cat(expert_output_gathered_after_a2a, dim=split_dim)
-            else:
-                expert_output_gathered_after_a2a = C.AllToAllGatherAsync.apply(*expert_output_scattered)
-                expert_output = C.CurrentStreamAcquire.apply(expert_output_gathered_after_a2a, 0)
-
-        expert_output = expert_output.reshape(-1, g_experts, capacity, M)
-        if expert_output.size(0) > 1:
-            expert_output = torch.sum(expert_output.view(g_experts, -1, capacity, M), dim=1)
-        expert_output = expert_output.view(g_experts * capacity, M)
-
-        result_output = self._fdr.decode(expert_output)
-        '''
-
-        original_shape[-1] = result_output.size(-1)
-        result_output = result_output.view(original_shape).to(original_dtype)
-        self.l_aux = result_output.l_aux = l_aux
-        return self.result_func(result_output) if self.result_func is not None else result_output
+        y = y.view(list(original_shape[:-reserve_dims]) + list(self.protected_shape[-reserve_dims:])).to(original_dtype)
+        self.l_aux = y.l_aux = l_aux
+        return self.result_func(y) if self.result_func is not None else y
 
 moe_layer = MOELayer
