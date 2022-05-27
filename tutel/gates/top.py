@@ -17,6 +17,9 @@ class LinearTopKGate(torch.nn.Module):
     def forward(self, x):
         if self.fp32_gate:
             x = x.float()
-        return self.wg(x)
+            wg = self.wg.float()
+        else:
+            wg = self.wg
+        return wg(x)
 
 Gate = LinearTopKGate
