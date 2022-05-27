@@ -194,7 +194,7 @@ class MOELayer(torch.nn.Module):
         a2a_ffn_overlap_degree = a2a_ffn_overlap_degree if a2a_ffn_overlap_degree is not None else self.a2a_ffn_overlap_degree
 
         def routing():
-            logits = gctx(x.to(next(iter(gctx.parameters())).dtype))
+            logits = gctx(x)
 
             if self.training and gctx.gate_noise > 0:
                 logits_w_noise = logits + gctx.gate_noise * torch.randn_like(logits) / self.num_global_experts
