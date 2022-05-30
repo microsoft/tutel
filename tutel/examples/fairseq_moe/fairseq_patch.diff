@@ -1,0 +1,61 @@
+diff --git a/fairseq/modules/transformer_layer.py b/fairseq/modules/transformer_layer.py
+index 2e687b9..67b4d54 100644
+--- a/fairseq/modules/transformer_layer.py
++++ b/fairseq/modules/transformer_layer.py
+@@ -324,18 +324,32 @@ class TransformerDecoderLayerBase(nn.Module):
+             else None
+         )
+ 
+-        self.fc1 = self.build_fc1(
++        self.use_moe = int(torch.os.environ.get('MOE', 0)) > 0
++        if not self.use_moe:
++          self.fc1 = self.build_fc1(
+             self.embed_dim,
+             cfg.decoder.ffn_embed_dim,
+             self.quant_noise,
+             self.quant_noise_block_size,
+-        )
+-        self.fc2 = self.build_fc2(
++          )
++          self.fc2 = self.build_fc2(
+             cfg.decoder.ffn_embed_dim,
+             self.embed_dim,
+             self.quant_noise,
+             self.quant_noise_block_size,
+-        )
++          )
++        else:
++          assert self.quant_noise == 0, "Unhandled quant_noise > 0.0 for MoE layer."
++          from tutel.moe import moe_layer
++          self.moe_ffn = moe_layer(
++            gate_type={'type' : 'top', 'k' : 2, 'capacity_factor': 0, 'fp32_gate': True},
++            model_dim=self.embed_dim,
++            experts={'count_per_node': 1,'type': 'ffn', 'hidden_size_per_expert': cfg.decoder.ffn_embed_dim,
++                     'activation_fn' : lambda x: self.activation_dropout_module(x) if self.ffn_layernorm is None
++                                                 else self.ffn_layernorm(self.activation_dropout_module(x))
++                    },
++            scan_expert_func = lambda name, param: setattr(param, 'expert', True),  # This mask is compatible with Fairseq `legacy_ddp` only
++          )
+ 
+         self.final_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
+         self.need_attn = True
+@@ -504,11 +518,14 @@ class TransformerDecoderLayerBase(nn.Module):
+         if self.normalize_before:
+             x = self.final_layer_norm(x)
+ 
+-        x = self.activation_fn(self.fc1(x))
+-        x = self.activation_dropout_module(x)
+-        if self.ffn_layernorm is not None:
+-            x = self.ffn_layernorm(x)
+-        x = self.fc2(x)
++        if not self.use_moe:
++            x = self.activation_fn(self.fc1(x))
++            x = self.activation_dropout_module(x)
++            if self.ffn_layernorm is not None:
++                x = self.ffn_layernorm(x)
++            x = self.fc2(x)
++        else:
++            x = self.moe_ffn(x)
+         x = self.dropout_module(x)
+         if self.w_resid is not None:
+             residual = torch.mul(self.w_resid, residual)
