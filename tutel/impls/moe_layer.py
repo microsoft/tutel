@@ -121,6 +121,8 @@ class MOELayer(torch.nn.Module):
         if scan_expert_func is not None:
             for n, p in self.experts.named_parameters():
                 scan_expert_func(n, p)
+        for n, p in self.experts.named_parameters():
+            setattr(p, '_tutel_expert', True)
 
         if isinstance(gate_type, str):
             assert re.match(r'^Top[0-9]+Gate$', gate_type), "Unrecognized gate_type: %s" % gate_type
