@@ -503,6 +503,17 @@ class PrimAllgather(torch.autograd.Function):
         input = PrimAllgather.apply(input, True, group)
         return input.view(-1)[:numel].view(full_shape)
 
+    @staticmethod
+    def zero_scatter(input, scatter_fn, group=None):
+        group_size = get_world_size(group)
+        full_size = input.numel()
+        if full_size % group_size == 0:
+            data = input.reshape(-1)
+        else:
+            data = torch.zeros([(full_size + group_size - 1) // group_size * group_size], device=input.device, dtype=input.dtype)
+            data[:full_size] = input.reshape(-1)
+        return scatter_fn(data, group=group), input.shape
+
 
 class PrimSpatialSplit(torch.autograd.Function):
     @staticmethod
@@ -524,6 +535,7 @@ class PrimSpatialSplit(torch.autograd.Function):
 all_to_all = PrimAllToAll.transform
 all_to_all_single = PrimAllToAll.single
 zero_gather = PrimAllgather.zero_gather
+zero_scatter = PrimAllgather.zero_scatter
 all_gather = PrimAllgather.transform
 spatial_split = PrimSpatialSplit.transform
 reduce_scatter = PrimReducescatter.transform
