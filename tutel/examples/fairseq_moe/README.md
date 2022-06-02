@@ -8,12 +8,13 @@ python3 ./tutel/setup.py
 
 ## Install fairseq
 ```shell
+cd ./tutel/tutel/examples/fairseq_moe
 git clone https://github.com/facebookresearch/fairseq --branch main
 cd fairseq/ && git checkout b5e7b250913120409b872a940fbafec4d43c7b13
 # This patch is an example to train Fairseq MoE transformers.
 # Note that the current patch only works for `legacy_ddp` backend, and `--checkpoint-activations` must be disabled.
 git apply ../fairseq_patch.diff
-python3 -m pip install --editable .
+python3 -m pip install --no-deps --editable .
 ```
 
 ## Prepare the dataset
@@ -29,17 +30,18 @@ fairseq-preprocess \
     --trainpref wikitext-103/wiki.train.tokens \
     --validpref wikitext-103/wiki.valid.tokens \
     --testpref wikitext-103/wiki.test.tokens \
-    --destdir data-bin/wikitext-103 \
+    --destdir ./wikitext-103 \
     --workers 20
+
 ```
 
 ## Train a Model with Tutel moe (MOE is moe-freq)
 ```shell
 
 # Example of Training with 8GPUs (FP32)
-MOE=1 L_AUX_WT=0.01 ./run_fairseq.sh ./wikitext-103
+MOE=1 L_AUX_WT=0.01 ../run_fairseq.sh ./wikitext-103
 
 # Example of Training with 8GPUs (FP16)
-FP16=1 NO_OVERFLOW=0 MOE=1 L_AUX_WT=0.01 ./run_fairseq.sh ./wikitext-103
+FP16=1 NO_OVERFLOW=0 MOE=1 L_AUX_WT=0.01 ../run_fairseq.sh ./wikitext-103
 
 ```

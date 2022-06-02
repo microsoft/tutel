@@ -1,5 +1,7 @@
 #!/bin/bash -e
 
+cd $(dirname $0)/fairseq
+
 if [[ "$FP16" == "1" ]]; then
     FLAGS=${FLAGS:---fp16 --fp16-init-scale 4 --fp16-no-flatten-grads}
 fi
