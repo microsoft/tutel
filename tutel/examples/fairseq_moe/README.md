@@ -1,31 +1,47 @@
-```
-This patch is an example to make Fairseq Legacy DDP use MoE transformer simply.
-The patch replaces all transformer FFN layers into Tutel MoE layers (but load-balance loss is not contributed to model loss).
-
-# Install Tutel
+# Training WikiText-103 on fairseq with Tutel:
+## Install Tutel
+```shell
 git clone https://github.com/microsoft/tutel --branch main
 python3 -m pip uninstall tutel -y
 python3 ./tutel/setup.py
+```
 
-# Prepare Fairseq
+## Install fairseq
+```shell
 cd ./tutel/tutel/examples/fairseq_moe
 git clone https://github.com/facebookresearch/fairseq --branch main
 cd fairseq/ && git checkout b5e7b250913120409b872a940fbafec4d43c7b13
-
-# Keep in Fairseq Root and Apply Patch for Once
+# This patch is an example to train Fairseq MoE transformers.
+# Note that the current patch only works for `legacy_ddp` backend, and `--checkpoint-activations` must be disabled.
 git apply ../fairseq_patch.diff
-python3 -m pip install --editable .
+python3 -m pip install --no-deps --editable .
+```
 
-# Prepare Fairseq Dataset following: https://github.com/facebookresearch/fairseq/blob/main/examples/language_model/README.md
+## Prepare the dataset
+Download [WikiText-103 dataset](https://www.salesforce.com/products/einstein/ai-research/the-wikitext-dependency-language-modeling-dataset/):
+```shell
+curl -LO https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-103-v1.zip
+unzip wikitext-103-v1.zip
+```
+Preprocess the data:
+```shell
+fairseq-preprocess \
+    --only-source \
+    --trainpref wikitext-103/wiki.train.tokens \
+    --validpref wikitext-103/wiki.valid.tokens \
+    --testpref wikitext-103/wiki.test.tokens \
+    --destdir ./wikitext-103 \
+    --workers 20
 
-# Example of Fairseq MoE FP32 Training using 8 Local GPU
-MOE=1 python3 -m torch.distributed.launch --nproc_per_node=8 ./train.py <dataset-dir> \
-    --ddp-backend legacy_ddp \
-    ..
+```
 
-# Example of Fairseq MoE FP16 Training using 8 Local GPU
-MOE=1 python3 -m torch.distributed.launch --nproc_per_node=8 ./train.py <dataset-dir> \
-    --ddp-backend legacy_ddp \
-    --fp16 --fp16-init-scale 4 --fp16-no-flatten-grads \
-    ..
+## Train a Model with Tutel moe (MOE is moe-freq)
+```shell
+
+# Example of Training with 8GPUs (FP32)
+MOE=1 L_AUX_WT=0.01 ../run_fairseq.sh ./wikitext-103
+
+# Example of Training with 8GPUs (FP16)
+FP16=1 NO_OVERFLOW=0 MOE=1 L_AUX_WT=0.01 ../run_fairseq.sh ./wikitext-103
+
 ```
