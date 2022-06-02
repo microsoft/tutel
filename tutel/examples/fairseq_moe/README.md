@@ -33,7 +33,7 @@ fairseq-preprocess \
     --workers 20
 ```
 
-## Train a Model with Tutel moe (moe-freq=N)
+## Train a Model with Tutel moe (MOE is moe-freq)
 ```shell
 
 # Example of Training with 8GPUs (FP32)
