@@ -44,6 +44,26 @@ def init_data_model_parallel(group_count=1, backend='nccl'):
     atexit.register(lambda *args: on_quit())
     return result
 
+class LocalCache:
+    _CACHE = dict()
+
+    @staticmethod
+    def reset():
+        LocalCache._CACHE = dict()
+
+    @staticmethod
+    def set(key, val):
+        LocalCache._CACHE[key] = val
+
+    @staticmethod
+    def get(key=None):
+        if key not in LocalCache._CACHE:
+            return [LocalCache._CACHE[x] for x in LocalCache._CACHE]
+        return LocalCache._CACHE[key]
+
+def cache():
+    return LocalCache
+
 def get_local_session():
     if not hasattr(init_data_model_parallel, 'default_env'):
         raise Exception("Current session is not initialized with: system.init_data_model_parallel() from tutel. Please try with: system.record_time(is_cuda=False)")
