@@ -6,7 +6,10 @@ import torch
 class LinearTopKGate(torch.nn.Module):
     def __init__(self, model_dim, num_global_experts, k=1, fp32_gate=False, **options):
         super().__init__()
-        self.wg = torch.nn.Linear(model_dim, num_global_experts, bias=False, dtype=torch.float32 if fp32_gate else None)
+        try:
+            self.wg = torch.nn.Linear(model_dim, num_global_experts, bias=False, dtype=torch.float32 if fp32_gate else None)
+        except:
+            self.wg = torch.nn.Linear(model_dim, num_global_experts, bias=False)
         self.top_k = min(num_global_experts, int(k))
         self.fp32_gate = fp32_gate
 
