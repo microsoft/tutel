@@ -9,7 +9,7 @@ class CosineTopKGate(torch.nn.Module):
         super(CosineTopKGate, self).__init__()
         self.top_k = min(num_global_experts, int(k))
         self.fp32_gate = fp32_gate
-        self.temperature = torch.nn.Parameter(torch.log(torch.ones(1) * (1 / init_t)), requires_grad=True)
+        self.temperature = torch.nn.Parameter(torch.log(torch.full([1], 1.0 / init_t)), requires_grad=True)
         self.cosine_projector = torch.nn.Linear(model_dim, proj_dim)
         self.sim_matrix = torch.nn.Parameter(torch.randn(size=(proj_dim, num_global_experts)), requires_grad=True)
         torch.nn.init.normal_(self.sim_matrix, 0, 0.01)
