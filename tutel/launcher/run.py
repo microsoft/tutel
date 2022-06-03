@@ -16,7 +16,7 @@ def main():
     master_port = int(os.environ.get('MASTER_PORT', 23232))
 
     if 'OMP_NUM_THREADS' not in os.environ:
-        os.environ['OMP_NUM_THREADS'] = '1'
+        os.environ['OMP_NUM_THREADS'] = '1024'
 
     try:
         from torch.distributed import run

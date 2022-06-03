@@ -6,11 +6,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation.
 - Supported GPUs: CUDA(fp64/fp32/fp16/bfp16), ROCm(fp64/fp32/fp16)
 - Supported CPU: fp64/fp32
 
-<p align="center">
-  <img src="figure.svg" /></a>
-</p>
 
-How to setup Tutel MoE for Pytorch and [run examples](tutel/examples):
+How to setup Tutel MoE for Pytorch and [run examples](tutel/examples), or [enable fairseq with MoE](tutel/examples/fairseq_moe):
 ```
 * Recommended Pytorch (minimize version == 1.8.0):
         #   Pytorch for NVIDIA CUDA >= 10.2:
