@@ -49,6 +49,8 @@ class MOELayer(torch.nn.Module):
         a2a_ffn_overlap_degree=1,
         is_postscore=True,
         batch_prioritized_routing=False,
+        normalize_gate=False,
+        is_gshard_loss=True,
         parallel_type='auto',
         use_2dh=False,
         **kwargs
@@ -93,6 +95,8 @@ class MOELayer(torch.nn.Module):
         self.batch_prioritized_routing = batch_prioritized_routing
         if int(os.environ.get('BATCH_PRIO', 0)) != 0:
             self.batch_prioritized_routing = True
+        self.normalize_gate = normalize_gate
+        self.is_gshard_loss = is_gshard_loss
 
         self.a2a_ffn_overlap_degree = a2a_ffn_overlap_degree
         self.use_2dh = use_2dh
@@ -204,12 +208,18 @@ class MOELayer(torch.nn.Module):
                 logits_w_noise = logits
 
             scores = F.softmax(logits_w_noise, dim=1)
-
+            if self.is_gshard_loss:
+                _loss_fn = lambda gates, topk_ids: losses.gshard_loss(gates, topk_ids)
+            else:
+                _loss_fn = lambda gates, topk_ids: losses.load_importance_loss(
+                    F.softmax(logits, dim=1), logits_w_noise.gather(index=topk_ids, dim=1),
+                    self.num_global_experts, gctx.gate_noise)
             return logits.dtype, extract_critical(scores,
                 top_k = gctx.top_k if top_k is None else top_k,
-                loss_fn = lambda gates, topk_ids: losses.gshard_loss(gates, topk_ids),
+                loss_fn = _loss_fn,
                 capacity_factor = gctx.capacity_factor if capacity_factor is None else capacity_factor,
                 batch_prioritized_routing = self.batch_prioritized_routing,
+                normalize_gate = self.normalize_gate,
                 group = self.group,
                 alignment = self.sharded_count,
             )
