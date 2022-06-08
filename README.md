@@ -157,7 +157,7 @@ $ python3 -m tutel.examples.helloworld_deepspeed --batch_size=<batch_size>
 ```
 
 ## Reference
-You can consult this paper below to get to know more technical details about Tutel:
+You can consult this [paper](https://arxiv.org/pdf/2206.03382.pdf) below to get to know more technical details about Tutel:
 ```
 @article {tutel,
 author = {Changho Hwang and Wei Cui and Yifan Xiong and Ziyue Yang and Ze Liu and Han Hu and Zilong Wang and Rafael Salas and Jithin Jose and Prabhat Ram and Joe Chau and Peng Cheng and Fan Yang and Mao Yang and Yongqiang Xiong},
