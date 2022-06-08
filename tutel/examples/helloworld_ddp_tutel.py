@@ -18,7 +18,7 @@ parser = argparse.ArgumentParser()
 
 parser.add_argument('--local_rank', type=int, default=-1)
 parser.add_argument('--batch_size', type=int, default=16)
-parser.add_argument('--num_tokens', type=int, default=1024)
+parser.add_argument('--num_tokens', type=int, default=512)
 parser.add_argument('--model_dim', type=int, default=2048)
 parser.add_argument('--hidden_size', type=int, default=2048)
 parser.add_argument('--num_local_experts', type=int, default=2)
