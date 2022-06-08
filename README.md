@@ -156,6 +156,20 @@ $ python3 -m tutel.examples.helloworld_ddp --batch_size=<batch_size>
 $ python3 -m tutel.examples.helloworld_deepspeed --batch_size=<batch_size>
 ```
 
+## Reference
+You can consult this paper below to get to know more technical details about Tutel:
+```
+@article {tutel,
+author = {Changho Hwang and Wei Cui and Yifan Xiong and Ziyue Yang and Ze Liu and Han Hu and Zilong Wang and Rafael Salas and Jithin Jose and Prabhat Ram and Joe Chau and Peng Cheng and Fan Yang and Mao Yang and Yongqiang Xiong},
+title = {Tutel: Adaptive Mixture-of-Experts at Scale},
+year = {2022},
+month = jun,
+journal = {CoRR},
+volume= {abs/2206.03382},
+url = {https://arxiv.org/pdf/2206.03382.pdf},
+}
+```
+
 ## Contributing
 
 This project welcomes contributions and suggestions.  Most contributions require you to agree to a
