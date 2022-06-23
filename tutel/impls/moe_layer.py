@@ -50,7 +50,7 @@ class MOELayer(torch.nn.Module):
         a2a_ffn_overlap_degree=1,
         is_postscore=True,
         batch_prioritized_routing=False,
-        normalize_gate=False,
+        normalize_gate=True,
         is_gshard_loss=True,
         parallel_type='auto',
         use_2dh=False,
@@ -222,7 +222,7 @@ class MOELayer(torch.nn.Module):
                 batch_prioritized_routing = self.batch_prioritized_routing,
                 normalize_gate = self.normalize_gate,
                 group = self.group,
-                alignment = self.sharded_count,
+                alignment = self.sharded_count * a2a_ffn_overlap_degree,
             )
 
 
