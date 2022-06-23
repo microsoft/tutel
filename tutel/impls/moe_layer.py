@@ -19,6 +19,7 @@ import torch.nn.functional as F
 
 from ..impls import communicate as C
 from ..impls.fast_dispatch import fast_encode, fast_decode, extract_critical
+from ..impls.overlap import a2a_ffn_overlap_forward
 from . import losses
 
 
@@ -243,63 +244,9 @@ class MOELayer(torch.nn.Module):
                 y = y.view(self.world_size, -1, y.size(2))
 
         if a2a_ffn_overlap_degree > 1 and y.is_cuda:
-            split_dim = 1
-            assert a2a_ffn_overlap_degree <= C.AllToAllStatus.max_num_split, "Excepting a2a_ffn_overlap_degree (%d) <= AllToAllStatus.max_num_split (%d)." % (a2a_ffn_overlap_degree, C.AllToAllStatus.max_num_split)
-            assert y.shape[split_dim] % a2a_ffn_overlap_degree == 0, "Excepting y.shape[%d] (%d) be multiple of a2a_ffn_overlap_degree (%d)." % (split_dim, y.shape[split_dim], a2a_ffn_overlap_degree)
-            C.AllToAllStatus.init(self.group, a2a_ffn_overlap_degree, split_dim)
-
-            # Implicit x.contiguous() in CurrentStreamRelease.forward() and CurrentStreamAcquire.backward()
-            if self.use_2dh:
-                split_size = y.shape[split_dim] // a2a_ffn_overlap_degree
-                input_split = y.split(split_size, dim=split_dim)
-                input_scattered_after_a2a = [
-                    C.NcclStreamRelease.apply(
-                        C.AllToAll2DAsync.apply(
-                            C.NcclStreamAcquire.apply(
-                                C.CurrentStreamRelease.apply(
-                                    x,
-                                i),
-                            i)
-                        ),
-                    i)
-                    for i, x in enumerate(input_split)
-                ]
-            else:
-                input_ready = C.CurrentStreamRelease.apply(y, 0)
-                input_scattered_after_a2a = C.AllToAllScatterAsync.apply(input_ready)
-
-            expert_output_scattered = [
-                C.CurrentStreamRelease.apply(
-                    C.post_expert_permute(
-                        self.expert_local(
-                            C.pre_expert_permute(
-                                C.CurrentStreamAcquire.apply(
-                                    x,
-                                i),
-                            group=self.group),
-                        original_shape[-reserve_dims:]),
-                    group=self.group),
-                i)
-                for i, x in enumerate(input_scattered_after_a2a)
-            ]
-
-            if self.use_2dh:
-                expert_output_gathered_after_a2a = [
-                    C.CurrentStreamAcquire.apply(
-                        C.NcclStreamRelease.apply(
-                            C.AllToAll2DAsync.apply(
-                                C.NcclStreamAcquire.apply(
-                                    x,
-                                i)
-                            ),
-                        i),
-                    i)
-                    for i, x in enumerate(expert_output_scattered)
-                ]
-                y = torch.cat(expert_output_gathered_after_a2a, dim=split_dim)
-            else:
-                expert_output_gathered_after_a2a = C.AllToAllGatherAsync.apply(*expert_output_scattered)
-                y = C.CurrentStreamAcquire.apply(expert_output_gathered_after_a2a, 0)
+            def expert_fn(expert_input):
+                return self.expert_local(expert_input, original_shape[-reserve_dims:])
+            y = a2a_ffn_overlap_forward(y, expert_fn=expert_fn, a2a_ffn_overlap_degree=a2a_ffn_overlap_degree, use_2dh=self.use_2dh, group=self.group)
         else:
             y = C.all_to_all(y, 1, 0, use_2dh=self.use_2dh, group=self.group)
             y = self.expert_local(y, original_shape[-reserve_dims:])
