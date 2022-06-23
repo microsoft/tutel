@@ -244,7 +244,8 @@ class MOELayer(torch.nn.Module):
 
         if a2a_ffn_overlap_degree > 1 and y.is_cuda:
             split_dim = 1
-            assert y.shape[split_dim] % a2a_ffn_overlap_degree == 0, "Excepting y.shape[%d] (%d) be multiple of a2a_ffn_overlap_degree (%d) for overlapping." % (split_dim, y.shape[split_dim], a2a_ffn_overlap_degree)
+            assert a2a_ffn_overlap_degree <= C.AllToAllStatus.max_num_split, "Excepting a2a_ffn_overlap_degree (%d) <= AllToAllStatus.max_num_split (%d)." % (a2a_ffn_overlap_degree, C.AllToAllStatus.max_num_split)
+            assert y.shape[split_dim] % a2a_ffn_overlap_degree == 0, "Excepting y.shape[%d] (%d) be multiple of a2a_ffn_overlap_degree (%d)." % (split_dim, y.shape[split_dim], a2a_ffn_overlap_degree)
             C.AllToAllStatus.init(self.group, a2a_ffn_overlap_degree, split_dim)
 
             # Implicit x.contiguous() in CurrentStreamRelease.forward() and CurrentStreamAcquire.backward()
