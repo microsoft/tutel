@@ -190,6 +190,7 @@ class AllToAllStatus:
     initialized = False
     num_split = 0
     split_dim = 0
+    max_num_split = 32
 
     @staticmethod
     def init(group: dist.ProcessGroup, num_split: int, split_dim: int) -> None:
@@ -213,7 +214,7 @@ class AllToAllStatus:
                 nccl_unique_id.cpu(),
                 world_size,
                 world_rank,
-                AllToAllStatus.num_split)
+                AllToAllStatus.max_num_split)
             AllToAllStatus.initialized = True
 
 class CurrentStreamRelease(torch.autograd.Function):
@@ -297,14 +298,15 @@ class AllToAllScatterAsync(torch.autograd.Function):
             x if i != AllToAllStatus.split_dim else x // AllToAllStatus.num_split
             for i, x in enumerate(ctx.input_shape)
         ])
+        ctx.num_split = AllToAllStatus.num_split
         ctx.num_slices_per_split = ctx.input_shape[:AllToAllStatus.split_dim].numel()
-        return tuple(tutel_custom_kernel.nccl_all_to_all_scatter_async(input, output_shape, ctx.num_slices_per_split, False))
+        return tuple(tutel_custom_kernel.nccl_all_to_all_scatter_async(input, output_shape, ctx.num_split, ctx.num_slices_per_split, False))
 
     @staticmethod
     def backward(ctx: Any, *grad_output) -> Tensor:
         if not AllToAllStatus.initialized:
             return grad_output[0]
-        return tutel_custom_kernel.nccl_all_to_all_gather_async(grad_output, ctx.input_shape, ctx.num_slices_per_split, True)
+        return tutel_custom_kernel.nccl_all_to_all_gather_async(grad_output, ctx.input_shape, ctx.num_split, ctx.num_slices_per_split, True)
 
 class AllToAllGatherAsync(torch.autograd.Function):
     @staticmethod
@@ -316,14 +318,15 @@ class AllToAllGatherAsync(torch.autograd.Function):
             x if i != AllToAllStatus.split_dim else x * AllToAllStatus.num_split
             for i, x in enumerate(ctx.input_shape)
         ])
+        ctx.num_split = AllToAllStatus.num_split
         ctx.num_slices_per_split = ctx.input_shape[:AllToAllStatus.split_dim].numel()
-        return tutel_custom_kernel.nccl_all_to_all_gather_async(input, output_shape, ctx.num_slices_per_split, False)
+        return tutel_custom_kernel.nccl_all_to_all_gather_async(input, output_shape, ctx.num_split, ctx.num_slices_per_split, False)
 
     @staticmethod
     def backward(ctx: Any, grad_output: Tensor) -> Tuple[Tensor]:
         if not AllToAllStatus.initialized:
             return (grad_output,)
-        return tuple(tutel_custom_kernel.nccl_all_to_all_scatter_async(grad_output, ctx.input_shape, ctx.num_slices_per_split, True))
+        return tuple(tutel_custom_kernel.nccl_all_to_all_scatter_async(grad_output, ctx.input_shape, ctx.num_split, ctx.num_slices_per_split, True))
 
 
 class RestoreBackward(torch.autograd.Function):
@@ -531,6 +534,24 @@ class PrimSpatialSplit(torch.autograd.Function):
         input = PrimSpatialSplit.apply(input, group)
         input = swap_axis(input, 0, dim)
         return input
+
+def pre_expert_permute(input, group=None):
+    world_size = get_world_size(group)
+    if world_size == 1:
+        return input
+    input = input.view([world_size, -1] + list(input.shape[1:]))
+    input = input.permute([1, 0] + list(range(2, input.dim())))
+    input = input.contiguous().view([input.shape[0], -1] + list(input.shape[3:]))
+    return input
+
+def post_expert_permute(input, group=None):
+    world_size = get_world_size(group)
+    if world_size == 1:
+        return input
+    input = input.view([input.shape[0], world_size, -1] + list(input.shape[2:]))
+    input = input.permute([1, 0] + list(range(2, input.dim())))
+    input = input.contiguous().view([-1] + list(input.shape[2:]))
+    return input
 
 all_to_all = PrimAllToAll.transform
 all_to_all_single = PrimAllToAll.single

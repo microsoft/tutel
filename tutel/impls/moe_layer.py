@@ -19,6 +19,7 @@ import torch.nn.functional as F
 
 from ..impls import communicate as C
 from ..impls.fast_dispatch import fast_encode, fast_decode, extract_critical
+from ..impls.overlap import a2a_ffn_overlap_forward
 from . import losses
 
 
@@ -49,7 +50,7 @@ class MOELayer(torch.nn.Module):
         a2a_ffn_overlap_degree=1,
         is_postscore=True,
         batch_prioritized_routing=False,
-        normalize_gate=False,
+        normalize_gate=True,
         is_gshard_loss=True,
         parallel_type='auto',
         use_2dh=False,
@@ -221,7 +222,7 @@ class MOELayer(torch.nn.Module):
                 batch_prioritized_routing = self.batch_prioritized_routing,
                 normalize_gate = self.normalize_gate,
                 group = self.group,
-                alignment = self.sharded_count,
+                alignment = self.sharded_count * a2a_ffn_overlap_degree,
             )
 
 
@@ -243,12 +244,9 @@ class MOELayer(torch.nn.Module):
                 y = y.view(self.world_size, -1, y.size(2))
 
         if a2a_ffn_overlap_degree > 1 and y.is_cuda:
-            logging.warning(f"`a2a_overlap_degree` is currently not handled in this branch, please use `v0.1.x` instead.")
-
-            # TODO: Overlap for degree > 1
-            y = C.all_to_all(y, 1, 0, use_2dh=self.use_2dh, group=self.group)
-            y = self.expert_local(y, original_shape[-reserve_dims:])
-            y = C.all_to_all(y, 0, 1, use_2dh=self.use_2dh, group=self.group)
+            def expert_fn(expert_input):
+                return self.expert_local(expert_input, original_shape[-reserve_dims:])
+            y = a2a_ffn_overlap_forward(y, expert_fn=expert_fn, a2a_ffn_overlap_degree=a2a_ffn_overlap_degree, use_2dh=self.use_2dh, group=self.group)
         else:
             y = C.all_to_all(y, 1, 0, use_2dh=self.use_2dh, group=self.group)
             y = self.expert_local(y, original_shape[-reserve_dims:])
