@@ -532,6 +532,24 @@ class PrimSpatialSplit(torch.autograd.Function):
         input = swap_axis(input, 0, dim)
         return input
 
+def pre_expert_permute(input, group=None):
+    world_size = get_world_size(group)
+    if world_size == 1:
+        return input
+    input = input.view([world_size, -1] + list(input.shape[1:]))
+    input = input.permute([1, 0] + list(range(2, input.dim())))
+    input = input.contiguous().view([input.shape[0], -1] + list(input.shape[3:]))
+    return input
+
+def post_expert_permute(input, group=None):
+    world_size = get_world_size(group)
+    if world_size == 1:
+        return input
+    input = input.view([input.shape[0], world_size, -1] + list(input.shape[2:]))
+    input = input.permute([1, 0] + list(range(2, input.dim())))
+    input = input.contiguous().view([-1] + list(input.shape[2:]))
+    return input
+
 all_to_all = PrimAllToAll.transform
 all_to_all_single = PrimAllToAll.single
 zero_gather = PrimAllgather.zero_gather
