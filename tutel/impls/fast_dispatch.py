@@ -177,7 +177,7 @@ def extract_critical(scores, top_k, loss_fn=losses.gshard_loss, capacity_factor=
     if capacity_factor > 0:
         capacity = top_k * int(capacity_factor * samples_per_expert)
     else:
-        capacity = torch.max(torch.concat(locations_s, dim=0))
+        capacity = torch.max(torch.cat(locations_s, dim=0))
         capacity = int(simple_all_reduce(capacity, group=group, op=torch.distributed.ReduceOp.MAX)) + 1
         if capacity_factor < 0:
             capacity = min(capacity, top_k * int(-capacity_factor * ((int(scores.size(0)) + num_global_experts - 1) // num_global_experts)))

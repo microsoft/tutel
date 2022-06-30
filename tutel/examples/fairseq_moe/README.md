@@ -14,14 +14,14 @@ cd fairseq/ && git checkout b5e7b250913120409b872a940fbafec4d43c7b13
 # This patch is an example to train Fairseq MoE transformers.
 # Note that the current patch only works for `legacy_ddp` backend, and `--checkpoint-activations` must be disabled.
 git apply ../fairseq_patch.diff
+python3 -m pip install omegaconf==2.0.5 pip3 install hydra-core==1.0.7
 python3 -m pip install --no-deps --editable .
 ```
 
 ## Prepare the dataset
 Download [WikiText-103 dataset](https://www.salesforce.com/products/einstein/ai-research/the-wikitext-dependency-language-modeling-dataset/):
 ```shell
-curl -LO https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-103-v1.zip
-unzip wikitext-103-v1.zip
+curl -LO https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-103-v1.zip && unzip wikitext-103-v1.zip
 ```
 Preprocess the data:
 ```shell

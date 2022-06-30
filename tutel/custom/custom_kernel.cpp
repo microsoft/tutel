@@ -135,8 +135,8 @@ static std::string nvcc_compile(const char* code, const std::string &arch) {
 
 static std::string nvrtc_compile(const char* code, const std::string &arch) {
 #if !defined(__HIP_PLATFORM_HCC__)
-  std::string arch_option = "--gpu-architecture=compute_" + arch;
-  std::vector<const char*> param_cstrings = {"--restrict", ("--include-path=" + sdk_path("include")).c_str(), arch_option.c_str(), "--use_fast_math", "--extra-device-vectorization"};
+  std::string arch_option = "--gpu-architecture=compute_" + arch, include_path = "--include-path=" + sdk_path("include");
+  std::vector<const char*> param_cstrings = {"--restrict", include_path.c_str(), arch_option.c_str(), "--use_fast_math", "--extra-device-vectorization"};
 #else
   std::string arch_option = "--gpu-architecture=" + arch;
   std::vector<const char*> param_cstrings = {arch_option.c_str(), "-O4"};
