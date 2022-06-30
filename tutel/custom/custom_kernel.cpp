@@ -86,26 +86,42 @@ inline static std::string get_cache_path() {
   return cache_path;
 }
 
+inline std::string sdk_path(const std::string &rel = "") {
+  static std::string cuda_home, cc;
+  if (cuda_home.size() == 0) {
+    const char *cuda_home_ = getenv("CUDA_HOME");
+#if !defined(__HIP_PLATFORM_HCC__)
+    cuda_home_ = cuda_home_ ? cuda_home_ : "/usr/local/cuda";
+    cc = "bin/nvcc";
+#else
+    cuda_home_ = cuda_home_ ? cuda_home_ : "/opt/rocm";
+    cc = "bin/hipcc";
+#endif
+    cuda_home = cuda_home_ + std::string("/");
+  }
+  if (rel.size() > 0)
+    return cuda_home + rel;
+  return cuda_home + cc;
+}
+
 static std::string nvcc_compile(const char* code, const std::string &arch) {
   char code_path[] = "/tmp/torch-tutel-XXXXXX.cu";
   CHECK_NE(-1, mkstemps(code_path, 3));
 
   file_write(code_path, code);
   std::string fatbin_path = code_path + std::string(".fatbin");
-#if !defined(__HIP_PLATFORM_HCC__)
-  const char *entry = "/usr/local/cuda/bin/nvcc";
-#else
-  const char *entry = "/opt/rocm/bin/hipcc";
-#endif
 
-  if (access(entry, F_OK) != 0)
-    return "";
+  std::string entry = sdk_path();
+  if (access(entry.c_str(), F_OK) != 0) {
+    LOG(FATAL) << "Failed to detect CUDA compiler file: " << entry << ", please set CUDA_HOME environment to configure CUDA SDK location correctly.";
+    exit(1);
+  }
   pid_t  pid = fork();
   if (pid == 0) {
 #if !defined(__HIP_PLATFORM_HCC__)
-    CHECK_EQ(-1, execl(entry, entry, code_path, "-o", fatbin_path.c_str(), "--fatbin", "-O4", "-gencode", ("arch=compute_" + arch + ",code=sm_" + arch).c_str(), (char *)NULL));
+    CHECK_EQ(-1, execl(entry.c_str(), entry.c_str(), code_path, "-o", fatbin_path.c_str(), "--fatbin", "-O4", "-gencode", ("arch=compute_" + arch + ",code=sm_" + arch).c_str(), (char *)NULL));
 #else
-    CHECK_EQ(-1, execl(entry, entry, code_path, "-o", fatbin_path.c_str(), "--genco", "-O4", "-w" , ("--amdgpu-target=" + arch).c_str(), (char *)NULL));
+    CHECK_EQ(-1, execl(entry.c_str(), entry.c_str(), code_path, "-o", fatbin_path.c_str(), "--genco", "-O4", "-w" , ("--amdgpu-target=" + arch).c_str(), (char *)NULL));
 #endif
     exit(1);
   } else {
@@ -120,7 +136,7 @@ static std::string nvcc_compile(const char* code, const std::string &arch) {
 static std::string nvrtc_compile(const char* code, const std::string &arch) {
 #if !defined(__HIP_PLATFORM_HCC__)
   std::string arch_option = "--gpu-architecture=compute_" + arch;
-  std::vector<const char*> param_cstrings = {"--restrict", "--include-path=/usr/local/cuda/include", arch_option.c_str(), "--use_fast_math", "--extra-device-vectorization"};
+  std::vector<const char*> param_cstrings = {"--restrict", ("--include-path=" + sdk_path("include")).c_str(), arch_option.c_str(), "--use_fast_math", "--extra-device-vectorization"};
 #else
   std::string arch_option = "--gpu-architecture=" + arch;
   std::vector<const char*> param_cstrings = {arch_option.c_str(), "-O4"};
@@ -213,6 +229,13 @@ inline static CUfunction jit_activate(int fd, int dev) {
 static void jit_execute(const std::vector<const void*> &ppargs, int fd, int dev, const dim3 &blocks, const dim3 &threads, cudaStream_t stream = 0) {
   CUfunction hfunc = jit_activate(fd, dev);
   CHECK_EQ(0, cuLaunchKernel(hfunc, blocks.x, blocks.y, blocks.z, threads.x, threads.y, threads.z, 0, stream, (void**)ppargs.data(), nullptr));
+}
+
+static void jit_execute_with_values(const std::vector<const void*> &pargs, int fd, int dev, const dim3 &blocks, const dim3 &threads, cudaStream_t stream = 0) {
+  std::vector<const void*> ppargs(pargs.size());
+  for (int i = 0; i < ppargs.size(); ++i)
+    ppargs[i] = &pargs[i];
+  jit_execute(ppargs, fd, dev, blocks, threads, stream);
 }
 
 static int inject_source(const std::string &headless_code) {
@@ -700,4 +723,64 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "NCCL AllToAll (2D Async, In-place if 2DH A2A is enabled)"
     );
 #endif
+}
+
+
+#include <torch/script.h>
+#define DEFINE_KERNEL(x, y)  static int x = -1; if (x == -1) { x = y; }
+
+torch::Tensor warp_cumsum(torch::Tensor x) {
+  CHECK_CUDA(x);
+  CHECK_EQ(x.dim(), 2);
+  x = x.to(torch::kInt32).contiguous();
+
+  auto y = torch::empty_like(x);
+
+  DEFINE_KERNEL(cumsum_fn, jit::inject_source(R"(
+extern "C" __global__ void cumsum_fn(int* input0 /* (num_samples, batch_num) */, int* output0 /* (num_samples, batch_num) */, int num_samples) {
+    #define thread_num  1024
+    #define batch_num ((int)gridDim.x)
+
+    __shared__ int temp[thread_num + 1];
+    int thid = threadIdx.x, bid = blockIdx.x;
+    int last_sum = -1;
+
+    for (int S = 0; S < num_samples; S += thread_num, output0 += thread_num * batch_num, input0 += thread_num * batch_num) {
+        int offset = 1;
+        if (S + thid < num_samples)
+                temp[thid] = input0[thid * batch_num + bid];
+        for (int d = thread_num >> 1; d > 0; d >>= 1) {
+                __syncthreads();
+                if (thid < d)
+                        temp[offset * (2 * thid + 2) - 1] += temp[offset * (2 * thid + 1) - 1];
+                offset *= 2;
+        }
+        if (thid == 0)
+                temp[thread_num] = temp[thread_num - 1], temp[thread_num - 1] = 0;
+        for (int d = 1; d < thread_num; d *= 2) {
+                offset >>= 1;
+                __syncthreads();
+                if (thid < d) {
+                        int ai = offset * (2 * thid + 1) - 1;
+                        int bi = offset * (2 * thid + 2) - 1;
+                        int t = temp[ai];
+                        temp[ai] = temp[bi];
+                        temp[bi] += t;
+                }
+        }
+        __syncthreads();
+        if (S + thid < num_samples)
+                output0[thid * batch_num + bid] = temp[thid + 1] + last_sum;
+        __syncthreads();
+        last_sum += temp[thread_num];
+    }
+}
+)"));
+
+  jit::jit_execute_with_values({x.data_ptr(), y.data_ptr(), (void*)x.size(0)}, cumsum_fn, x.device().index(), x.size(1), 1024, nullptr);
+  return y;
+}
+
+TORCH_LIBRARY(tutel_ops, m) {
+  m.def("cumsum", warp_cumsum);
 }
