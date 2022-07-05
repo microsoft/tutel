@@ -88,7 +88,7 @@ class ExampleModel(torch.nn.Module):
 model = ExampleModel().to(device)
 
 # Sync params and buffers.
-net._sync_params_and_buffers(model, authoritative_rank=0)
+net.sync_params_and_buffers(model, authoritative_rank=0)
 
 dist_print(model)
 
@@ -99,9 +99,7 @@ if args.save_load_checkpoint:
     else:
         print('Checkpoint not loaded: file `%s` is not found' % checkpoint_path)
 
-shared_params = [x for x in model.parameters() if not hasattr(x, '_tutel_expert')]
-expert_params = [x for x in model.parameters() if hasattr(x, '_tutel_expert')]
-optimizer = net.TutelDistributedOptimizer(shared_params, expert_params, group=None, average_shared=True).warp_local(torch.optim.SGD, lr=1e-5)
+optimizer = net.TutelDistributedOptimizer(model.parameters(), group=None, average_shared=True).warp_local(torch.optim.SGD, lr=1e-5)
 
 torch.manual_seed(0)
 x = torch.tensor(torch.randn([batch_size, num_tokens, model_dim], dtype=torch.float32, device='cpu').detach().numpy(), dtype=torch.get_default_dtype(), requires_grad=False, device=device)

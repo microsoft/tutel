@@ -14,11 +14,20 @@ from .impls.communicate import all_to_all, all_to_all_single, all_gather, zero_g
 
 
 class TutelDistributedOptimizer:
-    def __init__(self, shared_params, expert_params, group=None, average_shared=False):
+    def __init__(self, params, group=None, average_shared=False):
         """
-        :param params: [{'params': [params]},{'params': [params]}, ... ]
-        :param expert_params: [{'params': [params]},{'params': [params]}, ... ]
+        params:
+            iterable of parameters, like: [params] or dicts defining shared_param_groups and expert_param_groups, like:
+            {'shared': shared_param_groups, 'expert': expert_param_groups}
         """
+        if isinstance(params, list):
+            shared_params = [x for x in params if not hasattr(x, '_tutel_expert')]
+            expert_params = [x for x in params if hasattr(x, '_tutel_expert')]
+        elif isinstance(params, dict):
+            shared_params = params['shared']
+            expert_params = params['expert']
+        else:
+            raise NotImplementedError("TutelDistributedOptimizer got unsupported inputs ")
 
         shared_param_groups = list(shared_params)
         expert_param_groups = list(expert_params)
@@ -114,16 +123,11 @@ class TutelDistributedOptimizer:
                     p.grad = simple_all_reduce(grad, group=self.group)
 
 
-def _distributed_broadcast_coalesced(tensors, buffer_size, process_group=None, authoritative_rank=0):
+def sync_params_and_buffers(model, process_group=None, authoritative_rank=0):
+    # Modified from https://github.com/pytorch/pytorch/blob/76cff182428fbd165b5725f3de29dbd91a1512fa/torch/distributed/utils.py#L120
     if process_group is None:
         process_group = dist.distributed_c10d._get_default_group()
-    dist._broadcast_coalesced(
-        process_group, tensors, buffer_size, authoritative_rank
-    )
 
-
-def _sync_params_and_buffers(model, process_group=None, authoritative_rank=0):
-    # Modified from https://github.com/pytorch/pytorch/blob/76cff182428fbd165b5725f3de29dbd91a1512fa/torch/distributed/utils.py#L120
     if hasattr(model, "_ddp_params_and_buffers_to_ignore"):
         parameters_to_ignore = model._ddp_params_and_buffers_to_ignore
     else:
@@ -136,4 +140,6 @@ def _sync_params_and_buffers(model, process_group=None, authoritative_rank=0):
             module_states.append(param)
 
     if len(module_states) > 0:
-        _distributed_broadcast_coalesced(module_states, broadcast_bucket_size, process_group, authoritative_rank)
+        dist._broadcast_coalesced(
+            process_group, module_states, broadcast_bucket_size, authoritative_rank
+        )
