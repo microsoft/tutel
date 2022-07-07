@@ -14,7 +14,7 @@ cd fairseq/ && git checkout b5e7b250913120409b872a940fbafec4d43c7b13
 # This patch is an example to train Fairseq MoE transformers.
 # Note that the current patch only works for `legacy_ddp` backend, and `--checkpoint-activations` must be disabled.
 git apply ../fairseq_patch.diff
-python3 -m pip install omegaconf==2.0.5 pip3 install hydra-core==1.0.7
+python3 -m pip install omegaconf==2.0.5 hydra-core==1.0.7
 python3 -m pip install --no-deps --editable .
 ```
 
