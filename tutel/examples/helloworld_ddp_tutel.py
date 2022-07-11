@@ -86,6 +86,10 @@ class ExampleModel(torch.nn.Module):
         return result
 
 model = ExampleModel().to(device)
+
+# Sync params and buffers.
+net.sync_params_and_buffers(model, authoritative_rank=0)
+
 dist_print(model)
 
 if args.save_load_checkpoint:
@@ -116,6 +120,9 @@ for i in range(num_steps):
         if args.l_aux_wt:
             loss += args.l_aux_wt * model._moe_layer.l_aux
         loss.backward()
+        # make sure all_reduce_grad is happened before unscale if you use mixed-precision, e.g., Apex or pytorch amp.
+        # make sure all_reduce_grad is happened before any manual modification like torch.nn.utils.clip_grad_norm_().
+        optimizer.all_reduce_grad()
         optimizer.step()
     else:
         with torch.no_grad():

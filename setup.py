@@ -51,7 +51,7 @@ class Tester(Command):
         subprocess.check_call('python3 -m pytest -v -s tests/', shell=True)
 
 def install(use_cuda, use_nccl):
-    ext_libs, ext_args = [], {'cxx': ['-Wno-sign-compare', '-Wno-unused-but-set-variable']}
+    ext_libs, ext_args = [], {'cxx': ['-Wno-sign-compare', '-Wno-unused-but-set-variable', '-Wno-unused-function']}
     if not use_cuda:
         use_nccl = False
         extension = CppExtension
