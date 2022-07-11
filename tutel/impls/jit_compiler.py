@@ -10,9 +10,13 @@ except:
     raise Exception("Cannot import JIT optimized kernels. Did you forget to install Custom Kernel Extension?")
 
 try:
-    from torch.utils.cpp_extension import IS_HIP_EXTENSION
+    from torch.utils.cpp_extension import IS_HIP_EXTENSION, CUDA_HOME, ROCM_HOME
 except:
     IS_HIP_EXTENSION = False
+
+if hasattr(tutel_custom_kernel, 'update_sdk_home'):
+    SDK_HOME = CUDA_HOME if not IS_HIP_EXTENSION else ROCM_HOME
+    tutel_custom_kernel.update_sdk_home(torch.tensor([ord(x) for x in SDK_HOME] + [0], dtype=torch.int8, device='cpu'))
 
 class JitCompiler:
     @staticmethod
