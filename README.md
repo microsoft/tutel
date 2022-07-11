@@ -18,6 +18,8 @@ How to setup Tutel MoE for Pytorch and [run examples](tutel/examples), or [enabl
         python3 -m pip install --user torch==1.10.0+rocm4.2 torchvision==0.11.1+rocm4.2 -f https://download.pytorch.org/whl/torch_stable.html
         #   Pytorch for CPU:
         python3 -m pip install --user torch==1.10.0+cpu torchvision==0.11.1+cpu -f https://download.pytorch.org/whl/torch_stable.html
+        #   Windows Pytorch for NVIDIA CUDA >= 10.2:
+        python3 -m pip install torch==1.10.0+cu102 --extra-index-url https://download.pytorch.org/whl/cu102
 
 * Install Tutel Online:
 
