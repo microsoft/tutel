@@ -10,6 +10,8 @@ Reference:
 
 import os, sys
 import subprocess
+import platform as pf
+
 from typing import List, Tuple
 
 from setuptools import setup, find_packages, Command
@@ -51,12 +53,12 @@ class Tester(Command):
         subprocess.check_call('python3 -m pytest -v -s tests/', shell=True)
 
 def install(use_cuda, use_nccl):
-    ext_libs, ext_args = [], {'cxx': ['-Wno-sign-compare', '-Wno-unused-but-set-variable']}
+    ext_libs, ext_args = [], {'cxx': ['-Wno-sign-compare', '-Wno-unused-but-set-variable', '-Wno-terminate', '-Wno-unused-function'] if pf.system() == 'Linux' else []}
     if not use_cuda:
         use_nccl = False
         extension = CppExtension
     else:
-        ext_libs += ['dl', 'cuda', 'nvrtc'] if not IS_HIP_EXTENSION else []
+        ext_libs += ['cuda', 'nvrtc'] if not IS_HIP_EXTENSION else []
         ext_args['cxx'] += ['-DUSE_GPU']
         extension = CUDAExtension
 

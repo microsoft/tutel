@@ -21,10 +21,10 @@
 
 #include <regex>
 #include <vector>
-#include <pwd.h>
-#include <sys/wait.h>
 
-#include <dlfcn.h>
+#if defined(__linux__)
+#include <sys/wait.h>
+#endif
 
 #undef CHECK_EQ
 #undef CHECK_NE
@@ -63,41 +63,27 @@ inline static void file_write(const char *path, const std::string &code) {
   fclose(fp);
 }
 
-inline static std::string get_cache_path() {
-  char *home_path;
-  struct stat st = {0};
-  if ((home_path = getenv("HOME")) == NULL) {
-    home_path = getpwuid(getuid())->pw_dir;
-  }
-  std::string cache_path(home_path);
-  cache_path += "/.cache/";
-  if (stat(cache_path.c_str(), &st) == -1) {
-    mkdir(cache_path.c_str(), 0755);
-  }
-  cache_path += "tutel/";
-  if (stat(cache_path.c_str(), &st) == -1) {
-    mkdir(cache_path.c_str(), 0755);
-  }
-  cache_path += "kernels/";
-  if (stat(cache_path.c_str(), &st) == -1) {
-    mkdir(cache_path.c_str(), 0755);
-  }
+static std::string __sdk_home__;
 
-  return cache_path;
+static void update_sdk_home(const torch::Tensor &sdk_path) {
+  CHECK_CPU(sdk_path);
+  __sdk_home__ = static_cast<char*>(sdk_path.data_ptr());
 }
 
 inline std::string sdk_path(const std::string &rel = "") {
   static std::string cuda_home, cc;
   if (cuda_home.size() == 0) {
-    const char *cuda_home_ = getenv("CUDA_HOME");
 #if !defined(__HIP_PLATFORM_HCC__)
-    cuda_home_ = cuda_home_ ? cuda_home_ : "/usr/local/cuda";
     cc = "bin/nvcc";
 #else
-    cuda_home_ = cuda_home_ ? cuda_home_ : "/opt/rocm";
     cc = "bin/hipcc";
 #endif
-    cuda_home = cuda_home_ + std::string("/");
+
+#if defined(__linux__)
+    cuda_home = __sdk_home__ + std::string("/");
+#else
+    cuda_home = __sdk_home__ + std::string("\\");
+#endif
   }
   if (rel.size() > 0)
     return cuda_home + rel;
@@ -105,6 +91,7 @@ inline std::string sdk_path(const std::string &rel = "") {
 }
 
 static std::string nvcc_compile(const char* code, const std::string &arch) {
+#if defined(__linux__)
   char code_path[] = "/tmp/torch-tutel-XXXXXX.cu";
   CHECK_NE(-1, mkstemps(code_path, 3));
 
@@ -131,6 +118,9 @@ static std::string nvcc_compile(const char* code, const std::string &arch) {
   unlink(fatbin_path.data());
   unlink(code_path);
   return image;
+#else
+  return "";
+#endif
 }
 
 static std::string nvrtc_compile(const char* code, const std::string &arch) {
@@ -664,6 +654,11 @@ static torch::Tensor nccl_all_to_all_2d_async(torch::Tensor &input) {
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 #if defined(USE_GPU)
+
+    m.def("update_sdk_home",
+        &jit::update_sdk_home,
+        "Configure SDK HOME Path for GPU (CUDA)"
+    );
     m.def("invoke",
         &jit::invoke,
         "Generic Invoke for GPU (CUDA)"
@@ -726,6 +721,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 }
 
 
+#if defined(USE_GPU)
 #include <torch/script.h>
 #define DEFINE_KERNEL(x, y)  static int x = -1; if (x == -1) { x = y; }
 
@@ -784,3 +780,4 @@ extern "C" __global__ void cumsum_fn(int* input0 /* (num_samples, batch_num) */,
 TORCH_LIBRARY(tutel_ops, m) {
   m.def("cumsum", warp_cumsum);
 }
+#endif
