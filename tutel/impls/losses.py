@@ -20,6 +20,7 @@ def gshard_loss(scores_w_noise, top_ids):
 
 def load_importance_loss(scores_wo_noise, topk_logits, num_global_experts, gate_noise):
     def load_loss(scores_wo_noise, topk_logits, num_global_experts, gate_noise):
+        assert gate_noise > 0, "`gate_noise` must be > 0 for normalization in load_importance_loss()."
         normal = Normal(
             torch.tensor([0.0], device=scores_wo_noise.device),
             torch.tensor([gate_noise / num_global_experts], device=scores_wo_noise.device),

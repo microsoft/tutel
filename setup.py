@@ -11,6 +11,7 @@ Reference:
 import os, sys
 import subprocess
 import platform as pf
+import shutil
 
 from typing import List, Tuple
 
@@ -27,6 +28,7 @@ if len(sys.argv) <= 1:
 
 root_path = os.path.dirname(sys.argv[0])
 root_path = root_path if root_path else '.'
+root_path = os.path.abspath(root_path)
 
 os.chdir(root_path)
 
@@ -53,13 +55,14 @@ class Tester(Command):
         subprocess.check_call('python3 -m pytest -v -s tests/', shell=True)
 
 def install(use_cuda, use_nccl):
-    ext_libs, ext_args = [], {'cxx': ['-Wno-sign-compare', '-Wno-unused-but-set-variable', '-Wno-terminate', '-Wno-unused-function'] if pf.system() == 'Linux' else []}
+    ext_libs = []
+    ext_args = ['-Wno-sign-compare', '-Wno-unused-but-set-variable', '-Wno-terminate', '-Wno-unused-function', '-Wno-strict-aliasing'] if pf.system() == 'Linux' else []
     if not use_cuda:
         use_nccl = False
         extension = CppExtension
     else:
         ext_libs += ['cuda', 'nvrtc'] if not IS_HIP_EXTENSION else []
-        ext_args['cxx'] += ['-DUSE_GPU']
+        ext_args += ['-DUSE_GPU']
         extension = CUDAExtension
 
     if use_nccl:
@@ -67,7 +70,13 @@ def install(use_cuda, use_nccl):
             ext_libs += ['rccl']
         else:
             ext_libs += ['nccl']
-        ext_args['cxx'] += ['-DUSE_NCCL']
+        ext_args += ['-DUSE_NCCL']
+
+    for folder in ('build', 'dist',):
+        try:
+            shutil.rmtree(os.path.join(root_path, folder))
+        except:
+            pass
 
     setup(
         name='tutel',
@@ -102,6 +111,7 @@ def install(use_cuda, use_nccl):
         python_requires='>=3.6, <4',
         install_requires=[
         ],
+        zip_safe=False,
         extras_require={
             'test': [
                 'GPUtil>=1.4.0',
@@ -115,7 +125,7 @@ def install(use_cuda, use_nccl):
             ],
             library_dirs=['/usr/local/cuda/lib64/stubs'],
             libraries=ext_libs,
-            extra_compile_args=ext_args)
+            extra_compile_args={'cxx': ext_args})
         ],
         cmdclass={
             'build_ext': BuildExtension,
