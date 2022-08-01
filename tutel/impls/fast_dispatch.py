@@ -137,7 +137,7 @@ def compute_sorted_location(x, importance_scores):
     sorted_cumsum = fast_cumsum_sub_one(sorted_x) * sorted_x
     return sorted_cumsum[importance_scores.argsort(dim=0).argsort(dim=0)]
 
-def extract_critical(scores, top_k, loss_fn=losses.gshard_loss, capacity_factor=1.0, batch_prioritized_routing=False, normalize_gate=True, group=None, alignment=1):
+def extract_critical(scores, top_k, loss_fn=losses.gshard_loss, capacity_factor=1.0, batch_prioritized_routing=False, normalize_gate=True, alignment=1, group=None, inequivalent_tokens=False):
     num_global_experts = int(scores.size(1))
     top_k, top_k_original = min(top_k, num_global_experts), top_k
     topk_indices = torch.topk(scores, top_k, dim=1).indices
@@ -173,14 +173,20 @@ def extract_critical(scores, top_k, loss_fn=losses.gshard_loss, capacity_factor=
 
     indices_s = [x.to(torch.int32) for x in indices_s]
 
-    samples_per_expert = ((int(scores.size(0)) + num_global_experts - 1) // num_global_experts)
+    if inequivalent_tokens:
+        num_samples = torch.tensor(scores.size(0), device=scores.device)
+        num_samples = int(simple_all_reduce(num_samples, group=group, op=torch.distributed.ReduceOp.MAX))
+    else:
+        num_samples = int(scores.size(0))
+
+    samples_per_expert = (num_samples + num_global_experts - 1) // num_global_experts
     if capacity_factor > 0:
         capacity = top_k * int(capacity_factor * samples_per_expert)
     else:
         capacity = torch.max(torch.cat(locations_s, dim=0))
         capacity = int(simple_all_reduce(capacity, group=group, op=torch.distributed.ReduceOp.MAX)) + 1
         if capacity_factor < 0:
-            capacity = min(capacity, top_k * int(-capacity_factor * ((int(scores.size(0)) + num_global_experts - 1) // num_global_experts)))
+            capacity = min(capacity, top_k * int(-capacity_factor * samples_per_expert))
 
     remainder = capacity % alignment
     if remainder > 0:

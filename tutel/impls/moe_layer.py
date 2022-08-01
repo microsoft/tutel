@@ -184,7 +184,7 @@ class MOELayer(torch.nn.Module):
         self.protected_shape = y.shape
         return y.reshape(y.size(0), y.size(1), -1)
 
-    def forward(self, input: Tensor, gate_index=0, capacity_factor=None, top_k=None, a2a_ffn_overlap_degree=None, reserve_dims=1):
+    def forward(self, input: Tensor, gate_index=0, capacity_factor=None, top_k=None, a2a_ffn_overlap_degree=None, reserve_dims=1, inequivalent_tokens=False):
         if self.skip_moe:
             result_output = input
             result_output.l_aux = None
@@ -223,6 +223,7 @@ class MOELayer(torch.nn.Module):
                 normalize_gate = self.normalize_gate,
                 group = self.group,
                 alignment = self.sharded_count * a2a_ffn_overlap_degree,
+                inequivalent_tokens = inequivalent_tokens,
             )
 
 

@@ -29,7 +29,7 @@ def create_forward(param_dtype, is_cuda=True):
           if (locations1_s[i] < capacity && indices1_s[i] >= 0) {
               #pragma unroll
               for (int j = threadIdx.x; j < hidden; j += 1024)
-                  atomicAdd(&dispatched_input[(indices1_s[i] * capacity + locations1_s[i]) * (hidden) + j], gates1_s[i] * reshaped_input[i * (hidden) + j]);
+                  dispatched_input[(indices1_s[i] * capacity + locations1_s[i]) * (hidden) + j] = gates1_s[i] * reshaped_input[i * (hidden) + j];
           }
     }
   ''')
