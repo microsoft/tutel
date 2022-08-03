@@ -76,3 +76,14 @@ def record_time(is_cuda=None):
         import torch
         torch.cuda.synchronize()
     return time.time()
+
+def save(t, path):
+    import numpy as np
+    npv = t.detach().cpu().numpy()
+    np.save(path, npv)
+
+def load(path, device=None):
+    import numpy as np
+    import torch
+    npv = np.load(path)
+    return torch.tensor(npv, device=device)
