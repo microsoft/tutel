@@ -170,7 +170,7 @@ def simple_reduce_scatter(input, group=None, op=torch.distributed.ReduceOp.SUM):
     input = input.contiguous()
     assert input.size(0) % world_size == 0, "Cannot evenly devide dim length %s into %s slices" % (input.size(0), world_size)
     if not input.is_cuda:
-      return simple_split(simple_all_reduce(input, group, op=op))
+      return simple_split(simple_all_reduce(input, group, op=op), group=group)
     chunks = list(input.chunk(chunks=world_size, dim=0))
     output = torch.empty_like(chunks[0])
     dist.reduce_scatter(output=output, input_list=chunks, group=group, op=op)
@@ -183,7 +183,7 @@ def simple_all_gather(input, group=None):
     input = input.contiguous()
     output = torch.empty([world_size, input.numel()], device=input.device, dtype=input.dtype)
     tensor_list = list(torch.chunk(output, chunks=world_size, dim=0))
-    dist.all_gather(tensor_list=tensor_list, tensor=input, group=group)
+    dist.all_gather(tensor_list=tensor_list, tensor=input.view(1, -1), group=group)
     return output.view([-1,] + list(input.shape[1:]))
 
 class AllToAllStatus:

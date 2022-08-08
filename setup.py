@@ -72,12 +72,6 @@ def install(use_cuda, use_nccl):
             ext_libs += ['nccl']
         ext_args += ['-DUSE_NCCL']
 
-    for folder in ('build', 'dist',):
-        try:
-            shutil.rmtree(os.path.join(root_path, folder))
-        except:
-            pass
-
     setup(
         name='tutel',
         version='0.1',

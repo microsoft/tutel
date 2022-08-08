@@ -2,7 +2,7 @@
 # Licensed under the MIT license.
 
 
-# Level-level Ops
+# Low-level Ops
 from .jit_kernels.gating import fast_cumsum_sub_one
 from .impls.fast_dispatch import fast_dispatcher, extract_critical, fast_encode, fast_decode
 

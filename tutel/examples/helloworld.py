@@ -30,7 +30,7 @@ parser.add_argument('--a2a_ffn_overlap_degree', type=int, default=1)
 parser.add_argument('--allreduce_degree', type=int, default=1)
 parser.add_argument('--num_steps', type=int, default=100)
 parser.add_argument('--parallel_type', type=str, default='auto')
-parser.add_argument('--save_load_checkpoint', default=False, action='store_true')
+parser.add_argument('--checkpoint_path', type=str, default='')
 parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
 parser.add_argument('--use_2dh', default=False, action='store_true')
 parser.add_argument('--eval', default=False, action='store_true')
@@ -89,12 +89,12 @@ class ExampleModel(torch.nn.Module):
 model = ExampleModel().to(device)
 dist_print(model)
 
-if args.save_load_checkpoint:
-    checkpoint_path = './distributed-hellworld-%d-in-%d.ckpt' % (parallel_env.global_rank, parallel_env.global_size)
+if args.checkpoint_path:
+    checkpoint_path = system.apply_rank_size_from_pattern(args.checkpoint_path, rank=parallel_env.global_rank, size=parallel_env.global_size)
     if os.path.exists(checkpoint_path):
         model.load_state_dict(torch.load(checkpoint_path))
     else:
-        print('Checkpoint not loaded: file `%s` is not found' % checkpoint_path)
+        print('Checkpoint not loaded: file `%s` is not found. Will train the model from start.' % checkpoint_path)
 
 optimizer = torch.optim.SGD(model.parameters(), lr=1e-5)
 
@@ -145,5 +145,5 @@ for i in range(num_steps):
 average_time /= 10
 dist_print('\n[Summary] Average synchronized step_time = %s sec.' % average_time)
 
-if args.save_load_checkpoint:
+if args.checkpoint_path:
     torch.save(model.state_dict(), checkpoint_path)

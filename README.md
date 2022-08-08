@@ -69,7 +69,30 @@ How to setup Tutel MoE for Pytorch and [run examples](tutel/examples), or [enabl
 
 ```
 
-How to import Tutel-optimized MoE in Pytorch:
+#### How to convert checkpoint files that adapt to different distributed world sizes:
+```
+# Firstly, using 2 GPUs to train a model with 16 global experts (each GPU holds 8 local experts), saving checkpoint files in the end:
+mpiexec -bind-to none -host localhost -x LOCAL_SIZE=2 python3 -m tutel.launcher.run -m tutel.examples.helloworld --num_local_experts=8 --checkpoint=./states/{rank}-of-{size}.ckpt --device=cuda
+
+# Secondly, convert the checkpoint files (based on 2 GPUs) into a single checkpoint file containing all parameters:
+python3 -m tutel.checkpoint.gather --inputs=./states/{rank}-of-{size}.ckpt --input_size=2 --output ./model-synthetis.ckpt
+
+# Optionally, you can test the synthetis checkpoint using single CPU device, note that there will be 16 experts locally:
+python3 -m tutel.examples.helloworld --num_local_experts=16 --checkpoint=./model-synthetis.ckpt --device=cpu --eval
+
+# Next, convert the synthetis checkpoint file that adapts to distributed training using 8 GPUs:
+python3 -m tutel.checkpoint.scatter --input=./model-synthetis.ckpt --output_size=8 --outputs=./adapted-for-8-gpus/{rank}-of-{size}.ckpt
+
+# Then, using generated checkpoint files to train/eval using 8 GPUs, note that there will be 2 local experts this time:
+mpiexec -bind-to none -host localhost -x LOCAL_SIZE=8 python3 -m tutel.launcher.run -m tutel.examples.helloworld --num_local_experts=2 --checkpoint=./adapted-for-8-gpus/{rank}-of-{size}.ckpt --device=cuda
+
+# Similarily, the convertion tool also supports X global experts adapting to Y GPUs, where Y % X == 0, making num_local_experts to be -Y / X.
+python3 -m tutel.checkpoint.scatter --input=./model-synthetis.ckpt --output_size=32 --outputs=./adapted-for-32-gpus/{rank}-of-{size}.ckpt
+mpiexec -bind-to none -host localhost -x LOCAL_SIZE=32 python3 -m tutel.launcher.run -m tutel.examples.helloworld --num_local_experts=-2 --checkpoint=./adapted-for-32-gpus/{rank}-of-{size}.ckpt --device=cuda
+
+```
+
+#### How to import Tutel-optimized MoE in Pytorch:
 ```
 # Input Example:
 import torch
@@ -104,7 +127,7 @@ y = moe_layer(x)
 print(y)
 ```
 
-Usage of MOELayer:
+#### Usage of MOELayer:
 ```
 * Usage of MOELayer Args:
 
@@ -130,32 +153,13 @@ Usage of MOELayer:
         activation_fn    : the custom-defined activation function between two linear layers (used for type == 'ffn' only)
 ```
 
-For Deepspeed MoE Acceleration (Deepspeed MoE Top-1 Gate has integrated Tutel acceleration):
+#### For Deepspeed MoE Acceleration (Deepspeed MoE Top-1 Gate has integrated Tutel acceleration):
 ```sh
 # Without Tutel optimization:
 python3 -m tutel.examples.helloworld_deepspeed --top=1
 
 # With Tutel optimization:
 python3 -m tutel.examples.helloworld_deepspeed --top=1 --use_tutel
-```
-
-
-### Single-GPU Throughput (batches/sec) with default settings on NVIDIA A100 (40GB):
-| batch-size | helloworld (top2) | helloworld_ddp (top2) | helloworld_deepspeed (top2) |
-| :--------: | :--------: | :------------: | :------------------: |
-| 8  | 672.75 | 672.24 | 188.27 |
-| 16 | 715.86 | 714.95 | 115.43 |
-| 24 | 725.95 | 725.04 | 81.02 |
-| 32 | 729.02 | 729.02 | OOM |
-| 64 | 687.92 | 686.31 | OOM |
-| 128 | 619.75 | 619.03 | OOM |
-| 256 | 577.08 | 577.49 | OOM |
-
-How to reproduce these results:
-```shell
-$ python3 -m tutel.examples.helloworld --batch_size=<batch_size>
-$ python3 -m tutel.examples.helloworld_ddp --batch_size=<batch_size>
-$ python3 -m tutel.examples.helloworld_deepspeed --batch_size=<batch_size>
 ```
 
 ## Reference
