@@ -87,3 +87,18 @@ def load(path, device=None):
     import torch
     npv = np.load(path)
     return torch.tensor(npv, device=device)
+
+
+def apply_rank_size_from_pattern(filename, rank, size, create_dir=True):
+    if not re.search(r'\{rank\}', filename):
+        logging.warning('Keyword `{rank}` is not found in file pattern: %s, which may cause collision in file access.' % filename)
+
+    filename = re.sub(r'\{rank\}', str(rank), re.sub(r'\{size\}', str(size), filename))
+    if create_dir:
+        filedir = os.path.dirname(filename)
+        if filedir:
+            try:
+                os.makedirs(filedir)
+            except FileExistsError:
+                pass
+    return filename
