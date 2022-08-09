@@ -38,6 +38,31 @@ class MOELayer(torch.nn.Module):
         assert world_size % -num_local_experts == 0, "Excepting {-num_local_experts} devices to share an expert param, while global device count is {world_size}."
         return world_size // -num_local_experts
 
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        buff_name = prefix + '_num_global_experts'
+        if buff_name not in state_dict:
+            logging.warning(f"\033[31mYou are loading a legacy format of checkpoint with at least one Tutel MoE layer inside, which wouldn't support new Tutel feature allowing the number of experts per checkpoint file to mutate.\033[0m")
+            logging.warning(f"\033[31m  The next time you overwrite it with new checkpoint, the recording format will be updated automatically.\033[0m")
+            logging.warning(f"\033[31m  However, the new format won't be compatible with early Tutel versions, unless you force loading it with `model.load_state_dict(.., strict=False)`.\033[0m")
+            state_dict[buff_name] = self._num_global_experts
+        else:
+            state_experts, expect_experts = int(state_dict[buff_name]), self.num_global_experts
+            assert state_experts == expect_experts, "Failed to load state from checkpoint: the number of global experts mismatch (%s <- %s)" % (expect_experts, state_experts)
+
+        for name, param in self.experts.named_parameters():
+            buff_name = prefix + 'experts.' + name
+            assert buff_name in state_dict, "Could not find parameter `%s` in state_dict." % buff_name
+            if state_dict[buff_name].numel() == param.numel():
+                state_dict[buff_name] = state_dict[buff_name].view(param.shape)
+        return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+
+    def state_dict(self, destination=None, prefix='', keep_vars=False):
+        return super().state_dict(destination, prefix, keep_vars)
+
+    @property
+    def num_global_experts(self):
+        return int(self._num_global_experts)
+
     def __init__(
         self,
         gate_type,
@@ -71,7 +96,7 @@ class MOELayer(torch.nn.Module):
         self.skip_moe = (int(os.environ.get('SKIP_MOE', '0')) != 0)
 
         self.num_local_experts = experts.pop('count_per_node', 1)
-        self.num_global_experts = MOELayer.global_expert_count(self.num_local_experts, self.group)
+        self.register_buffer('_num_global_experts', torch.tensor(MOELayer.global_expert_count(self.num_local_experts, self.group)))
 
         self.world_size = C.get_world_size(self.group)
         if self.num_global_experts < self.world_size:

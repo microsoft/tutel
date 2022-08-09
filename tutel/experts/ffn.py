@@ -29,14 +29,14 @@ class FusedExpertsNetwork(torch.nn.Module):
 
         fc1_weight = torch.empty(1, local_experts, hidden_size, model_dim)
         fc2_weight = torch.empty(1, local_experts, hidden_size, self.output_dim)
-        fc1_bias = torch.empty(1, local_experts, 1, hidden_size)
-        fc2_bias = torch.empty(1, local_experts, 1, (self.output_dim + ctx.sharded_count - 1) // ctx.sharded_count)
+        fc1_bias = torch.empty(1, local_experts, hidden_size)
+        fc2_bias = torch.empty(1, local_experts, (self.output_dim + ctx.sharded_count - 1) // ctx.sharded_count)
 
         for i in range(local_experts):
             fc1 = torch.nn.Linear(model_dim, hidden_size)
             fc2 = torch.nn.Linear(hidden_size, self.output_dim)
-            fc1_weight[0, i, :, :], fc1_bias[0, i, :, :] = fc1.weight, fc1.bias
-            fc2_weight[0, i, :, :], fc2_bias[0, i, :, :] = fc2.weight.t(), fc2.bias[:fc2_bias.size(-1)]
+            fc1_weight[0, i, :, :], fc1_bias[0, i, :] = fc1.weight, fc1.bias
+            fc2_weight[0, i, :, :], fc2_bias[0, i, :] = fc2.weight.t(), fc2.bias[:fc2_bias.size(-1)]
 
         self.register_parameter(name='batched_fc1_w', param=torch.nn.Parameter(fc1_weight.squeeze(0)))
         self.register_parameter(name='batched_fc2_w', param=torch.nn.Parameter(fc2_weight.squeeze(0)))
@@ -54,8 +54,8 @@ class FusedExpertsNetwork(torch.nn.Module):
 
         batched_fc1_w = self.batched_fc1_w
         batched_fc2_w = self.batched_fc2_w
-        batched_fc1_bias = self.batched_fc1_bias
-        batched_fc2_bias = self.batched_fc2_bias
+        batched_fc1_bias = self.batched_fc1_bias.unsqueeze(1)
+        batched_fc2_bias = self.batched_fc2_bias.unsqueeze(1)
 
         if ctx.ffn_zero_group is not None:
             if not ctx.use_model_parallel:
@@ -64,7 +64,7 @@ class FusedExpertsNetwork(torch.nn.Module):
                 batched_fc1_bias = zero_gather(batched_fc1_bias, group=ctx.ffn_zero_group).view(1, 1, -1)
 
             batched_fc2_bias = zero_gather(batched_fc2_bias, group=ctx.ffn_zero_group)
-            batched_fc2_bias = batched_fc2_bias.view(self.batched_fc2_bias.size(0), self.batched_fc2_bias.size(1), -1)
+            batched_fc2_bias = batched_fc2_bias.view(self.batched_fc2_bias.size(0), 1, -1)
             if batched_fc2_bias.size(-1) != self.output_dim:
                 batched_fc2_bias = batched_fc2_bias[:, :, :self.output_dim]
 
