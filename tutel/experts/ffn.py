@@ -57,19 +57,25 @@ class FusedExpertsNetwork(torch.nn.Module):
         batched_fc1_bias = self.batched_fc1_bias.unsqueeze(1)
         batched_fc2_bias = self.batched_fc2_bias.unsqueeze(1)
 
-        if ctx.ffn_zero_group is not None:
-            if not ctx.use_model_parallel:
-                batched_fc1_w = zero_gather(batched_fc1_w, group=ctx.ffn_zero_group).view(1, -1, ctx.model_dim)
-                batched_fc2_w = zero_gather(batched_fc2_w, group=ctx.ffn_zero_group).view(1, -1, self.output_dim)
-                batched_fc1_bias = zero_gather(batched_fc1_bias, group=ctx.ffn_zero_group).view(1, 1, -1)
+        if ctx.force_data_parallel:
+            batched_fc1_w = zero_gather(batched_fc1_w, group=ctx.group).view(ctx.num_global_experts, -1, batched_fc1_w.size(2))
+            batched_fc2_w = zero_gather(batched_fc2_w, group=ctx.group).view(ctx.num_global_experts, -1, batched_fc2_w.size(2))
+            batched_fc1_bias = zero_gather(batched_fc1_bias, group=ctx.group).view(ctx.num_global_experts, 1, -1)
+            batched_fc2_bias = zero_gather(batched_fc2_bias, group=ctx.group).view(ctx.num_global_experts, 1, -1)
+        else:
+            if ctx.ffn_zero_group is not None:
+                if not ctx.use_model_parallel:
+                    batched_fc1_w = zero_gather(batched_fc1_w, group=ctx.ffn_zero_group).view(1, -1, ctx.model_dim)
+                    batched_fc2_w = zero_gather(batched_fc2_w, group=ctx.ffn_zero_group).view(1, -1, self.output_dim)
+                    batched_fc1_bias = zero_gather(batched_fc1_bias, group=ctx.ffn_zero_group).view(1, 1, -1)
 
-            batched_fc2_bias = zero_gather(batched_fc2_bias, group=ctx.ffn_zero_group)
-            batched_fc2_bias = batched_fc2_bias.view(self.batched_fc2_bias.size(0), 1, -1)
-            if batched_fc2_bias.size(-1) != self.output_dim:
-                batched_fc2_bias = batched_fc2_bias[:, :, :self.output_dim]
+                batched_fc2_bias = zero_gather(batched_fc2_bias, group=ctx.ffn_zero_group)
+                batched_fc2_bias = batched_fc2_bias.view(self.batched_fc2_bias.size(0), 1, -1)
+                if batched_fc2_bias.size(-1) != self.output_dim:
+                    batched_fc2_bias = batched_fc2_bias[:, :, :self.output_dim]
 
-            if ctx.use_model_parallel:
-                batched_fc2_bias = torch.mul(batched_fc2_bias, 1.0 / ctx.sharded_count)
+                if ctx.use_model_parallel:
+                    batched_fc2_bias = torch.mul(batched_fc2_bias, 1.0 / ctx.sharded_count)
 
         y = torch.add(torch.matmul(x, batched_fc1_w.permute(0, 2, 1)), batched_fc1_bias)
         y = self.activation_fn(y)
