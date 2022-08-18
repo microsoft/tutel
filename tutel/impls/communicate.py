@@ -159,7 +159,7 @@ def simple_split(input, group=None):
     world_size = get_world_size(group)
     if world_size == 1:
         return input
-    assert input.size(0) % world_size == 0, "Cannot evenly devide dim length %s into %s slices" % (input.size(0), world_size)
+    assert input.size(0) % world_size == 0, "Cannot evenly divide dim length %s into %s slices" % (input.size(0), world_size)
     input = input.contiguous()
     return input.chunk(chunks=world_size, dim=0)[get_world_rank(group)]
 
@@ -168,7 +168,7 @@ def simple_reduce_scatter(input, group=None, op=torch.distributed.ReduceOp.SUM):
     if world_size == 1:
         return input
     input = input.contiguous()
-    assert input.size(0) % world_size == 0, "Cannot evenly devide dim length %s into %s slices" % (input.size(0), world_size)
+    assert input.size(0) % world_size == 0, "Cannot evenly divide dim length %s into %s slices" % (input.size(0), world_size)
     if not input.is_cuda:
       return simple_split(simple_all_reduce(input, group, op=op), group=group)
     chunks = list(input.chunk(chunks=world_size, dim=0))
@@ -471,7 +471,7 @@ class PrimReducescatter(torch.autograd.Function):
     @staticmethod
     def transform(input, dim, group=None):
         input = swap_axis(input, 0, dim)
-        input = PrimReducescatter.apply(input, group)
+        input = PrimReducescatter.apply(input, torch.distributed.ReduceOp.SUM, group)
         input = swap_axis(input, 0, dim)
         return input
 
@@ -489,9 +489,9 @@ class PrimAllgather(torch.autograd.Function):
         return (simple_split(doutput, ctx.group), None, None)
 
     @staticmethod
-    def transform(input, dim, group=None):
+    def transform(input, dim, fused=False, group=None):
         input = swap_axis(input, 0, dim)
-        input = PrimAllgather.apply(input, False, group)
+        input = PrimAllgather.apply(input, fused, group)
         input = swap_axis(input, 0, dim)
         return input
 
