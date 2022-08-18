@@ -100,22 +100,32 @@ class MOELayer(torch.nn.Module):
 
         self.world_size = C.get_world_size(self.group)
         if self.num_global_experts < self.world_size:
-            sharded_count = self.world_size // self.num_global_experts
+            self.sharded_count = self.world_size // self.num_global_experts
             self.num_local_experts = 1
-            self.ffn_zero_group = C.create_groups_from_world(group_count=self.num_global_experts).model_group
         else:
-            sharded_count = 1
-            self.ffn_zero_group = None
+            self.sharded_count = 1
 
-        if sharded_count == 1:
+        self.force_data_parallel, self.force_adaptive, self.adaptive_degree = False, False, self.sharded_count
+        if parallel_type.startswith('adaptive:'):
+            self.adaptive_degree = int(parallel_type[parallel_type.index(':') + 1:])
+            if self.adaptive_degree == 0:
+                self.force_data_parallel = True
+            else:
+                if self.adaptive_degree < 0 or self.sharded_count % self.adaptive_degree != 0:
+                    valids = [i for i in range(1, self.sharded_count + 1) if self.sharded_count % i == 0]
+                    raise Exception("Unexpected value of adaptive_degree: %d, expecting a candidate within %s." % (self.adaptive_degree, valids))
+                self.force_adaptive = True
+            self.auto_parallel, self.use_model_parallel = False, True
+        elif self.sharded_count == 1:
             self.auto_parallel, self.use_model_parallel = False, False
+        elif parallel_type in ('data', 'model'):
+            self.auto_parallel, self.use_model_parallel = False, (parallel_type == 'model')
         elif parallel_type == 'auto':
             self.auto_parallel, self.use_model_parallel = True, False
         else:
-            self.auto_parallel, self.use_model_parallel = False, (parallel_type == 'model')
+            raise Exception('Unrecognized parallel type specified: %s' % parallel_type)
 
         self.model_dim = model_dim
-        self.sharded_count = sharded_count
 
         self.is_postscore = is_postscore
         self.batch_prioritized_routing = batch_prioritized_routing
@@ -260,29 +270,32 @@ class MOELayer(torch.nn.Module):
 
         y = fast_encode(x.to(logits_dtype), crit, self.is_postscore).to(x.dtype)
 
-        if self.auto_parallel:
-            self.use_model_parallel = (y.numel() * (self.sharded_count - 1) * 2 < sum([x.numel() for x in self.experts.parameters()]))
-
-        if self.num_global_experts < self.world_size:
-            if self.use_model_parallel:
-                y = y.repeat(1, self.sharded_count, 1).view(self.world_size, -1, y.size(2))
-            else:
-                y = y.view(self.world_size, -1, y.size(2))
-
-        if a2a_ffn_overlap_degree > 1 and y.is_cuda:
-            def expert_fn(expert_input):
-                return self.expert_local(expert_input, original_shape[-reserve_dims:])
-            y = a2a_ffn_overlap_forward(y, expert_fn=expert_fn, a2a_ffn_overlap_degree=a2a_ffn_overlap_degree, use_2dh=self.use_2dh, group=self.group)
-        else:
-            y = C.all_to_all(y, 1, 0, use_2dh=self.use_2dh, group=self.group)
+        if self.force_data_parallel:
             y = self.expert_local(y, original_shape[-reserve_dims:])
-            y = C.all_to_all(y, 0, 1, use_2dh=self.use_2dh, group=self.group)
+        else:
+            if self.auto_parallel:
+                self.use_model_parallel = (y.numel() * (self.sharded_count - 1) * 2 < sum([x.numel() for x in self.experts.parameters()]))
 
-        if self.num_global_experts < self.world_size:
-            if self.use_model_parallel:
-                y = torch.sum(y.view(self.num_global_experts, self.sharded_count, -1, y.size(2)), dim=1)
+            if self.num_global_experts < self.world_size:
+                if self.use_model_parallel:
+                    y = y.repeat(1, self.adaptive_degree, 1).view(self.world_size, -1, y.size(2))
+                else:
+                    y = y.view(self.world_size, -1, y.size(2))
+
+            if a2a_ffn_overlap_degree > 1 and y.is_cuda:
+                def expert_fn(expert_input):
+                    return self.expert_local(expert_input, original_shape[-reserve_dims:])
+                y = a2a_ffn_overlap_forward(y, expert_fn=expert_fn, a2a_ffn_overlap_degree=a2a_ffn_overlap_degree, use_2dh=self.use_2dh, group=self.group)
             else:
-                y = y.view(self.num_global_experts, -1, y.size(2))
+                y = C.all_to_all(y, 1, 0, use_2dh=self.use_2dh, group=self.group)
+                y = self.expert_local(y, original_shape[-reserve_dims:])
+                y = C.all_to_all(y, 0, 1, use_2dh=self.use_2dh, group=self.group)
+
+            if self.num_global_experts < self.world_size:
+                if self.use_model_parallel:
+                    y = torch.sum(y.view(self.num_global_experts, self.adaptive_degree, -1, y.size(2)), dim=1)
+                else:
+                    y = y.view(self.num_global_experts, -1, y.size(2))
 
         y = fast_decode(y.to(logits_dtype), crit, self.is_postscore)
 
