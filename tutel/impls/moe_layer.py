@@ -35,7 +35,7 @@ class MOELayer(torch.nn.Module):
             raise Exception("Invalid value of num_local_experts: %d" % num_local_experts)
         if num_local_experts > 0:
             return num_local_experts * world_size
-        assert world_size % -num_local_experts == 0, "Excepting {-num_local_experts} devices to share an expert param, while global device count is {world_size}."
+        assert world_size % -num_local_experts == 0, f"Excepting {-num_local_experts} devices to share an expert param, while global device count is {world_size}."
         return world_size // -num_local_experts
 
     def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
