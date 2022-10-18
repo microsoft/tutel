@@ -117,7 +117,7 @@ for i in range(num_steps):
 
     t_stop = system.record_time()
 
-    num_global_experts = tutel_moe.moe_layer.global_expert_count(num_local_experts)
+    num_global_experts = tutel_moe.moe_layer.global_expert_count(num_local_experts, group=system.get_local_session().model_group)
     args.top = min(args.top, num_global_experts)
     tflops = (batch_size * num_tokens * model_dim * hidden_size) * 4 * args.top * 3 * 1e-12 / (t_stop - t_start)
     dist_print('STEP-%s: loss = %.5f, step_time = %.6f sec, perf = %.2f tflops.' % (i, float(loss.data), t_stop - t_start, tflops))
