@@ -28,7 +28,6 @@ class CosineTopKGate(torch.nn.Module):
             sim_matrix = self.sim_matrix
         logits = torch.matmul(F.normalize(cosine_projector(x), dim=1),
                               F.normalize(sim_matrix, dim=0))
-        logit_scale = torch.clamp(self.temperature, max=torch.log(torch.tensor(1. / 0.01))).exp()
         logit_scale = torch.clamp(self.temperature, max=torch.log(torch.tensor(1. / 0.01)).to(x.device)).exp()
         logits = logits * logit_scale
         return logits
