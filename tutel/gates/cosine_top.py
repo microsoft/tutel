@@ -12,6 +12,7 @@ class CosineTopKGate(torch.nn.Module):
         self.temperature = torch.nn.Parameter(torch.log(torch.full([1], 1.0 / init_t)), requires_grad=True)
         self.cosine_projector = torch.nn.Linear(model_dim, proj_dim)
         self.sim_matrix = torch.nn.Parameter(torch.randn(size=(proj_dim, num_global_experts)), requires_grad=True)
+        self.clamp_max = torch.log(torch.tensor(1. / 0.01)).item()
         torch.nn.init.normal_(self.sim_matrix, 0, 0.01)
 
         for opt in options:
@@ -28,8 +29,7 @@ class CosineTopKGate(torch.nn.Module):
             sim_matrix = self.sim_matrix
         logits = torch.matmul(F.normalize(cosine_projector(x), dim=1),
                               F.normalize(sim_matrix, dim=0))
-        logit_scale = torch.clamp(self.temperature, max=torch.log(torch.tensor(1. / 0.01))).exp()
-        logit_scale = torch.clamp(self.temperature, max=torch.log(torch.tensor(1. / 0.01)).to(x.device)).exp()
+        logit_scale = torch.clamp(self.temperature, max=self.clamp_max).exp()
         logits = logits * logit_scale
         return logits
 
