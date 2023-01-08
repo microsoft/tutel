@@ -24,7 +24,7 @@ How to setup Tutel MoE for Pytorch and [run examples](tutel/examples), or [enabl
 * Install Tutel Online:
 
         $ python3 -m pip uninstall tutel -y
-        $ python3 -m pip install --user --upgrade git+https://github.com/microsoft/tutel@main
+        $ python3 -m pip install --verbose --user --upgrade git+https://github.com/microsoft/tutel@main
 
 * Build Tutel from Source:
 
