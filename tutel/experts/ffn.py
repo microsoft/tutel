@@ -101,10 +101,10 @@ class FusedExpertsNetwork(torch.nn.Module):
 
     def to(self, *args, **kwargs):
         self = super().to(*args, **kwargs)
-        self.batched_fc1_w = self.batched_fc1_w.to(*args, **kwargs)
-        self.batched_fc2_w = self.batched_fc2_w.to(*args, **kwargs)
-        self.batched_fc1_bias = self.batched_fc1_bias.to(*args, **kwargs)
-        self.batched_fc2_bias = self.batched_fc2_bias.to(*args, **kwargs)
+        self.fc1_weight = self.fc1_weight.to(*args, **kwargs)
+        self.fc2_weight = self.fc2_weight.to(*args, **kwargs)
+        self.fc1_bias = self.fc1_bias.to(*args, **kwargs)
+        self.fc2_bias = self.fc2_bias.to(*args, **kwargs)
         return self
 
 ExpertModule = FusedExpertsNetwork 
