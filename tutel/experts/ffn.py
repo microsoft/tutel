@@ -1,8 +1,10 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
+import math
 import torch
 from torch.nn import functional as F
+from torch.nn import init
 from .. import net
 
 class FusedExpertsNetwork(torch.nn.Module):
@@ -20,6 +22,7 @@ class FusedExpertsNetwork(torch.nn.Module):
         self.activation_fn = activation_fn
 
     def update(self, ctx, dtype=None, device=None):
+        self.sharded_count = ctx.sharded_count
         if ctx.sharded_count > 1:
             assert self.hidden_size_per_expert % ctx.sharded_count == 0, f"Can't evenly divide hidden_size_per_expert ({self.hidden_size_per_expert}) to {ctx.sharded_count} slices."
 
@@ -28,21 +31,50 @@ class FusedExpertsNetwork(torch.nn.Module):
         local_experts = ctx.num_local_experts
         self.output_dim = self.output_dim or model_dim
 
-        fc1_weight = torch.empty(1, local_experts, hidden_size, model_dim, dtype=dtype, device=device)
-        fc2_weight = torch.empty(1, local_experts, hidden_size, self.output_dim, dtype=dtype, device=device)
-        fc1_bias = torch.empty(1, local_experts, hidden_size, dtype=dtype, device=device)
-        fc2_bias = torch.empty(1, local_experts, (self.output_dim + ctx.sharded_count - 1) // ctx.sharded_count, dtype=dtype, device=device)
+        fc1_weight = torch.empty(local_experts, hidden_size, model_dim, dtype=dtype, device=device)
+        fc2_weight = torch.empty(local_experts, hidden_size, self.output_dim, dtype=dtype, device=device)
+        fc1_bias = torch.empty(local_experts, hidden_size, dtype=dtype, device=device)
+        fc2_bias = torch.empty(local_experts, (self.output_dim + ctx.sharded_count - 1) // ctx.sharded_count, dtype=dtype, device=device)
 
-        for i in range(local_experts):
-            fc1 = torch.nn.Linear(model_dim, hidden_size, device=device, dtype=dtype)
-            fc2 = torch.nn.Linear(hidden_size, self.output_dim, device=device, dtype=dtype)
-            fc1_weight[0, i, :, :], fc1_bias[0, i, :] = fc1.weight, fc1.bias
-            fc2_weight[0, i, :, :], fc2_bias[0, i, :] = fc2.weight.t(), fc2.bias[:fc2_bias.size(-1)]
+        self.batched_fc1_w = torch.nn.Parameter(fc1_weight)
+        self.batched_fc2_w = torch.nn.Parameter(fc2_weight)
+        self.batched_fc1_bias = torch.nn.Parameter(fc1_bias)
+        self.batched_fc2_bias = torch.nn.Parameter(fc2_bias)
 
-        self.batched_fc1_w = torch.nn.Parameter(fc1_weight.squeeze(0))
-        self.batched_fc2_w = torch.nn.Parameter(fc2_weight.squeeze(0))
-        self.batched_fc1_bias = torch.nn.Parameter(fc1_bias.squeeze(0))
-        self.batched_fc2_bias = torch.nn.Parameter(fc2_bias.squeeze(0))
+        self.reset_parameters()
+
+    def _kaiming_uniform(self, tensor, fan, a=0, nonlinearity='leaky_relu'):
+        gain = init.calculate_gain(nonlinearity, a)
+        std = gain / math.sqrt(fan)
+        bound = math.sqrt(3.0) * std  # Calculate uniform bounds from standard deviation
+        with torch.no_grad():
+            return tensor.uniform_(-bound, bound)
+
+    def reset_parameters(self) -> None:
+        # imitate reset_parameters from torch.nn.Linear
+
+        mode = 'fan_in'
+        a = math.sqrt(5)
+
+        # init fc1
+        # fan is calculated per expert; index weight for expert [0]; note the transpose
+        fan_in, fan_out = init._calculate_fan_in_and_fan_out(self.batched_fc1_w[0].t())
+        fan_out *= self.sharded_count # fan_out should be multiplied by sharded_count
+        fan = fan_in if mode == 'fan_in' else fan_out
+        self._kaiming_uniform(self.batched_fc1_w, fan, a=a)
+        if self.batched_fc1_bias is not None:
+            bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+            init.uniform_(self.batched_fc1_bias, -bound, bound)
+
+        # init fc2
+        # fan is calculated per expert; index weight for expert [0]
+        fan_in, fan_out = init._calculate_fan_in_and_fan_out(self.batched_fc2_w[0])
+        fan_in *= self.sharded_count # fan_out should be multiplied by sharded_count
+        fan = fan_in if mode == 'fan_in' else fan_out
+        self._kaiming_uniform(self.batched_fc2_w, fan, a=a)
+        if self.batched_fc2_bias is not None:
+            bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+            init.uniform_(self.batched_fc2_bias, -bound, bound)
 
     def extra_repr(self):
         return 'model_dim=%d, hidden_size=%d, output_dim=%d, local_experts=%d' % (
