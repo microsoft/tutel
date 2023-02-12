@@ -5,12 +5,12 @@ import torch
 import torch.nn.functional as F
 
 class CosineTopKGate(torch.nn.Module):
-    def __init__(self, model_dim, num_global_experts, k=1, fp32_gate=False, device=None, proj_dim=256, init_t=0.5, **options):
+    def __init__(self, model_dim, num_global_experts, k=1, fp32_gate=False, device=None, dtype=None, proj_dim=256, init_t=0.5, **options):
         super(CosineTopKGate, self).__init__()
         self.top_k = min(num_global_experts, int(k))
         self.fp32_gate = fp32_gate
         self.temperature = torch.nn.Parameter(torch.log(torch.full([1], 1.0 / init_t)), requires_grad=True)
-        self.cosine_projector = torch.nn.Linear(model_dim, proj_dim, device=device)
+        self.cosine_projector = torch.nn.Linear(model_dim, proj_dim, device=device, dtype=dtype)
         self.sim_matrix = torch.nn.Parameter(torch.randn(size=(proj_dim, num_global_experts)), requires_grad=True)
         self.clamp_max = torch.log(torch.tensor(1. / 0.01)).item()
         torch.nn.init.normal_(self.sim_matrix, 0, 0.01)
