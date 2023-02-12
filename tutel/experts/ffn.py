@@ -2,6 +2,7 @@
 # Licensed under the MIT license.
 
 import torch
+from torch.nn import functional as F
 from .. import net
 
 class FusedExpertsNetwork(torch.nn.Module):
@@ -18,7 +19,7 @@ class FusedExpertsNetwork(torch.nn.Module):
             activation_fn = lambda x: F.relu(x)
         self.activation_fn = activation_fn
 
-    def update(self, ctx):
+    def update(self, ctx, dtype=None, device=None):
         if ctx.sharded_count > 1:
             assert self.hidden_size_per_expert % ctx.sharded_count == 0, f"Can't evenly divide hidden_size_per_expert ({self.hidden_size_per_expert}) to {ctx.sharded_count} slices."
 
@@ -27,21 +28,21 @@ class FusedExpertsNetwork(torch.nn.Module):
         local_experts = ctx.num_local_experts
         self.output_dim = self.output_dim or model_dim
 
-        fc1_weight = torch.empty(1, local_experts, hidden_size, model_dim)
-        fc2_weight = torch.empty(1, local_experts, hidden_size, self.output_dim)
-        fc1_bias = torch.empty(1, local_experts, hidden_size)
-        fc2_bias = torch.empty(1, local_experts, (self.output_dim + ctx.sharded_count - 1) // ctx.sharded_count)
+        fc1_weight = torch.empty(1, local_experts, hidden_size, model_dim, dtype=dtype, device=device)
+        fc2_weight = torch.empty(1, local_experts, hidden_size, self.output_dim, dtype=dtype, device=device)
+        fc1_bias = torch.empty(1, local_experts, hidden_size, dtype=dtype, device=device)
+        fc2_bias = torch.empty(1, local_experts, (self.output_dim + ctx.sharded_count - 1) // ctx.sharded_count, dtype=dtype, device=device)
 
         for i in range(local_experts):
-            fc1 = torch.nn.Linear(model_dim, hidden_size)
-            fc2 = torch.nn.Linear(hidden_size, self.output_dim)
+            fc1 = torch.nn.Linear(model_dim, hidden_size, device=device, dtype=dtype)
+            fc2 = torch.nn.Linear(hidden_size, self.output_dim, device=device, dtype=dtype)
             fc1_weight[0, i, :, :], fc1_bias[0, i, :] = fc1.weight, fc1.bias
             fc2_weight[0, i, :, :], fc2_bias[0, i, :] = fc2.weight.t(), fc2.bias[:fc2_bias.size(-1)]
 
-        self.register_parameter(name='batched_fc1_w', param=torch.nn.Parameter(fc1_weight.squeeze(0)))
-        self.register_parameter(name='batched_fc2_w', param=torch.nn.Parameter(fc2_weight.squeeze(0)))
-        self.register_parameter(name='batched_fc1_bias', param=torch.nn.Parameter(fc1_bias.squeeze(0)))
-        self.register_parameter(name='batched_fc2_bias', param=torch.nn.Parameter(fc2_bias.squeeze(0)))
+        self.batched_fc1_w = torch.nn.Parameter(fc1_weight.squeeze(0))
+        self.batched_fc2_w = torch.nn.Parameter(fc2_weight.squeeze(0))
+        self.batched_fc1_bias = torch.nn.Parameter(fc1_bias.squeeze(0))
+        self.batched_fc2_bias = torch.nn.Parameter(fc2_bias.squeeze(0))
 
     def extra_repr(self):
         return 'model_dim=%d, hidden_size=%d, output_dim=%d, local_experts=%d' % (
@@ -99,12 +100,5 @@ class FusedExpertsNetwork(torch.nn.Module):
         y = torch.add(torch.matmul(y, batched_fc2_w), batched_fc2_bias)
         return y
 
-    def to(self, *args, **kwargs):
-        self = super().to(*args, **kwargs)
-        self.batched_fc1_w = self.batched_fc1_w.to(*args, **kwargs)
-        self.batched_fc2_w = self.batched_fc2_w.to(*args, **kwargs)
-        self.batched_fc1_bias = self.batched_fc1_bias.to(*args, **kwargs)
-        self.batched_fc2_bias = self.batched_fc2_bias.to(*args, **kwargs)
-        return self
 
 ExpertModule = FusedExpertsNetwork 

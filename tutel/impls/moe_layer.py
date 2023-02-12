@@ -79,6 +79,8 @@ class MOELayer(torch.nn.Module):
         is_gshard_loss=True,
         parallel_type='auto',
         use_2dh=False,
+        device=None,
+        dtype=None,
         **kwargs
     ):
         super().__init__()
@@ -156,7 +158,7 @@ class MOELayer(torch.nn.Module):
 
             self.experts = fused_experts.ExpertModule(**experts)
 
-        self.experts.update(self)
+        self.experts.update(self, device=device, dtype=dtype)
 
         if scan_expert_func is not None:
             for n, p in self.experts.named_parameters():
@@ -260,7 +262,6 @@ class MOELayer(torch.nn.Module):
                 alignment = self.sharded_count * a2a_ffn_overlap_degree,
                 inequivalent_tokens = inequivalent_tokens,
             )
-
 
         if x.is_cuda:
             with torch.cuda.amp.autocast(enabled=False):
