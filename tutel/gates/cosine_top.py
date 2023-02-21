@@ -22,16 +22,12 @@ class CosineTopKGate(torch.nn.Module):
     def forward(self, x):
         if self.fp32_gate:
             x = x.float()
-            cosine_projector = self.cosine_projector.float()
-            sim_matrix = self.sim_matrix.float()
-        else:
-            cosine_projector = self.cosine_projector
-            sim_matrix = self.sim_matrix
-        logits = torch.matmul(F.normalize(cosine_projector(x), dim=1),
-                              F.normalize(sim_matrix, dim=0))
-        logit_scale = torch.clamp(self.temperature, max=self.clamp_max).exp()
-        logits = logits * logit_scale
-        return logits
+        with torch.autocast(device_type=x.device.type, enabled=not self.fp32_gate):
+            logits = torch.matmul(F.normalize(self.cosine_projector(x), dim=1),
+                                    F.normalize(self.sim_matrix, dim=0))
+            logit_scale = torch.clamp(self.temperature, max=self.clamp_max).exp()
+            logits = logits * logit_scale
+            return logits
 
 
 Gate = CosineTopKGate
