@@ -10,6 +10,7 @@ import time
 import logging 
 import collections
 import importlib
+import warnings
 
 import torch
 from torch import Tensor
@@ -228,9 +229,15 @@ class MOELayer(torch.nn.Module):
             return self.result_func(result_output) if self.result_func is not None else result_output
 
         if torch.is_autocast_enabled():
-            # amp will handle routing fn in fp32
-            # this allows all2all to be done in low precision
-            input = input.to(torch.get_autocast_gpu_dtype())
+            # casts inputs to autocast dtype which enables all2all to be done in low precision
+            if input.device.type == 'cuda':
+                dtype = torch.get_autocast_gpu_dtype()
+            elif input.device.type == 'cpu':
+                warnings.warn(f'MoE input is a cpu tensor.')
+                dtype = torch.get_autocast_cpu_dtype()
+            else:
+                raise NotImplementedError(f'MoE not implemented for device={input.device.type}')
+            input = input.to(dtype=dtype)
 
         original_shape, original_dtype  = input.shape, input.dtype
         assert len(original_shape) >= 2, "Input data must be at least 2D tensor: (s)amples, .., (m)odel_dim"
