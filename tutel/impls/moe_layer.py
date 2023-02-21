@@ -231,9 +231,6 @@ class MOELayer(torch.nn.Module):
         assert len(original_shape) >= 2, "Input data must be at least 2D tensor: (s)amples, .., (m)odel_dim"
 
         x = input.reshape(-1, original_shape[-reserve_dims:].numel())
-        for p in self.experts.parameters():
-            x = x.to(p.dtype)
-            break
         gctx = self.gates[gate_index]
         a2a_ffn_overlap_degree = a2a_ffn_overlap_degree if a2a_ffn_overlap_degree is not None else self.a2a_ffn_overlap_degree
 
@@ -263,10 +260,7 @@ class MOELayer(torch.nn.Module):
                 inequivalent_tokens = inequivalent_tokens,
             )
 
-        if x.is_cuda:
-            with torch.cuda.amp.autocast(enabled=False):
-                logits_dtype, (crit, l_aux) = routing()
-        else:
+        with torch.autocast(device_type=x.device.type, enabled=False):
             logits_dtype, (crit, l_aux) = routing()
 
         y = fast_encode(x.to(logits_dtype), crit, self.is_postscore).to(x.dtype)
@@ -303,5 +297,6 @@ class MOELayer(torch.nn.Module):
         y = y.view(list(original_shape[:-reserve_dims]) + list(self.protected_shape[-reserve_dims:])).to(original_dtype)
         self.l_aux = y.l_aux = l_aux
         return self.result_func(y) if self.result_func is not None else y
+
 
 moe_layer = MOELayer

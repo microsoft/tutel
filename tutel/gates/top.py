@@ -6,10 +6,7 @@ import torch
 class LinearTopKGate(torch.nn.Module):
     def __init__(self, model_dim, num_global_experts, k=1, fp32_gate=False, device=None, dtype=None, **options):
         super().__init__()
-        try:
-            self.wg = torch.nn.Linear(model_dim, num_global_experts, bias=False, device=device, dtype=torch.float32 if fp32_gate else dtype)
-        except:
-            self.wg = torch.nn.Linear(model_dim, num_global_experts, bias=False, device=device, dtype=dtype)
+        self.wg = torch.nn.Linear(model_dim, num_global_experts, bias=False, device=device, dtype=dtype)
         self.top_k = min(num_global_experts, int(k))
         self.fp32_gate = fp32_gate
 
@@ -20,9 +17,10 @@ class LinearTopKGate(torch.nn.Module):
     def forward(self, x):
         if self.fp32_gate:
             x = x.float()
-            wg = self.wg.float()
-        else:
-            wg = self.wg
-        return wg(x)
+        with torch.autocast(device_type=x.device.type, enabled=not self.fp32_gate):
+            out = self.wg(x)
+            print(out.dtype)
+            return out
+
 
 Gate = LinearTopKGate
