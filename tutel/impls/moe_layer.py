@@ -270,8 +270,6 @@ class MOELayer(torch.nn.Module):
 
         y = fast_encode(x.to(logits_dtype), crit, self.is_postscore).to(x.dtype)
 
-        print(f'{original_dtype=}, {x.dtype=}, {logits_dtype=}, {y.dtype=}')
-
         if self.force_data_parallel:
             y = self.expert_local(y, original_shape[-reserve_dims:])
         else:
