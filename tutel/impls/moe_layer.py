@@ -227,6 +227,11 @@ class MOELayer(torch.nn.Module):
             result_output.l_aux = None
             return self.result_func(result_output) if self.result_func is not None else result_output
 
+        if torch.is_autocast_enabled():
+            # amp will handle routing fn in fp32
+            # this allows all2all to be done in low precision
+            input = input.to(torch.get_autocast_gpu_dtype())
+
         original_shape, original_dtype  = input.shape, input.dtype
         assert len(original_shape) >= 2, "Input data must be at least 2D tensor: (s)amples, .., (m)odel_dim"
 
@@ -264,6 +269,8 @@ class MOELayer(torch.nn.Module):
             logits_dtype, (crit, l_aux) = routing()
 
         y = fast_encode(x.to(logits_dtype), crit, self.is_postscore).to(x.dtype)
+
+        print(f'{original_dtype=}, {x.dtype=}, {logits_dtype=}, {y.dtype=}')
 
         if self.force_data_parallel:
             y = self.expert_local(y, original_shape[-reserve_dims:])
