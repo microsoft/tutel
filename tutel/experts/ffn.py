@@ -52,7 +52,6 @@ class FusedExpertsNetwork(torch.nn.Module):
 
     def reset_parameters(self) -> None:
         # imitate reset_parameters from torch.nn.Linear
-
         mode = 'fan_in'
         a = math.sqrt(5)
 
