@@ -19,7 +19,6 @@ class LinearTopKGate(torch.nn.Module):
             x = x.float()
         with torch.autocast(device_type=x.device.type, enabled=not self.fp32_gate):
             out = self.wg(x)
-            print(out.dtype)
             return out
 
 
