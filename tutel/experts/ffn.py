@@ -2,6 +2,7 @@
 # Licensed under the MIT license.
 
 import math
+import warnings
 import torch
 from torch.nn import functional as F
 from torch.nn import init
@@ -84,10 +85,21 @@ class FusedExpertsNetwork(torch.nn.Module):
         if self.skip_expert:
             return x
 
-        batched_fc1_w = self.batched_fc1_w
-        batched_fc2_w = self.batched_fc2_w
-        batched_fc1_bias = self.batched_fc1_bias.unsqueeze(1)
-        batched_fc2_bias = self.batched_fc2_bias.unsqueeze(1)
+        cast_dtype = self.batched_fc1_w.dtype
+        if torch.is_autocast_enabled():
+            # casts inputs to autocast dtype which enables all2all to be done in low precision
+            if input.device.type == 'cuda':
+                cast_dtype = torch.get_autocast_gpu_dtype()
+            elif input.device.type == 'cpu':
+                warnings.warn(f'MoE input is a cpu tensor.')
+                cast_dtype = torch.get_autocast_cpu_dtype()
+            else:
+                raise NotImplementedError(f'MoE not implemented for device={input.device.type}')
+
+        batched_fc1_w = self.batched_fc1_w.to(dtype=cast_dtype)
+        batched_fc2_w = self.batched_fc2_w.to(dtype=cast_dtype)
+        batched_fc1_bias = self.batched_fc1_bias.unsqueeze(1).to(dtype=cast_dtype)
+        batched_fc2_bias = self.batched_fc2_bias.unsqueeze(1).to(dtype=cast_dtype)
 
         if ctx.force_data_parallel:
             batched_fc1_w = net.zero_gather(batched_fc1_w, group=ctx.group).view(ctx.num_global_experts, -1, batched_fc1_w.size(2))
