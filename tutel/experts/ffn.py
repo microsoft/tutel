@@ -85,16 +85,17 @@ class FusedExpertsNetwork(torch.nn.Module):
         if self.skip_expert:
             return x
 
-        cast_dtype = self.batched_fc1_w.dtype
+        # cast params to autocast dtype which enables zero_gather of params to be done in low precision
+        param = self.batched_fc1_w
+        cast_dtype = param.dtype
         if torch.is_autocast_enabled():
-            # casts inputs to autocast dtype which enables all2all to be done in low precision
-            if input.device.type == 'cuda':
+            if param.device.type == 'cuda':
                 cast_dtype = torch.get_autocast_gpu_dtype()
-            elif input.device.type == 'cpu':
-                warnings.warn(f'MoE input is a cpu tensor.')
+            elif param.device.type == 'cpu':
+                warnings.warn(f'MoE param is a cpu tensor.')
                 cast_dtype = torch.get_autocast_cpu_dtype()
             else:
-                raise NotImplementedError(f'MoE not implemented for device={input.device.type}')
+                raise NotImplementedError(f'MoE not implemented for device={param.device.type}')
 
         batched_fc1_w = self.batched_fc1_w.to(dtype=cast_dtype)
         batched_fc2_w = self.batched_fc2_w.to(dtype=cast_dtype)
