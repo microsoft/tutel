@@ -2,7 +2,6 @@
 # Licensed under the MIT license.
 
 import math
-import warnings
 import torch
 from torch.nn import functional as F
 from torch.nn import init

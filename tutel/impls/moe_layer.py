@@ -10,7 +10,6 @@ import time
 import logging 
 import collections
 import importlib
-import warnings
 
 import torch
 from torch import Tensor
