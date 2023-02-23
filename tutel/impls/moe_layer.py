@@ -233,10 +233,13 @@ class MOELayer(torch.nn.Module):
             if input.device.type == 'cuda':
                 dtype = torch.get_autocast_gpu_dtype()
             elif input.device.type == 'cpu':
-                warnings.warn(f'MoE input is a cpu tensor.')
                 dtype = torch.get_autocast_cpu_dtype()
+            elif input.device.type == 'xpu':
+                dtype = torch.xpu.get_autocast_xpu_dtype()  # type: ignore[attr-defined]
+            elif input.device.type == 'hpu':
+                dtype = torch.hpu.get_autocast_hpu_dtype()  # type: ignore[attr-defined]
             else:
-                raise NotImplementedError(f'MoE not implemented for device={input.device.type}')
+                raise RuntimeError('User specified autocast device_type must be \'cuda\' or \'cpu\'')
             input = input.to(dtype=dtype)
 
         original_shape, original_dtype  = input.shape, input.dtype
