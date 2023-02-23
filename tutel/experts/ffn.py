@@ -85,23 +85,14 @@ class FusedExpertsNetwork(torch.nn.Module):
         if self.skip_expert:
             return x
 
-        # cast params to autocast dtype which enables zero_gather of params to be done in low precision
-        param = self.batched_fc1_w
-        cast_dtype = param.dtype
-        if torch.is_autocast_enabled():
-            if param.device.type == 'cuda':
-                cast_dtype = torch.get_autocast_gpu_dtype()
-            elif param.device.type == 'cpu':
-                warnings.warn(f'MoE param is a cpu tensor.')
-                cast_dtype = torch.get_autocast_cpu_dtype()
-            else:
-                raise NotImplementedError(f'MoE not implemented for device={param.device.type}')
+        batched_fc1_w = self.batched_fc1_w
+        batched_fc2_w = self.batched_fc2_w
+        batched_fc1_bias = self.batched_fc1_bias.unsqueeze(1)
+        batched_fc2_bias = self.batched_fc2_bias.unsqueeze(1)
 
-        batched_fc1_w = self.batched_fc1_w.to(dtype=cast_dtype)
-        batched_fc2_w = self.batched_fc2_w.to(dtype=cast_dtype)
-        batched_fc1_bias = self.batched_fc1_bias.unsqueeze(1).to(dtype=cast_dtype)
-        batched_fc2_bias = self.batched_fc2_bias.unsqueeze(1).to(dtype=cast_dtype)
-
+        # Note: since parameters are in full precision,
+        # the zero_gathers are done in full precision
+        # which also means the grad scatters are in full precision
         if ctx.force_data_parallel:
             batched_fc1_w = net.zero_gather(batched_fc1_w, group=ctx.group).view(ctx.num_global_experts, -1, batched_fc1_w.size(2))
             batched_fc2_w = net.zero_gather(batched_fc2_w, group=ctx.group).view(ctx.num_global_experts, -1, batched_fc2_w.size(2))
