@@ -43,34 +43,36 @@ class FusedExpertsNetwork(torch.nn.Module):
 
         self.reset_parameters()
 
-    def _kaiming_uniform(self, tensor, fan, a=0, nonlinearity='leaky_relu'):
-        gain = init.calculate_gain(nonlinearity, a)
-        std = gain / math.sqrt(fan)
-        bound = math.sqrt(3.0) * std  # Calculate uniform bounds from standard deviation
-        with torch.no_grad():
-            return tensor.uniform_(-bound, bound)
-
     def reset_parameters(self) -> None:
-        # imitate reset_parameters from torch.nn.Linear
+        # Imitates reset_parameters from torch.nn.Linear which uses kaiming_uniform.
+        # In this case every expert is a linear layer and fc1 is transposed.
+        # This custom fn is created to account for this.
         mode = 'fan_in'
         a = math.sqrt(5)
 
+        def _kaiming_uniform(tensor, fan, a=0, nonlinearity='leaky_relu'):
+            gain = init.calculate_gain(nonlinearity, a)
+            std = gain / math.sqrt(fan)
+            bound = math.sqrt(3.0) * std  # Calculate uniform bounds from standard deviation
+            with torch.no_grad():
+                return tensor.uniform_(-bound, bound)
+
         # init fc1
         # fan is calculated per expert; index weight for expert [0]; note the transpose
-        fan_in, fan_out = init._calculate_fan_in_and_fan_out(self.batched_fc1_w[0].t())
+        fan_in, fan_out = self.batched_fc1_w[0].t().shape
         fan_out *= self.sharded_count # fan_out should be multiplied by sharded_count
         fan = fan_in if mode == 'fan_in' else fan_out
-        self._kaiming_uniform(self.batched_fc1_w, fan, a=a)
+        _kaiming_uniform(self.batched_fc1_w, fan, a=a)
         if self.batched_fc1_bias is not None:
             bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
             init.uniform_(self.batched_fc1_bias, -bound, bound)
 
         # init fc2
         # fan is calculated per expert; index weight for expert [0]
-        fan_in, fan_out = init._calculate_fan_in_and_fan_out(self.batched_fc2_w[0])
+        fan_in, fan_out = self.batched_fc2_w.shape[1:]
         fan_in *= self.sharded_count # fan_out should be multiplied by sharded_count
         fan = fan_in if mode == 'fan_in' else fan_out
-        self._kaiming_uniform(self.batched_fc2_w, fan, a=a)
+        _kaiming_uniform(self.batched_fc2_w, fan, a=a)
         if self.batched_fc2_bias is not None:
             bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
             init.uniform_(self.batched_fc2_bias, -bound, bound)
