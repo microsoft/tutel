@@ -29,7 +29,7 @@ parser.add_argument('--l_aux_wt', type=float, default=0.0)
 parser.add_argument('--a2a_ffn_overlap_degree', type=int, default=1)
 parser.add_argument('--allreduce_degree', type=int, default=1)
 parser.add_argument('--num_steps', type=int, default=100)
-parser.add_argument('--parallel_type', type=str, default='adaptive:1')
+parser.add_argument('--cap_factor', type=float, default=1.0)
 parser.add_argument('--checkpoint_path', type=str, default='')
 parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
 parser.add_argument('--use_2dh', default=False, action='store_true')
@@ -72,7 +72,6 @@ class ExampleModel(torch.nn.Module):
             scan_expert_func = lambda name, param: setattr(param, 'skip_allreduce', True),
             seeds = (1, dist_rank + 1, 1),
             a2a_ffn_overlap_degree = a2a_ffn_overlap_degree,
-            parallel_type = args.parallel_type,
             use_2dh=args.use_2dh,
         )
 
@@ -80,9 +79,13 @@ class ExampleModel(torch.nn.Module):
         local_count = sum([torch.numel(param) for name, param in self._moe_layer.get_parameter_iterator(param_type='local_experts')])
         shared_count = sum([torch.numel(param) for name, param in self._moe_layer.get_parameter_iterator(param_type='gate')])
         dist_print('[Statistics] param count for MoE local_experts = %s, param count for MoE gate = %s.\n' % (local_count, shared_count))
+        self.r_index = -1
 
     def forward(self, input):
-        result = self._moe_layer(input)
+        r, o = self._moe_layer.valid_rs[(self.r_index // 8) % len(self._moe_layer.valid_rs)], self.r_index % 8 + 1
+        self.r_index += 1
+
+        result = self._moe_layer(input, capacity_factor=args.cap_factor, adaptive_r=r, a2a_ffn_overlap_degree=o)
         result = F.log_softmax(torch.sum(result, dim=2), dim=1)
         return result
 
@@ -102,8 +105,8 @@ torch.manual_seed(0)
 x = torch.tensor(torch.randn([batch_size, num_tokens, model_dim], dtype=torch.float32, device='cpu').detach().numpy(), dtype=torch.get_default_dtype(), requires_grad=False, device=device)
 y = torch.LongTensor(batch_size).random_(1).to(device)
 
-tuples = (dist_world_size, args.dtype, model_dim, hidden_size, batch_size * num_tokens, num_local_experts, top_value, a2a_ffn_overlap_degree, args.parallel_type, device)
-dist_print('[Benchmark] world_size = %s, dtype = %s, model_dim = %s, hidden_size = %s, samples = %s, num_local_experts = %s, topK = %s, a2a_ffn_overlap_degree = %s, parallel_type = `%s`, device = `%s`' % tuples)
+tuples = (dist_world_size, args.dtype, model_dim, hidden_size, batch_size * num_tokens, num_local_experts, top_value, a2a_ffn_overlap_degree, device)
+dist_print('[Benchmark] world_size = %s, dtype = %s, model_dim = %s, hidden_size = %s, samples = %s, num_local_experts = %s, topK = %s, a2a_ffn_overlap_degree = %s, device = `%s`' % tuples)
 
 average_time, num_steps = 0, args.num_steps
 
@@ -137,7 +140,7 @@ for i in range(num_steps):
     num_global_experts = tutel_moe.moe_layer.global_expert_count(num_local_experts, group=system.get_local_session().model_group)
     mm_ceof, cap_ceof = 1 if args.eval else 3, min(args.top, num_global_experts)
     tflops = (batch_size * num_tokens * model_dim * hidden_size) * 4 * mm_ceof * cap_ceof * 1e-12 / (t_stop - t_start)
-    dist_print('STEP-%s: loss = %.5f, step_time = %.6f sec, perf = %.2f tflops.' % (i, float(loss.data), t_stop - t_start, tflops))
+    dist_print('STEP-%s: loss = %.5f, step_time = %.6f sec, perf = %.2f tflops. (f = %.1f, r = %d, o = %d)' % (i, float(loss.data), t_stop - t_start, tflops, args.cap_factor, model._moe_layer.adaptive_degree, model._moe_layer.a2a_ffn_overlap_degree))
 
     if i + 10 >= num_steps:
         average_time += t_stop - t_start

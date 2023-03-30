@@ -48,6 +48,10 @@ How to setup Tutel MoE for Pytorch and [run examples](tutel/examples), or [enabl
         $ python3 ./tutel/examples/helloworld.py --batch_size=16
         ..
 
+* Switch Test using single-node 8 GPUs:
+
+        $ python3 -m torch.distributed.launch --nproc_per_node=8 -m tutel.examples.helloworld_switch --batch_size=16
+
 * Run Tutel MoE in Distributed Mode:
 
         (Method A - Torch launcher for `Multi-Node x Multi-GPU`:)

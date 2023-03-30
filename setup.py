@@ -74,7 +74,7 @@ def install(use_cuda, use_nccl):
 
     setup(
         name='tutel',
-        version='0.1',
+        version='0.2',
         description='An Optimized Mixture-of-Experts Implementation.',
         url='https://github.com/microsoft/Tutel',
         author='Microsoft',
