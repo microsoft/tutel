@@ -91,15 +91,12 @@ class FusedExpertsNetwork(torch.nn.Module):
         batched_fc1_bias = self.batched_fc1_bias.unsqueeze(1)
         batched_fc2_bias = self.batched_fc2_bias.unsqueeze(1)
 
-        # Note: since parameters are in full precision,
-        # the zero_gathers are done in full precision
-        # which also means the grad scatters are in full precision
-        if ctx.force_data_parallel:
+        if ctx.adaptive_degree == 0:
             batched_fc1_w = net.zero_gather(batched_fc1_w, group=ctx.group).view(ctx.num_global_experts, -1, batched_fc1_w.size(2))
             batched_fc2_w = net.zero_gather(batched_fc2_w, group=ctx.group).view(ctx.num_global_experts, -1, batched_fc2_w.size(2))
             batched_fc1_bias = net.zero_gather(batched_fc1_bias, group=ctx.group).view(ctx.num_global_experts, 1, -1)
             batched_fc2_bias = net.zero_gather(batched_fc2_bias, group=ctx.group).view(ctx.num_global_experts, 1, -1)
-        elif ctx.force_adaptive:
+        else:
             if ctx.sharded_count > 1:
                 group_size = ctx.sharded_count // ctx.adaptive_degree
                 if group_size > 1:
@@ -108,25 +105,11 @@ class FusedExpertsNetwork(torch.nn.Module):
                     batched_fc2_w = net.zero_gather(batched_fc2_w, group=ffn_zero_group).view(1, -1, self.output_dim)
                     batched_fc1_bias = net.zero_gather(batched_fc1_bias, group=ffn_zero_group).view(1, 1, -1)
 
-                ffn_zero_group2 = net.create_groups_from_world(group_count=ctx.num_global_experts).model_group
-                batched_fc2_bias = net.zero_gather(batched_fc2_bias, group=ffn_zero_group2)
+                batched_fc2_bias = net.zero_gather(batched_fc2_bias, group=net.create_groups_from_world(group_count=ctx.num_global_experts).model_group)
                 batched_fc2_bias = batched_fc2_bias.view(1, 1, -1)
 
                 if ctx.adaptive_degree > 1:
                     batched_fc2_bias = torch.mul(batched_fc2_bias, 1.0 / ctx.adaptive_degree)
-        else:
-            if ctx.sharded_count > 1:
-                ffn_zero_group = net.create_groups_from_world(group_count=ctx.num_global_experts).model_group
-                if not ctx.use_model_parallel:
-                    batched_fc1_w = net.zero_gather(batched_fc1_w, group=ffn_zero_group).view(1, -1, ctx.model_dim)
-                    batched_fc2_w = net.zero_gather(batched_fc2_w, group=ffn_zero_group).view(1, -1, self.output_dim)
-                    batched_fc1_bias = net.zero_gather(batched_fc1_bias, group=ffn_zero_group).view(1, 1, -1)
-
-                batched_fc2_bias = net.zero_gather(batched_fc2_bias, group=ffn_zero_group)
-                batched_fc2_bias = batched_fc2_bias.view(self.batched_fc2_bias.size(0), 1, -1)
-
-                if ctx.use_model_parallel:
-                    batched_fc2_bias = torch.mul(batched_fc2_bias, 1.0 / ctx.sharded_count)
 
         if batched_fc2_bias.size(-1) != self.output_dim:
             batched_fc2_bias = batched_fc2_bias[:, :, :self.output_dim]

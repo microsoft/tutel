@@ -77,7 +77,7 @@ class MOELayer(torch.nn.Module):
         batch_prioritized_routing=False,
         normalize_gate=True,
         is_gshard_loss=True,
-        parallel_type='auto',
+        parallel_type='adaptive:1',
         use_2dh=False,
         device=None,
         dtype=None,
@@ -107,23 +107,20 @@ class MOELayer(torch.nn.Module):
         else:
             self.sharded_count = 1
 
-        self.force_data_parallel, self.force_adaptive, self.adaptive_degree = False, False, self.sharded_count
+        self.auto_parallel, self.adaptive_degree, self.use_model_parallel = False, self.sharded_count, True
+        self.valid_rs = [0] + [i for i in range(1, self.sharded_count + 1) if self.sharded_count % i == 0]
+
         if parallel_type.startswith('adaptive:'):
             self.adaptive_degree = int(parallel_type[parallel_type.index(':') + 1:])
-            if self.adaptive_degree == 0:
-                self.force_data_parallel = True
-            else:
-                if self.adaptive_degree < 0 or self.sharded_count % self.adaptive_degree != 0:
-                    valids = [i for i in range(1, self.sharded_count + 1) if self.sharded_count % i == 0]
-                    raise Exception("Unexpected value of adaptive_degree: %d, expecting a candidate within %s." % (self.adaptive_degree, valids))
-                self.force_adaptive = True
-            self.auto_parallel, self.use_model_parallel = False, True
+            self.adaptive_degree = min(max(self.adaptive_degree, 0), self.sharded_count)
+            if self.adaptive_degree not in self.valid_rs:
+                raise Exception("Unexpected value of adaptive_degree: %d, expecting a candidate within %s." % (self.adaptive_degree, self.valid_rs))
         elif self.sharded_count == 1:
-            self.auto_parallel, self.use_model_parallel = False, False
+            pass
         elif parallel_type in ('data', 'model'):
-            self.auto_parallel, self.use_model_parallel = False, (parallel_type == 'model')
+            self.adaptive_degree = 1 if parallel_type == 'data' else self.sharded_count
         elif parallel_type == 'auto':
-            self.auto_parallel, self.use_model_parallel = True, False
+            self.adaptive_degree = 1
         else:
             raise Exception('Unrecognized parallel type specified: %s' % parallel_type)
 
@@ -221,7 +218,7 @@ class MOELayer(torch.nn.Module):
         self.protected_shape = y.shape
         return y.reshape(y.size(0), y.size(1), -1)
 
-    def forward(self, input: Tensor, gate_index=0, capacity_factor=None, top_k=None, a2a_ffn_overlap_degree=None, reserve_dims=1, inequivalent_tokens=False):
+    def forward(self, input: Tensor, gate_index=0, capacity_factor=None, top_k=None, a2a_ffn_overlap_degree=None, reserve_dims=1, inequivalent_tokens=False, adaptive_r=None):
         if self.skip_moe:
             result_output = input
             result_output.l_aux = None
@@ -246,7 +243,9 @@ class MOELayer(torch.nn.Module):
 
         x = input.reshape(-1, original_shape[-reserve_dims:].numel())
         gctx = self.gates[gate_index]
-        a2a_ffn_overlap_degree = a2a_ffn_overlap_degree if a2a_ffn_overlap_degree is not None else self.a2a_ffn_overlap_degree
+        if a2a_ffn_overlap_degree is not None:
+            self.a2a_ffn_overlap_degree = a2a_ffn_overlap_degree
+        a2a_ffn_overlap_degree = self.a2a_ffn_overlap_degree
 
         def routing():
             logits = gctx(x)
@@ -279,7 +278,10 @@ class MOELayer(torch.nn.Module):
 
         y = fast_encode(x.to(logits_dtype), crit, self.is_postscore).to(x.dtype)
 
-        if self.force_data_parallel:
+        if adaptive_r is not None:
+            self.adaptive_degree = adaptive_r
+
+        if self.adaptive_degree == 0:
             y = self.expert_local(y, original_shape[-reserve_dims:])
         else:
             if self.auto_parallel:
