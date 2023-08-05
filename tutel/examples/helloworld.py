@@ -34,6 +34,9 @@ parser.add_argument('--checkpoint_path', type=str, default='')
 parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
 parser.add_argument('--use_2dh', default=False, action='store_true')
 parser.add_argument('--eval', default=False, action='store_true')
+parser.add_argument('--capacity_factor', type=float, default=1.0)  # 0.0 for dMoE (dropless-MoE), negative for no-padded capacity.
+parser.add_argument('--megablocks_size', type=int, default=1)
+
 args = parser.parse_args()
 
 parallel_env = system.init_data_model_parallel(backend='nccl' if args.device == 'cuda' else 'gloo')
@@ -66,7 +69,7 @@ class ExampleModel(torch.nn.Module):
         super().__init__()
 
         self._moe_layer = tutel_moe.moe_layer(
-            gate_type = {'type': 'top', 'k': top_value, 'fp32_gate': args.fp32_gate},
+            gate_type = {'type': 'top', 'k': top_value, 'fp32_gate': args.fp32_gate, 'capacity_factor': args.capacity_factor},
             experts = {'type': 'ffn', 'count_per_node': num_local_experts, 'hidden_size_per_expert': hidden_size, 'activation_fn': lambda x: F.relu(x)},
             model_dim = model_dim,
             scan_expert_func = lambda name, param: setattr(param, 'skip_allreduce', True),
@@ -82,7 +85,10 @@ class ExampleModel(torch.nn.Module):
         dist_print('[Statistics] param count for MoE local_experts = %s, param count for MoE gate = %s.\n' % (local_count, shared_count))
 
     def forward(self, input):
-        result = self._moe_layer(input)
+        if args.megablocks_size > 0:
+          result = self._moe_layer(input, megablocks_size=args.megablocks_size)
+        else:
+          result = self._moe_layer(input)
         result = F.log_softmax(torch.sum(result, dim=2), dim=1)
         return result
 

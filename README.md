@@ -7,6 +7,41 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation.
 - Supported CPU: fp64/fp32
 
 
+### What's New:
+
+- Tutel v0.3: Add Megablocks solution to improve decoder inference on single-GPU with num_local_expert >= 2:
+```py
+  >> Example (capacity_factor=0 for dropless-MoE):
+    # Using BatchMatmul:
+    python3 -m tutel.examples.helloworld --megablocks_size=0 --batch_size=1 --num_tokens=32 --top=1 --eval --num_local_experts=128 --capacity_factor=0
+    # Using Megablocks with block_size = 1:
+    python3 -m tutel.examples.helloworld --megablocks_size=1 --batch_size=1 --num_tokens=32 --top=1 --eval --num_local_experts=128 --capacity_factor=0
+    # Using Megablocks with block_size = 2:
+    python3 -m tutel.examples.helloworld --megablocks_size=2 --batch_size=1 --num_tokens=32 --top=1 --eval --num_local_experts=128 --capacity_factor=0
+
+  >> How to:
+    self._moe_layer.forward(x, .., megablocks_size=1)         # Control the switch of megablocks_size (0 for disabled)
+```
+
+- Tutel v0.2: Allow most configurations to be dynamic switchable with free cost:
+```py
+  >> Example:
+    python3 -m torch.distributed.run --nproc_per_node=8 -m tutel.examples.helloworld_switch --batch_size=16
+
+  >> How to:
+    self._moe_layer.forward(x, .., a2a_ffn_overlap_degree=2)  # Control the switch of overlap granularity (1 for no overlapping)
+    self._moe_layer.forward(x, .., adaptive_r=1)              # Control the switch of parallelism (0 for DP, 1 for DP + EP, W / E for MP + EP, else for DP + MP + EP)
+    self._moe_layer.forward(x, .., capacity_factor=1)         # Control the switch of capacity_volume (positive for padding, negative for no-padding, 0 for dropless)
+    self._moe_layer.forward(x, .., top_k=1)                   # Control the switch of top_k sparsity
+```
+
+- Tutel v0.1: Optimize the Einsum Complexity of Data Dispatch Encoding and Decoding, add 2DH option to deal with All-to-All at scale:
+```py
+  >> Example (suggest enabling 2DH only at scale):
+    python3 -m torch.distributed.run --nproc_per_node=8 -m tutel.examples.helloworld_switch --batch_size=16 --use_2dh=1
+```
+
+
 How to setup Tutel MoE for Pytorch and [run examples](tutel/examples), or [enable fairseq with MoE](tutel/examples/fairseq_moe):
 ```
 * Recommended Pytorch (minimize version == 1.8.0):
@@ -48,15 +83,11 @@ How to setup Tutel MoE for Pytorch and [run examples](tutel/examples), or [enabl
         $ python3 ./tutel/examples/helloworld.py --batch_size=16
         ..
 
-* Switch Test using single-node 8 GPUs:
-
-        $ python3 -m torch.distributed.launch --nproc_per_node=8 -m tutel.examples.helloworld_switch --batch_size=16
-
 * Run Tutel MoE in Distributed Mode:
 
         (Method A - Torch launcher for `Multi-Node x Multi-GPU`:)
-        $ ssh <node-ip-0> python3 -m torch.distributed.launch --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=<node-ip-0> -m tutel.examples.helloworld --batch_size=16
-        $ ssh <node-ip-1> python3 -m torch.distributed.launch --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=<node-ip-0> -m tutel.examples.helloworld --batch_size=16
+        $ ssh <node-ip-0> python3 -m torch.distributed.run --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=<node-ip-0> -m tutel.examples.helloworld --batch_size=16
+        $ ssh <node-ip-1> python3 -m torch.distributed.run --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=<node-ip-0> -m tutel.examples.helloworld --batch_size=16
 
         (Method B - Tutel launcher for `Multi-Node x Multi-GPU`, requiring package `openmpi-bin`:)
         # << Single Node >>

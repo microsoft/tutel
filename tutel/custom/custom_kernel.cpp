@@ -11,6 +11,7 @@
 #include <cuda_fp16.h>
 #include <cuda.h>
 #include <nvrtc.h>
+#include <ATen/cuda/CUDAContext.h>
 #else
 #undef USE_NCCL
 #endif
@@ -777,7 +778,25 @@ extern "C" __global__ void cumsum_fn(int* input0 /* (num_samples, batch_num) */,
   return y;
 }
 
+torch::Tensor warp_sparse_bmm_infer(const torch::Tensor &x, const torch::Tensor &w, const torch::Tensor &sparse_groups_device, bool w_transpose, int64_t sparse_size) {
+  auto sparse_groups = sparse_groups_device.cpu().to(torch::kInt32);
+  auto group_ptr = ((int*)sparse_groups.data_ptr());
+
+  auto y = torch::empty({x.size(0), x.size(1), w_transpose ? w.size(1) : w.size(2)}, torch::TensorOptions().dtype(x.dtype()).device(x.device()));
+
+  // auto hCublas = at::cuda::getCurrentCUDABlasHandle();  -- Wait Pytorch to add builtin support for cublasSgemmBatched()
+  for (int i = 0; i < sparse_groups.size(0); ++i) {
+    int group_size = group_ptr[i];
+    if (group_size > 0) {
+      auto y_sub = y.select(0, i).narrow(0, 0, int(group_size * sparse_size));
+      torch::matmul_out(y_sub, x.select(0, i).narrow(0, 0, int(group_size * sparse_size)), w_transpose ? w.select(0, i).t() : w.select(0, i));
+    }
+  }
+  return y;
+}
+
 TORCH_LIBRARY(tutel_ops, m) {
   m.def("cumsum", warp_cumsum);
+  m.def("sparse_bmm_infer", warp_sparse_bmm_infer);
 }
 #endif
