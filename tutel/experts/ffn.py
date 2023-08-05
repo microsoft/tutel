@@ -57,6 +57,19 @@ class FusedExpertsNetwork(torch.nn.Module):
         batched_fc1_bias = self.batched_fc1_bias.unsqueeze(1)
         batched_fc2_bias = self.batched_fc2_bias.unsqueeze(1)
 
+        # Implementation of https://arxiv.org/pdf/2211.15841.pdf in Tutel v0.3.x
+        #   which benifits decoder inference on single-GPU if num_local_experts >= 2
+        if ctx.megablocks_size > 0:
+            sparse_size = ctx.megablocks_size
+            sparse_groups = torch.div(ctx.dispatch_count + (sparse_size - 1), sparse_size, rounding_mode='floor')
+            sparse_groups = torch.minimum(sparse_groups, torch.tensor(x.size(1) // sparse_size, dtype=torch.int32, device=x.device))
+            y = torch.ops.tutel_ops.sparse_bmm_infer(x, batched_fc1_w, sparse_groups, True, sparse_size)
+            y = torch.add(y, batched_fc1_bias)
+            y = self.activation_fn(y)
+            y = torch.ops.tutel_ops.sparse_bmm_infer(y, batched_fc2_w, sparse_groups, False, sparse_size)
+            y = torch.add(y, batched_fc2_bias)
+            return y
+
         if ctx.adaptive_degree == 0:
             batched_fc1_w = net.zero_gather(batched_fc1_w, group=ctx.group).view(ctx.num_global_experts, -1, batched_fc1_w.size(2))
             batched_fc2_w = net.zero_gather(batched_fc2_w, group=ctx.group).view(ctx.num_global_experts, -1, batched_fc2_w.size(2))

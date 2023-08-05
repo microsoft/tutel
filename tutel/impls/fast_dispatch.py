@@ -170,6 +170,9 @@ def extract_critical(scores, top_k, loss_fn=losses.gshard_loss, capacity_factor=
         if normalize_gate:
             denom_s = torch.clamp(sum(gates_s), min=torch.finfo(gates_s[0].dtype).eps)
             gates_s = [x / denom_s for x in gates_s]
+    else:
+        locations2 = locations1
+    locations2 = locations2[-1] + 1
 
     indices_s = [x.to(torch.int32) for x in indices_s]
 
@@ -183,8 +186,8 @@ def extract_critical(scores, top_k, loss_fn=losses.gshard_loss, capacity_factor=
     if capacity_factor > 0:
         capacity = top_k * int(capacity_factor * samples_per_expert)
     else:
-        capacity = torch.max(torch.cat(locations_s, dim=0))
-        capacity = int(simple_all_reduce(capacity, group=group, op=torch.distributed.ReduceOp.MAX)) + 1
+        capacity = locations2.max()
+        capacity = int(simple_all_reduce(capacity, group=group, op=torch.distributed.ReduceOp.MAX))
         if capacity_factor < 0:
             capacity = min(capacity, top_k * int(-capacity_factor * samples_per_expert))
 
@@ -195,16 +198,19 @@ def extract_critical(scores, top_k, loss_fn=losses.gshard_loss, capacity_factor=
     if get_world_rank(group) == 0:
         logging.info(f"Capacity = {capacity}, real-time capacity-factor for top-{top_k_original} = {capacity / (top_k * samples_per_expert)}")
 
-    return (num_global_experts, indices_s, locations_s, gates_s, capacity), l_loss
+    return (num_global_experts, indices_s, locations_s, gates_s, capacity, locations2), l_loss
+
+def get_dispatch_count(critial_data):
+    return critial_data[-1]
 
 def fast_encode(data, critial_data, is_postscore=True):
     num_global_experts = critial_data[0]
     dispatcher = TutelMoeFastDispatcher(num_global_experts, 0, data.size(-1), data.dtype)
-    dispatcher.update(*critial_data[1:], is_postscore=is_postscore)
+    dispatcher.update(*critial_data[1:-1], is_postscore=is_postscore)
     return dispatcher.encode(data).view(num_global_experts, -1, data.size(-1))
 
 def fast_decode(data, critial_data, is_postscore=True):
     num_global_experts = critial_data[0]
     dispatcher = TutelMoeFastDispatcher(num_global_experts, 0, data.size(-1), data.dtype)
-    dispatcher.update(*critial_data[1:], is_postscore=is_postscore)
+    dispatcher.update(*critial_data[1:-1], is_postscore=is_postscore)
     return dispatcher.decode(data).view(-1, data.size(-1))

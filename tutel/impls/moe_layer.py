@@ -18,7 +18,7 @@ from torch.nn import ModuleList
 import torch.nn.functional as F
 
 from ..impls import communicate as C
-from ..impls.fast_dispatch import fast_encode, fast_decode, extract_critical
+from ..impls.fast_dispatch import fast_encode, fast_decode, extract_critical, get_dispatch_count
 from ..impls.overlap import a2a_ffn_overlap_forward
 from . import losses
 
@@ -216,7 +216,7 @@ class MOELayer(torch.nn.Module):
         self.protected_shape = y.shape
         return y.reshape(y.size(0), y.size(1), -1)
 
-    def forward(self, input: Tensor, gate_index=0, capacity_factor=None, top_k=None, a2a_ffn_overlap_degree=None, reserve_dims=1, inequivalent_tokens=False, adaptive_r=None):
+    def forward(self, input: Tensor, gate_index=0, capacity_factor=None, top_k=None, a2a_ffn_overlap_degree=None, reserve_dims=1, inequivalent_tokens=False, adaptive_r=None, megablocks_size=0):
         if self.skip_moe:
             result_output = input
             result_output.l_aux = None
@@ -234,6 +234,12 @@ class MOELayer(torch.nn.Module):
             self.a2a_ffn_overlap_degree = a2a_ffn_overlap_degree
         a2a_ffn_overlap_degree = self.a2a_ffn_overlap_degree
 
+        top_k = top_k or gctx.top_k
+
+        if megablocks_size > 0:
+            if self.num_local_experts <= 1 or torch.is_grad_enabled() or self.world_size > 1:
+                megablocks_size = 0
+
         def routing():
             logits = gctx(x)
 
@@ -249,14 +255,17 @@ class MOELayer(torch.nn.Module):
                 _loss_fn = lambda gates, topk_ids: losses.load_importance_loss(
                     F.softmax(logits, dim=1), logits_w_noise.gather(index=topk_ids, dim=1),
                     self.num_global_experts, gctx.gate_noise)
+
+            mega_up = max(megablocks_size, 1)
+
             return logits.dtype, extract_critical(scores,
-                top_k = gctx.top_k if top_k is None else top_k,
+                top_k = top_k,
                 loss_fn = _loss_fn,
-                capacity_factor = gctx.capacity_factor if capacity_factor is None else capacity_factor,
+                capacity_factor = capacity_factor or gctx.capacity_factor,
                 batch_prioritized_routing = self.batch_prioritized_routing,
                 normalize_gate = self.normalize_gate,
                 group = self.group,
-                alignment = self.sharded_count * a2a_ffn_overlap_degree,
+                alignment = (self.sharded_count * a2a_ffn_overlap_degree + mega_up - 1) // mega_up * mega_up,
                 inequivalent_tokens = inequivalent_tokens,
             )
 
@@ -267,6 +276,8 @@ class MOELayer(torch.nn.Module):
         else:
             logits_dtype, (crit, l_aux) = routing()
 
+        self.megablocks_size = megablocks_size
+        self.dispatch_count = get_dispatch_count(crit)
         y = fast_encode(x.to(logits_dtype), crit, self.is_postscore).to(x.dtype)
 
         if adaptive_r is not None:
