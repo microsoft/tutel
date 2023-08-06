@@ -37,8 +37,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation.
 
 - Tutel v0.1: Optimize the Einsum Complexity of Data Dispatch Encoding and Decoding, add 2DH option to deal with All-to-All at scale:
 ```py
-  >> Example (suggest enabling 2DH only at scale):
-    python3 -m torch.distributed.run --nproc_per_node=8 -m tutel.examples.helloworld_switch --batch_size=16 --use_2dh=1
+  >> Example (suggest enabling 2DH only at scale, note that the value of --nproc_per_node MUST equal to total physical GPU counts per node, e.g. 8 for A100x8):
+    python3 -m torch.distributed.run --nproc_per_node=8 -m tutel.examples.helloworld --batch_size=16 --use_2dh
 ```
 
 
