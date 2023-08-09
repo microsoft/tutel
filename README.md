@@ -42,24 +42,20 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation.
 ```
 
 
-How to setup Tutel MoE for Pytorch and [run examples](tutel/examples), or [enable fairseq with MoE](tutel/examples/fairseq_moe):
+### How to setup Tutel MoE for Pytorch 2 and [run examples](tutel/examples), or [enable fairseq with MoE](tutel/examples/fairseq_moe):
 ```
-* Recommended Pytorch (minimize version == 1.8.0):
-        #   Pytorch for NVIDIA CUDA >= 10.2:
-        python3 -m pip install --user torch==1.10.0+cu102 torchvision==0.11.1+cu102 -f https://download.pytorch.org/whl/torch_stable.html
-        #   Pytorch for NVIDIA CUDA >= 11.3:
-        python3 -m pip install --user torch==1.10.0+cu113 torchvision==0.11.1+cu113 -f https://download.pytorch.org/whl/torch_stable.html
-        #   Pytorch for AMD ROCm == 4.2:
-        python3 -m pip install --user torch==1.10.0+rocm4.2 torchvision==0.11.1+rocm4.2 -f https://download.pytorch.org/whl/torch_stable.html
-        #   Pytorch for CPU:
-        python3 -m pip install --user torch==1.10.0+cpu torchvision==0.11.1+cpu -f https://download.pytorch.org/whl/torch_stable.html
-        #   Windows Pytorch for NVIDIA CUDA >= 10.2:
-        python3 -m pip install torch==1.10.0+cu102 --extra-index-url https://download.pytorch.org/whl/cu102
+* Prepare Recommended Pytorch >= 2.0.0 (minimize version == 1.8.0):
+        #  Windows/Linux Pytorch for NVIDIA CUDA >= 11.7:
+        python3 -m pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/cu117
+        #  Linux Pytorch for AMD ROCm == 5.4.2:
+        python3 -m pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/rocm5.4.2
+        #  Windows/Linux Pytorch for CPU:
+        python3 -m pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/cpu
 
 * Install Tutel Online:
 
         $ python3 -m pip uninstall tutel -y
-        $ python3 -m pip install --verbose --user --upgrade git+https://github.com/microsoft/tutel@main
+        $ python3 -m pip install --verbose --upgrade git+https://github.com/microsoft/tutel@main
 
 * Build Tutel from Source:
 
@@ -104,7 +100,7 @@ How to setup Tutel MoE for Pytorch and [run examples](tutel/examples), or [enabl
 
 ```
 
-#### How to convert checkpoint files that adapt to different distributed world sizes:
+### How to convert checkpoint files that adapt to different distributed world sizes:
 ```
 # Firstly, using 2 GPUs to train a model with 16 global experts (each GPU holds 8 local experts), saving checkpoint files in the end:
 mpiexec -bind-to none -host localhost -x LOCAL_SIZE=2 python3 -m tutel.launcher.run -m tutel.examples.helloworld --num_local_experts=8 --checkpoint=./states/{rank}-of-{size}.ckpt --device=cuda
@@ -127,7 +123,7 @@ mpiexec -bind-to none -host localhost -x LOCAL_SIZE=32 python3 -m tutel.launcher
 
 ```
 
-#### How to import Tutel-optimized MoE in Pytorch:
+### How to import Tutel-optimized MoE in Pytorch:
 ```
 # Input Example:
 import torch
@@ -162,7 +158,7 @@ y = moe_layer(x)
 print(y)
 ```
 
-#### Usage of MOELayer:
+### Usage of MOELayer:
 ```
 * Usage of MOELayer Args:
 
@@ -188,16 +184,7 @@ print(y)
         activation_fn    : the custom-defined activation function between two linear layers (used for type == 'ffn' only)
 ```
 
-#### For Deepspeed MoE Acceleration (Deepspeed MoE Top-1 Gate has integrated Tutel acceleration):
-```sh
-# Without Tutel optimization:
-python3 -m tutel.examples.helloworld_deepspeed --top=1
-
-# With Tutel optimization:
-python3 -m tutel.examples.helloworld_deepspeed --top=1 --use_tutel
-```
-
-## Reference
+### Reference
 You can consult this [paper](https://arxiv.org/pdf/2206.03382.pdf) below to get to know more technical details about Tutel:
 ```
 @article {tutel,
@@ -211,7 +198,7 @@ url = {https://arxiv.org/pdf/2206.03382.pdf},
 }
 ```
 
-## Contributing
+### Contributing
 
 This project welcomes contributions and suggestions.  Most contributions require you to agree to a
 Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us
@@ -225,7 +212,7 @@ This project has adopted the [Microsoft Open Source Code of Conduct](https://ope
 For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
 contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
 
-## Trademarks
+### Trademarks
 
 This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft 
 trademarks or logos is subject to and must follow 
