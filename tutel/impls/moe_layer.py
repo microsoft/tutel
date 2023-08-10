@@ -70,10 +70,14 @@ class MOELayer(torch.nn.Module):
             assert buff_name in state_dict, "Could not find parameter `%s` in state_dict." % buff_name
             if state_dict[buff_name].numel() == param.numel():
                 state_dict[buff_name] = state_dict[buff_name].view(param.shape)
+
+        self._num_global_experts = state_dict.pop('_num_global_experts')
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     def state_dict(self, destination=None, prefix='', keep_vars=False):
-        return super().state_dict(destination, prefix, keep_vars)
+        state_dict = super().state_dict(destination, prefix, keep_vars)
+        state_dict['_num_global_experts'] = self._num_global_experts
+        return state_dict
 
     @property
     def num_global_experts(self):
@@ -112,7 +116,7 @@ class MOELayer(torch.nn.Module):
         self.skip_moe = (int(os.environ.get('SKIP_MOE', '0')) != 0)
 
         self.num_local_experts = experts.pop('count_per_node', 1)
-        self.register_buffer('_num_global_experts', torch.tensor(MOELayer.global_expert_count(self.num_local_experts, self.group)))
+        self._num_global_experts = MOELayer.global_expert_count(self.num_local_experts, self.group)
 
         self.world_size = C.get_world_size(self.group)
         if self.num_global_experts < self.world_size:
@@ -167,9 +171,10 @@ class MOELayer(torch.nn.Module):
                 assert 'fused_custom_fn' not in experts, "`fused_custom_fn` option for Tutel Moe-layer has been deprecated, please follows helloworld_from_scratch.py for custom construction instead."
                 assert 'implicit_dropout_p' not in experts, "`implicit_dropout_p` option for Tutel Moe-layer has been deprecated, please use torch.nn.Dropout(p=implicit_dropout_p) on custom activation_fn (for fc1_dropout) and after Tutel Moe-layer (for fc2_dropout) instead."
 
+            experts['model_dim'] = self.model_dim
+            experts['local_experts'] = self.num_local_experts
+            experts['sharded_count'] = self.sharded_count
             self.experts = fused_experts.ExpertModule(**experts)
-
-        self.experts.update(self)
 
         if scan_expert_func is not None:
             for n, p in self.experts.named_parameters():
