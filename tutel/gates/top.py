@@ -18,11 +18,8 @@ class LinearTopKGate(torch.nn.Module):
                 raise Exception('Unrecognized argument provided to Gating module: %s' % opt)
 
     def forward(self, x):
-        if self.fp32_gate:
-            x = x.float()
-            wg = self.wg.float()
-        else:
-            wg = self.wg
-        return wg(x)
+        wg = self.wg.float() if self.fp32_gate else self.wg
+        return wg(x.to(dtype=wg.weight.dtype))
+
 
 Gate = LinearTopKGate

@@ -23,6 +23,22 @@ from ..impls.overlap import a2a_ffn_overlap_forward
 from . import losses
 
 
+def cast_if_autocast_enabled(tensor):
+    if torch.is_autocast_enabled():
+        # casts inputs to autocast dtype which enables all2all to be done in low precision
+        if tensor.device.type == 'cuda':
+            dtype = torch.get_autocast_gpu_dtype()
+        elif tensor.device.type == 'cpu':
+            dtype = torch.get_autocast_cpu_dtype()
+        elif tensor.device.type == 'xpu':
+            dtype = torch.xpu.get_autocast_xpu_dtype()  # type: ignore[attr-defined]
+        elif tensor.device.type == 'hpu':
+            dtype = torch.hpu.get_autocast_hpu_dtype()  # type: ignore[attr-defined]
+        else:
+            raise RuntimeError('User specified autocast device_type must be \'cuda\' or \'cpu\'')
+        return tensor.to(dtype=dtype)
+
+
 class MOELayer(torch.nn.Module):
     """Tutel optimized MOELayer
     """
@@ -226,9 +242,12 @@ class MOELayer(torch.nn.Module):
         assert len(original_shape) >= 2, "Input data must be at least 2D tensor: (s)amples, .., (m)odel_dim"
 
         x = input.reshape(-1, original_shape[-reserve_dims:].numel())
-        for p in self.experts.parameters():
-            x = x.to(p.dtype)
-            break
+        if torch.is_autocast_enabled():
+            x = cast_if_autocast_enabled(x)
+        else:
+            for p in self.experts.parameters():
+                x = x.to(p.dtype)
+                break
         gctx = self.gates[gate_index]
         if a2a_ffn_overlap_degree is not None:
             self.a2a_ffn_overlap_degree = a2a_ffn_overlap_degree
