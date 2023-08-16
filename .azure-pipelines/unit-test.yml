@@ -2,7 +2,6 @@
 # Licensed under the MIT license.
 
 trigger:
-  - v0.1.x
   - main
 
 pool:
