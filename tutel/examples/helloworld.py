@@ -35,7 +35,7 @@ parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_availa
 parser.add_argument('--use_2dh', default=False, action='store_true')
 parser.add_argument('--eval', default=False, action='store_true')
 parser.add_argument('--capacity_factor', type=float, default=1.0)  # 0.0 for dMoE (dropless-MoE), negative for no-padded capacity.
-parser.add_argument('--megablocks_size', type=int, default=1)
+parser.add_argument('--megablocks_size', type=int, default=0)
 
 args = parser.parse_args()
 
