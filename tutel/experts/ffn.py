@@ -37,10 +37,14 @@ class FusedExpertsNetwork(torch.nn.Module):
     def reset_parameters(self):
         with torch.no_grad():
             for i in range(self.batched_fc1_w.size(0)):
-                fc1 = torch.nn.Linear(self.model_dim, self.hidden_size)
-                fc2 = torch.nn.Linear(self.hidden_size, self.output_dim)
-                self.batched_fc1_w[i], self.batched_fc2_bias[i] = fc1.weight, fc1.bias
-                self.batched_fc2_w[i], self.batched_fc2_bias[i] = fc2.weight.t(), fc2.bias[:self.batched_fc2_bias.size(-1)]
+                fc1 = torch.nn.Linear(self.model_dim, self.hidden_size, bias=self.batched_fc1_bias is not None)
+                fc2 = torch.nn.Linear(self.hidden_size, self.output_dim, bias=self.batched_fc2_bias is not None)
+                self.batched_fc1_w[i] = fc1.weight
+                if self.batched_fc1_bias is not None:
+                    self.batched_fc1_bias[i] = fc1.bias
+                self.batched_fc2_w[i] = fc2.weight.t()
+                if self.batched_fc2_bias is not None:
+                    self.batched_fc2_bias[i] = fc2.bias[:self.batched_fc2_bias.size(-1)]
 
     def extra_repr(self):
         return 'model_dim=%d, hidden_size=%d, output_dim=%d, local_experts=%d. has bias=%s.' % (
