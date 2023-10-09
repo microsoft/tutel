@@ -47,7 +47,7 @@ class FusedExpertsNetwork(torch.nn.Module):
                     self.batched_fc2_bias[i] = fc2.bias[:self.batched_fc2_bias.size(-1)]
 
     def extra_repr(self):
-        return 'model_dim=%d, hidden_size=%d, output_dim=%d, local_experts=%d. has bias=%s.' % (
+        return 'model_dim=%d, hidden_size=%d, output_dim=%d, local_experts=%d. has_bias=%s.' % (
             self.batched_fc1_w.size(2), self.batched_fc1_w.size(1), self.batched_fc2_w.size(2), self.batched_fc1_w.size(0), self.batched_fc1_bias is not None
         )
 
