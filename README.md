@@ -182,6 +182,7 @@ print(y)
         type             : available built-in experts implementation, e.g: ffn
         hidden_size_per_expert : the hidden size between two linear layers for each expert (used for type == 'ffn' only)
         activation_fn    : the custom-defined activation function between two linear layers (used for type == 'ffn' only)
+        bias             : If set to False, the expert bias parameters (`batched_fc1_bias`` and `batched_fc2_bias``) are disabled. Default: True
 ```
 
 ### Reference
