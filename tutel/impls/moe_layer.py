@@ -67,7 +67,9 @@ class MOELayer(torch.nn.Module):
 
         for name, param in self.experts.named_parameters():
             buff_name = prefix + 'experts.' + name
-            assert buff_name in state_dict, "Could not find parameter `%s` in state_dict." % buff_name
+            if buff_name not in state_dict:
+                logging.warning("Could not find parameter `%s` in state_dict, zero values will be filled into this parameter." % buff_name)
+                state_dict[buff_name] = torch.zeros_like(param)
             if state_dict[buff_name].numel() == param.numel():
                 state_dict[buff_name] = state_dict[buff_name].view(param.shape)
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
