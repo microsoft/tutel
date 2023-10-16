@@ -29,7 +29,7 @@ class FusedExpertsNetwork(torch.nn.Module):
              self.batched_fc1_bias = torch.nn.Parameter(torch.empty(local_experts, self.hidden_size))
         else:
              self.register_parameter('batched_fc1_bias', None)
-        if has_fc2_bias: 
+        if has_fc2_bias:
             self.batched_fc2_bias = torch.nn.Parameter(torch.empty(local_experts, (self.output_dim + sharded_count - 1) // sharded_count))
         else:
             self.register_parameter('batched_fc2_bias', None)
