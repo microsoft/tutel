@@ -5,7 +5,7 @@ import torch
 from .. import net
 
 class FusedExpertsNetwork(torch.nn.Module):
-    def __init__(self, model_dim, hidden_size_per_expert, local_experts, sharded_count, activation_fn=None, activation_fn_with_self=None, output_dim=None, bias=True):
+    def __init__(self, model_dim, hidden_size_per_expert, local_experts, sharded_count, activation_fn=None, activation_fn_with_self=None, output_dim=None, has_fc1_bias=True, has_fc2_bias=True):
         super().__init__()
         self.skip_expert = (int(torch.os.environ.get('SKIP_EXPERT', '0')) != 0)
         assert hidden_size_per_expert % sharded_count == 0, f"Can't evenly divide hidden_size_per_expert ({hidden_size_per_expert}) to {sharded_count} slices."
@@ -25,11 +25,13 @@ class FusedExpertsNetwork(torch.nn.Module):
 
         self.batched_fc1_w = torch.nn.Parameter(torch.empty(local_experts, self.hidden_size, model_dim))
         self.batched_fc2_w = torch.nn.Parameter(torch.empty(local_experts, self.hidden_size, self.output_dim))
-        if bias:
-            self.batched_fc1_bias = torch.nn.Parameter(torch.empty(local_experts, self.hidden_size))
+        if has_fc1_bias:
+             self.batched_fc1_bias = torch.nn.Parameter(torch.empty(local_experts, self.hidden_size))
+        else:
+             self.register_parameter('batched_fc1_bias', None)
+        if has_fc2_bias:
             self.batched_fc2_bias = torch.nn.Parameter(torch.empty(local_experts, (self.output_dim + sharded_count - 1) // sharded_count))
         else:
-            self.register_parameter('batched_fc1_bias', None)
             self.register_parameter('batched_fc2_bias', None)
 
         self.reset_parameters()
@@ -47,8 +49,9 @@ class FusedExpertsNetwork(torch.nn.Module):
                     self.batched_fc2_bias[i] = fc2.bias[:self.batched_fc2_bias.size(-1)]
 
     def extra_repr(self):
-        return 'model_dim=%d, hidden_size=%d, output_dim=%d, local_experts=%d. has bias=%s.' % (
-            self.batched_fc1_w.size(2), self.batched_fc1_w.size(1), self.batched_fc2_w.size(2), self.batched_fc1_w.size(0), self.batched_fc1_bias is not None
+        return 'model_dim=%d, hidden_size=%d, output_dim=%d, local_experts=%d. has_fc1_bias=%s, has_fc2_bias=%s.' % (
+            self.batched_fc1_w.size(2), self.batched_fc1_w.size(1), self.batched_fc2_w.size(2), self.batched_fc1_w.size(0),
+            self.batched_fc1_bias is not None, self.batched_fc2_bias is not None
         )
 
     def forward(self, x, ctx):
