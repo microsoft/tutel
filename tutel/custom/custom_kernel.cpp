@@ -323,12 +323,13 @@ template<typename dtype> static void invoke_cpu(const std::vector<torch::Tensor>
 
 #if defined(USE_NCCL)
 
-static ncclComm_t g_nccl_comm;
+static ncclComm_t g_nccl_comm, shared_nccl_comm;
 static std::vector<at::cuda::CUDAEvent> g_cuda_events;
-static int g_world_size = 0;
-static int g_world_rank = 0;
+static int g_world_size = 0, shared_world_size = 0;
+static int g_world_rank = 0, shared_world_rank = 0;
 static int g_local_size = 0;
 static int g_local_rank = 0;
+static int __dtype_size[256];
 
 // jit
 static int mem_stride_copy_char_fd = -1;
@@ -347,6 +348,33 @@ static void get_nccl_unique_id(torch::Tensor &nccl_unique_id_tensor) {
   CHECK_CPU(nccl_unique_id_tensor);
   CHECK_EQ(nccl_unique_id_tensor.nbytes(), sizeof(ncclUniqueId));
   memcpy((void *)nccl_unique_id_tensor.data_ptr(), &nccl_unique_id, sizeof(ncclUniqueId));
+}
+
+static void init_shared_nccl(
+    const torch::Tensor &nccl_unique_id_tensor,
+    int world_size,
+    int world_rank) {
+  ncclUniqueId nccl_unique_id;
+
+  CHECK_CPU(nccl_unique_id_tensor);
+  CHECK_EQ(nccl_unique_id_tensor.nbytes(), sizeof(ncclUniqueId));
+  memcpy(&nccl_unique_id, (void *)nccl_unique_id_tensor.data_ptr(), sizeof(ncclUniqueId));
+  CHECK_EQ(0, ncclGroupStart());
+  CHECK_EQ(0, ncclCommInitRank(&shared_nccl_comm, world_size, nccl_unique_id, world_rank));
+  CHECK_EQ(0, ncclGroupEnd());
+
+  shared_world_size = world_size;
+  shared_world_rank = world_rank;
+
+  __dtype_size[(int)torch::kFloat64] = 8;
+  __dtype_size[(int)torch::kInt64] = 8;
+  __dtype_size[(int)torch::kFloat32] = 4;
+  __dtype_size[(int)torch::kInt32] = 4;
+  __dtype_size[(int)torch::kFloat16] = 2;
+  __dtype_size[(int)torch::kInt16] = 2;
+  __dtype_size[(int)torch::kInt8] = 1;
+  __dtype_size[(int)torch::kUInt8] = 1;
+  __dtype_size[(int)torch::kBool] = 1;
 }
 
 static void init_nccl(
@@ -429,6 +457,63 @@ static torch::Tensor& nccl_stream_release(torch::Tensor &tensor, int idx) {
 static torch::Tensor& nccl_stream_acquire(torch::Tensor &tensor, int idx) {
   g_cuda_events[idx].block(get_nccl_stream());
   return tensor;
+}
+
+static void batch_all_to_all_v(const std::vector<torch::Tensor> &ins, const std::vector<torch::Tensor> &outs, const torch::Tensor &in_sizes_, const torch::Tensor &out_sizes_) {
+  AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
+
+  auto in_sizes_cpu = in_sizes_.to(torch::kCPU).to(torch::kInt32);
+  auto out_sizes_cpu = out_sizes_.to(torch::kCPU).to(torch::kInt32);
+  auto* in_sizes = (unsigned int*)in_sizes_cpu.data_ptr();
+  auto* out_sizes = (unsigned int*)out_sizes_cpu.data_ptr();
+  auto stream = at::cuda::getCurrentCUDAStream();
+
+  ncclGroupStart();
+  for (int k = 0; k < ins.size(); ++k) {
+    auto* in_buff = ins[k].data_ptr();
+    auto* out_buff = outs[k].data_ptr();
+    auto dtype = ins[k].dtype();
+    int size = __dtype_size[*(unsigned short*)&dtype];
+    AT_ASSERTM(size > 0, "Data type of input tensors for batch_all_to_all_v are not recognized.");
+    AT_ASSERTM(k == 0 || ins[0].numel() == ins[k].numel(), "Tensor instances within batch_all_to_all_v are supposed to share same length.");
+
+    int in_offset = 0, out_offset = 0;
+    for (int i = 0; i < shared_world_size; ++i) {
+      ncclSend((char*)in_buff + in_offset, in_sizes[i] * size, ncclInt8, i, (ncclComm_t)shared_nccl_comm, stream);
+      ncclRecv((char*)out_buff + out_offset, out_sizes[i] * size, ncclInt8, i, (ncclComm_t)shared_nccl_comm, stream);
+      in_offset += in_sizes[i] * size;
+      out_offset += out_sizes[i] * size;
+    }
+  }
+  ncclGroupEnd();
+}
+
+static void batch_all_gather_v(const std::vector<torch::Tensor> &ins, const std::vector<torch::Tensor> &outs, const torch::Tensor &out_sizes_) {
+  AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
+
+  auto out_sizes_cpu = out_sizes_.to(torch::kCPU).to(torch::kInt32);
+  auto* out_sizes = (unsigned int*)out_sizes_cpu.data_ptr();
+  auto stream = at::cuda::getCurrentCUDAStream();
+
+  ncclGroupStart();
+  for (int k = 0; k < ins.size(); ++k) {
+    auto* in_buff = ins[k].data_ptr();
+    auto* out_buff = outs[k].data_ptr();
+    auto dtype = ins[k].dtype();
+    int size = __dtype_size[*(unsigned short*)&dtype];
+    AT_ASSERTM(size > 0, "Data type of input tensors for batch_all_gather_v are not recognized.");
+    AT_ASSERTM(k == 0 || ins[0].numel() == ins[k].numel(), "Tensor instances within batch_all_gather_v are supposed to share same length.");
+
+    int out_offset = 0;
+    for (int i = 0; i < shared_world_size; ++i) {
+      if (out_sizes[shared_world_rank])
+        ncclSend((char*)in_buff, out_sizes[shared_world_rank] * size, ncclInt8, i, (ncclComm_t)shared_nccl_comm, stream);
+      if (out_sizes[i])
+        ncclRecv((char*)out_buff + out_offset, out_sizes[i] * size, ncclInt8, i, (ncclComm_t)shared_nccl_comm, stream);
+      out_offset += out_sizes[i] * size;
+    }
+  }
+  ncclGroupEnd();
 }
 
 static std::vector<torch::Tensor> nccl_all_to_all_scatter_async(
@@ -686,6 +771,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         &get_nccl_unique_id,
         "Get ncclUniqueId for NCCL initialization"
     );
+    m.def("init_shared_nccl",
+        &init_shared_nccl,
+        "NCCL initialization used for global world"
+    );
     m.def("init_nccl",
         &init_nccl,
         "NCCL initialization"
@@ -718,6 +807,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         &nccl_all_to_all_2d_async,
         "NCCL AllToAll (2D Async, In-place if 2DH A2A is enabled)"
     );
+
+    m.def("batch_all_to_all_v", &batch_all_to_all_v, "NCCL AllToAllV Batched.");
+    m.def("batch_all_gather_v", &batch_all_gather_v, "NCCL AllGatherV Batched.");
 #endif
 }
 
