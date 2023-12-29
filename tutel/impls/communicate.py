@@ -33,6 +33,7 @@ def barrier(group=None):
 
 
 TUTEL_GROUPING_CACHE = {}
+TUTEL_SHARED_NCCL = False
 TUTEL_SKIP_A2A = int(os.environ.get('SKIP_A2A', 0)) > 0
 
 def create_groups_from_world(group_count, include_init=None):
@@ -128,6 +129,25 @@ def create_groups_from_world(group_count, include_init=None):
     result.is_distributed = is_distributed
     result.dist_print = dist_print
 
+    global TUTEL_SHARED_NCCL
+    if is_distributed and not TUTEL_SHARED_NCCL and backend == 'nccl':
+        try:
+            world_size = get_world_size()
+            world_rank = get_world_rank()
+            nccl_unique_id_size = tutel_custom_kernel.get_nccl_unique_id_size()
+            nccl_unique_id = torch.zeros([nccl_unique_id_size], dtype=torch.int8).cpu()
+            if world_rank == 0:
+                tutel_custom_kernel.get_nccl_unique_id(nccl_unique_id)
+            nccl_unique_id = nccl_unique_id.cuda()
+            dist.broadcast(nccl_unique_id, 0, None)
+            tutel_custom_kernel.init_shared_nccl(
+                nccl_unique_id.cpu(),
+                world_size,
+                world_rank)
+            TUTEL_SHARED_NCCL = True
+        except:
+            pass
+
     TUTEL_GROUPING_CACHE[original_group_count] = result
     return result
 
@@ -185,6 +205,36 @@ def simple_all_gather(input, group=None):
     tensor_list = list(torch.chunk(output, chunks=world_size, dim=0))
     dist.all_gather(tensor_list=tensor_list, tensor=input.view(1, -1), group=group)
     return output.view([-1,] + list(input.shape[1:]))
+
+def batch_all_to_all_v(datas, partition_sizes, group=None):
+    assert group is None, "batched_all_to_all_v() with non-default group is not implemented in this version."
+    assert type(datas) in (tuple, list), "data type for batch_all_to_all_v() is not a list of tensors"
+    in_sizes = partition_sizes
+    if type(in_sizes) != torch.Tensor:
+        in_sizes = torch.tensor(in_sizes, dtype=torch.int32, device=datas[0].device)
+    world_size = get_world_size(group)
+    assert in_sizes.numel() == world_size
+    if world_size == 1:
+        return list(datas), in_sizes
+    out_sizes = simple_all_to_all(in_sizes, group=group)
+    datas = [data.contiguous().view(-1).cuda() for data in datas]
+    outputs = [torch.zeros([out_sizes.sum()], dtype=data.dtype, device=data.device) for data in datas]
+    tutel_custom_kernel.batch_all_to_all_v(datas, outputs, in_sizes, out_sizes)
+    return outputs, out_sizes
+
+def batch_all_gather_v(datas, group=None):
+    assert group is None, "batch_all_gather_v() with non-default group is not implemented in this version."
+    assert type(datas) in (tuple, list), "data type for batch_all_gather_v() is not a list of tensors"
+    datas = [data.contiguous().view(-1).cuda() for data in datas]
+    input_size = torch.tensor([int(datas[0].numel())], dtype=torch.int64, device=datas[0].device)
+    world_size = get_world_size(group)
+    if world_size == 1:
+        return list(datas), input_size
+    output_sizes = simple_all_gather(input_size)
+    size_int = int(output_sizes.sum())
+    outputs = [torch.zeros([size_int], dtype=data.dtype, device=data.device) for i, data in enumerate(datas)]
+    tutel_custom_kernel.batch_all_gather_v(datas, outputs, output_sizes)
+    return outputs, output_sizes
 
 class AllToAllStatus:
     initialized = False

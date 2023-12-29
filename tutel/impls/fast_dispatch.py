@@ -204,12 +204,14 @@ def get_dispatch_count(critial_data):
     return critial_data[-1]
 
 def fast_encode(data, critial_data, is_postscore=True):
+    assert data.is_contiguous(), "Input tensor for encode/decode should be in contiguous memory format."
     num_global_experts = critial_data[0]
     dispatcher = TutelMoeFastDispatcher(num_global_experts, 0, data.size(-1), data.dtype)
     dispatcher.update(*critial_data[1:-1], is_postscore=is_postscore)
     return dispatcher.encode(data).view(num_global_experts, -1, data.size(-1))
 
 def fast_decode(data, critial_data, is_postscore=True):
+    assert data.is_contiguous(), "Input tensor for encode/decode should be in contiguous memory format."
     num_global_experts = critial_data[0]
     dispatcher = TutelMoeFastDispatcher(num_global_experts, 0, data.size(-1), data.dtype)
     dispatcher.update(*critial_data[1:-1], is_postscore=is_postscore)
