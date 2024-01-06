@@ -24,7 +24,7 @@ except:
     IS_HIP_EXTENSION = False
 
 if len(sys.argv) <= 1:
-    sys.argv += ['install', '--user']
+    sys.argv += ['install']
 
 root_path = os.path.dirname(sys.argv[0])
 root_path = root_path if root_path else '.'
