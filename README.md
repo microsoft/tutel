@@ -9,6 +9,19 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation.
 
 ### What's New:
 
+- Tutel v0.3.1: Add NCCL all_to_all_v and all_gather_v for arbitrary-length message transfers:
+```py
+  >> Example:
+    # All_to_All_v:
+    python3 -m torch.distributed.run --nproc_per_node=2 --master_port=7340 -m tutel.examples.nccl_all_to_all_v
+    # All_Gather_v:
+    python3 -m torch.distributed.run --nproc_per_node=2 --master_port=7340 -m tutel.examples.nccl_all_gather_v
+
+  >> How to:
+    net.batch_all_to_all_v([t_x_cuda, t_y_cuda, ..], common_send_counts)
+    net.batch_all_gather_v([t_x_cuda, t_y_cuda, ..])
+```
+
 - Tutel v0.3: Add Megablocks solution to improve decoder inference on single-GPU with num_local_expert >= 2:
 ```py
   >> Example (capacity_factor=0 for dropless-MoE):
@@ -46,7 +59,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation.
 ```
 * Prepare Recommended Pytorch >= 2.0.0 (minimize version == 1.8.0):
         #  Windows/Linux Pytorch for NVIDIA CUDA >= 11.7:
-        python3 -m pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/cu117
+        python3 -m pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/cu118
         #  Linux Pytorch for AMD ROCm == 5.4.2:
         python3 -m pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/rocm5.4.2
         #  Windows/Linux Pytorch for CPU:
