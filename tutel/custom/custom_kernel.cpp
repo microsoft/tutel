@@ -218,6 +218,7 @@ inline static CUfunction jit_activate(int fd, int dev) {
 }
 
 static void jit_execute(const std::vector<const void*> &ppargs, int fd, int dev, const dim3 &blocks, const dim3 &threads, cudaStream_t stream = 0) {
+  CHECK_EQ(0, cudaSetDevice(dev));
   CUfunction hfunc = jit_activate(fd, dev);
   CHECK_EQ(0, cuLaunchKernel(hfunc, blocks.x, blocks.y, blocks.z, threads.x, threads.y, threads.z, 0, stream, (void**)ppargs.data(), nullptr));
 }
