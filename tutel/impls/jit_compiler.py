@@ -26,7 +26,7 @@ class JitCompiler:
     def create_raw(source):
         torch.cuda.init()
         if not hasattr(tutel_custom_kernel, 'inject_source'):
-            raise Exception('CUDA support is disabled during Tutel installation. Please configure CUDA correctly and reinstall Tutel to enable CUDA support, or report Tutel installation logs for help.')
+            raise Exception('CUDA support is disabled during Tutel installation. Please run Tutel with CPU device, or reinstall Tutel with CUDA option enabled.')
         __ctx__ = tutel_custom_kernel.inject_source(source)
 
         def func(*inputs, extra=[], blocks=[]):

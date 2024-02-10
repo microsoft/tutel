@@ -14,9 +14,11 @@ def torch_cumsum_sub_one(mask1):
   locations1 = torch.cumsum(mask1, dim=0) - 1
   return locations1
 
+has_extension = hasattr(torch.ops.tutel_ops, 'cumsum')
+
 def fast_cumsum_sub_one(data, dim=0):
   if data.dim() != 2 or dim != 0:
     raise Exception("Unimplemented fast_cumsum_sub_one() of data = %s and dim = %s" % (data.size(), dim))
-  if not data.is_cuda or not use_fast_cumsum:
+  if not data.is_cuda or not use_fast_cumsum or not has_extension:
     return torch_cumsum_sub_one(data)
   return torch.ops.tutel_ops.cumsum(data)
