@@ -132,12 +132,16 @@ def install(use_cuda, use_nccl):
         },
     )
 
-try:
-    install(use_cuda=True, use_nccl=True)
-except:
-    print('Try installing without NCCL extension..')
+if int(os.environ.get('NO_CUDA', 0)) == 1:
+    print('Installing without CUDA extension..')
+    install(use_cuda=False, use_nccl=False)
+else:
     try:
-        install(use_cuda=True, use_nccl=False)
+        install(use_cuda=True, use_nccl=True)
     except:
-        print('Try installing without CUDA extension..')
-        install(use_cuda=False, use_nccl=False)
+        print('Try installing without NCCL extension..')
+        try:
+            install(use_cuda=True, use_nccl=False)
+        except:
+            print('Try installing without CUDA extension..')
+            install(use_cuda=False, use_nccl=False)
