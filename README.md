@@ -57,18 +57,19 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation.
 
 ### How to setup Tutel MoE for Pytorch 2 and [run examples](tutel/examples), or [enable fairseq with MoE](tutel/examples/fairseq_moe):
 ```
-* Prepare Recommended Pytorch >= 2.0.0 (minimize version == 1.8.0):
+* Prepare Recommended Pytorch >= 2.0.0 (minimal version == 1.8.0):
         #  Windows/Linux Pytorch for NVIDIA CUDA >= 11.7:
-        python3 -m pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/cu118
+        python3 -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
         #  Linux Pytorch for AMD ROCm == 5.4.2:
-        python3 -m pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/rocm5.4.2
+        python3 -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm5.4.2
         #  Windows/Linux Pytorch for CPU:
-        python3 -m pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/cpu
+        python3 -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
 * Install Tutel Online:
 
         $ python3 -m pip uninstall tutel -y
-        $ python3 -m pip install --verbose --upgrade git+https://github.com/microsoft/tutel@main
+        $ python3 -m pip install setuptools wheel
+        $ python3 -m pip install -v -U --no-build-isolation git+https://github.com/microsoft/tutel@main
 
 * Build Tutel from Source:
 
