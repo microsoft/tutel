@@ -211,7 +211,9 @@ def batch_all_to_all_v(datas, partition_sizes, group=None):
     assert type(datas) in (tuple, list), "data type for batch_all_to_all_v() is not a list of tensors"
     in_sizes = partition_sizes
     if type(in_sizes) != torch.Tensor:
-        in_sizes = torch.tensor(in_sizes, dtype=torch.int32, device=datas[0].device)
+        in_sizes = torch.tensor(in_sizes, dtype=torch.int64, device=datas[0].device)
+    else:
+        in_sizes = in_sizes.to(torch.int64)
     world_size = get_world_size(group)
     assert in_sizes.numel() == world_size
     if world_size == 1:
