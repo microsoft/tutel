@@ -84,7 +84,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation.
         $ python3 -m tutel.examples.helloworld_ddp --batch_size=16           # Test Tutel-optimized MoE + Pytorch DDP distribution (requires: Pytorch >= 1.8.0)
         $ python3 -m tutel.examples.helloworld_ddp_tutel --batch_size=16     # Test Tutel-optimized MoE + Tutel DDP distribution (ZeRO on optimizors)
         $ python3 -m tutel.examples.helloworld_amp --batch_size=16           # Test Tutel-optimized MoE with AMP data type + manual distribution
-        $ python3 -m tutel.examples.helloworld_deepspeed --batch_size=16     # Test Deepspeed (0.5.6) MoE + manual distribution
+        $ python3 -m tutel.examples.helloworld_demo --batch_size=16          # Test Tutel-optimized MoE + custom defined expert layer
         $ python3 -m tutel.examples.helloworld_from_scratch                  # Test Custom MoE implementation from scratch
         $ python3 -m tutel.examples.moe_mnist                                # Test MoE layer in end-to-end MNIST dataset
         $ python3 -m tutel.examples.moe_cifar10                              # Test MoE layer in end-to-end CIFAR10 dataset

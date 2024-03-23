@@ -157,7 +157,11 @@ class MOELayer(torch.nn.Module):
 
         experts_type = experts.pop('type')
         if experts_type == 'custom':
-            self.experts = cast(ModuleList, experts['module'])
+            expert_module = experts.pop('module')
+            experts['model_dim'] = self.model_dim
+            experts['local_experts'] = self.num_local_experts
+            experts['sharded_count'] = self.sharded_count
+            self.experts = cast(ModuleList, expert_module(**experts))
         else:
             assert re.match(r'[a-zA-Z0-9\_]+', experts_type), "Expert type must only include digits, letters and underline characters."
             try:
