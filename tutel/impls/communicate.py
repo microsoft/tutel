@@ -220,7 +220,7 @@ def batch_all_to_all_v(datas, partition_sizes, group=None):
         return list(datas), in_sizes
     out_sizes = simple_all_to_all(in_sizes, group=group)
     datas = [data.contiguous().view(-1).cuda() for data in datas]
-    outputs = [torch.zeros([out_sizes.sum()], dtype=data.dtype, device=data.device) for data in datas]
+    outputs = [torch.empty([out_sizes.sum()], dtype=data.dtype, device=data.device) for data in datas]
     tutel_custom_kernel.batch_all_to_all_v(datas, outputs, in_sizes, out_sizes)
     return outputs, out_sizes
 
@@ -234,7 +234,7 @@ def batch_all_gather_v(datas, group=None):
         return list(datas), input_size
     output_sizes = simple_all_gather(input_size)
     size_int = int(output_sizes.sum())
-    outputs = [torch.zeros([size_int], dtype=data.dtype, device=data.device) for i, data in enumerate(datas)]
+    outputs = [torch.empty([size_int], dtype=data.dtype, device=data.device) for i, data in enumerate(datas)]
     tutel_custom_kernel.batch_all_gather_v(datas, outputs, output_sizes)
     return outputs, output_sizes
 
