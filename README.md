@@ -1,6 +1,6 @@
 # Tutel
 
-Tutel MoE: An Optimized Mixture-of-Experts Implementation.
+Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parallel solution proposing ["No-penalty Parallism/Sparsity/Capacity/.. Switching"](https://mlsys.org/media/mlsys-2023/Slides/2477.pdf) for modern training and inference that have dynamic behaviors.
 
 - Supported Framework: Pytorch (recommend: >= 1.10)
 - Supported GPUs: CUDA(fp64/fp32/fp16/bfp16), ROCm(fp64/fp32/fp16)
@@ -8,6 +8,24 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation.
 
 
 ### What's New:
+
+- Tutel v0.3.2: Add tensorcore option for extra benchmarks / Extend the example for custom experts / Allow NCCL timeout settings:
+```py
+  >> Example for using tensorcore:
+
+    python3 -m tutel.examples.helloworld --dtype=float32
+    python3 -m tutel.examples.helloworld --dtype=float32 --use_tensorcore
+
+    python3 -m tutel.examples.helloworld --dtype=float16
+    python3 -m tutel.examples.helloworld --dtype=float16 --use_tensorcore
+
+  >> Example for custom experts:
+    python3 -m tutel.examples.helloworld_custom_expert --batch_size=16
+
+  >> Example for NCCL timeout settings:
+    TUTEL_GLOBAL_TIMEOUT_SEC=60 python3 -m torch.distributed.run --nproc_per_node=8 -m tutel.examples.helloworld --use_tensorcore
+
+```
 
 - Tutel v0.3.1: Add NCCL all_to_all_v and all_gather_v for arbitrary-length message transfers:
 ```py
@@ -84,7 +102,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation.
         $ python3 -m tutel.examples.helloworld_ddp --batch_size=16           # Test Tutel-optimized MoE + Pytorch DDP distribution (requires: Pytorch >= 1.8.0)
         $ python3 -m tutel.examples.helloworld_ddp_tutel --batch_size=16     # Test Tutel-optimized MoE + Tutel DDP distribution (ZeRO on optimizors)
         $ python3 -m tutel.examples.helloworld_amp --batch_size=16           # Test Tutel-optimized MoE with AMP data type + manual distribution
-        $ python3 -m tutel.examples.helloworld_demo --batch_size=16          # Test Tutel-optimized MoE + custom defined expert layer
+        $ python3 -m tutel.examples.helloworld_custom_expert --batch_size=16 # Test Tutel-optimized MoE + custom defined expert layer
         $ python3 -m tutel.examples.helloworld_from_scratch                  # Test Custom MoE implementation from scratch
         $ python3 -m tutel.examples.moe_mnist                                # Test MoE layer in end-to-end MNIST dataset
         $ python3 -m tutel.examples.moe_cifar10                              # Test MoE layer in end-to-end CIFAR10 dataset
