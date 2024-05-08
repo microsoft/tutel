@@ -36,8 +36,12 @@ parser.add_argument('--use_2dh', default=False, action='store_true')
 parser.add_argument('--eval', default=False, action='store_true')
 parser.add_argument('--capacity_factor', type=float, default=1.0)  # 0.0 for dMoE (dropless-MoE), negative for no-padded capacity.
 parser.add_argument('--megablocks_size', type=int, default=0)
+parser.add_argument('--use_tensorcore', default=False, action='store_true')
 
 args = parser.parse_args()
+
+if args.use_tensorcore:
+  torch.backends.cuda.matmul.allow_tf32 = True
 
 parallel_env = system.init_data_model_parallel(backend='nccl' if args.device == 'cuda' else 'gloo')
 dist_rank, dist_world_size, dist_print = parallel_env.global_rank, parallel_env.global_size, parallel_env.dist_print
