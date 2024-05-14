@@ -37,6 +37,7 @@ parser.add_argument('--eval', default=False, action='store_true')
 parser.add_argument('--capacity_factor', type=float, default=1.0)  # 0.0 for dMoE (dropless-MoE), negative for no-padded capacity.
 parser.add_argument('--megablocks_size', type=int, default=0)
 parser.add_argument('--use_tensorcore', default=False, action='store_true')
+parser.add_argument('--expert_type', type=str, default='ffn')
 
 args = parser.parse_args()
 
@@ -74,7 +75,7 @@ class ExampleModel(torch.nn.Module):
 
         self._moe_layer = tutel_moe.moe_layer(
             gate_type = {'type': 'top', 'k': top_value, 'fp32_gate': args.fp32_gate, 'capacity_factor': args.capacity_factor},
-            experts = {'type': 'ffn', 'count_per_node': num_local_experts, 'hidden_size_per_expert': hidden_size, 'activation_fn': lambda x: F.relu(x)},
+            experts = {'type': args.expert_type, 'count_per_node': num_local_experts, 'hidden_size_per_expert': hidden_size, 'activation_fn': lambda x: F.relu(x)},
             model_dim = model_dim,
             scan_expert_func = lambda name, param: setattr(param, 'skip_allreduce', True),
             seeds = (1, dist_rank + 1, 1),
