@@ -61,9 +61,20 @@ else:
 
 
 class CustomExpertDemo(torch.nn.Module):
+
+    def _create_sharded_param(self, *full_shape, **kwargs):
+        full_shape = torch.Size(full_shape)
+        sharded_shape = (full_shape.numel() + self.sharded_count - 1) // self.sharded_count
+        return torch.nn.Parameter(torch.empty(sharded_shape, **kwargs)), full_shape
+
+    def _get_gathered_param(self, param, full_shape):
+        sharded_group = net.create_groups_from_world(group_count=-self.sharded_count).model_group
+        return net.zero_gather(param, group=sharded_group).view(-1).narrow(0, 0, full_shape.numel()).view(full_shape)
+
     def __init__(self, model_dim, local_experts, sharded_count, my_config):
         super().__init__()
-        self.W = torch.nn.Parameter(torch.empty(local_experts, model_dim, model_dim))
+        self.sharded_count = sharded_count
+        self.W, self.W_full_shape = self._create_sharded_param(local_experts, model_dim, model_dim)
         self.my_activation = torch.nn.functional.relu if my_config == 'relu' else None
         self.reset_parameters()
 
@@ -72,9 +83,8 @@ class CustomExpertDemo(torch.nn.Module):
           self.W.normal_(0, 0.001)
 
     def forward(self, x, ctx):
-        if ctx.sharded_count > 1:
-          raise Exception("`sharded_count > 1` is not implemented within this expert, Model parallel is disabled.")
-        y = torch.matmul(x, self.W)
+        W_full = self._get_gathered_param(self.W, self.W_full_shape)
+        y = torch.matmul(x, W_full)
         if self.my_activation is not None:
           y = self.my_activation(y)
         return y
