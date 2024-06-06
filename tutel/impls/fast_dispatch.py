@@ -16,12 +16,12 @@ from . import losses
 class GatingEncoder(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, config: Any, reshaped_input: Tensor, *gates_):
-        ctx.reshaped_input = reshaped_input
         ctx.config = config
         if gates_:
           ctx.gates_h2 = [x.view(-1, 1).repeat(1, 2) if x.dtype == torch.float16 else x for x in gates_]
         else:
           ctx.gates_h2 = [ctx.config.ones_helper] * len(ctx.config.indices_)
+        ctx.save_for_backward(reshaped_input)
 
         dispatched_input = torch.zeros([ctx.config.num_global_experts * ctx.config.capacity, ctx.config.model_dim], dtype=reshaped_input.dtype, device=reshaped_input.device)
         for g, i, l in zip(ctx.gates_h2, ctx.config.indices_, ctx.config.locations_):
@@ -32,8 +32,9 @@ class GatingEncoder(torch.autograd.Function):
     def backward(ctx: Any, dispatched_input: Tensor):
         dispatched_input = dispatched_input.contiguous()
         last_result = None
+        reshaped_input = ctx.saved_tensors[0]
         for g, i, l in zip(ctx.gates_h2, ctx.config.indices_, ctx.config.locations_):
-          grad_data = torch.empty(ctx.reshaped_input.shape, dtype=dispatched_input.dtype, device=dispatched_input.device)
+          grad_data = torch.empty(reshaped_input.shape, dtype=dispatched_input.dtype, device=dispatched_input.device)
           ctx.config.func_bwd_data(g, i, l, grad_data, dispatched_input, extra=[ctx.config.indices_[0].size(0), ctx.config.aligned_dim, ctx.config.capacity])
           last_result = grad_data if last_result is None else last_result + grad_data
 
@@ -41,7 +42,7 @@ class GatingEncoder(torch.autograd.Function):
         if id(ctx.gates_h2[0]) != id(ctx.config.ones_helper):
           for i, l in zip(ctx.config.indices_, ctx.config.locations_):
             grad_gates1_s = torch.empty([ctx.config.sample_size,], dtype=dispatched_input.dtype, device=dispatched_input.device)
-            ctx.config.func_bwd_gate(grad_gates1_s, i, l, ctx.reshaped_input, dispatched_input, extra=[ctx.config.indices_[0].size(0), ctx.config.aligned_dim, ctx.config.capacity])
+            ctx.config.func_bwd_gate(grad_gates1_s, i, l, reshaped_input, dispatched_input, extra=[ctx.config.indices_[0].size(0), ctx.config.aligned_dim, ctx.config.capacity])
             grad_gates.append(grad_gates1_s)
         return (None, last_result, *grad_gates)
 
@@ -49,12 +50,13 @@ class GatingEncoder(torch.autograd.Function):
 class GatingDecoder(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, config: Any, expert_output: Tensor, *gates_):
-        ctx.expert_output = expert_output
         ctx.config = config
         if gates_:
           ctx.gates_h2 = [x.view(-1, 1).repeat(1, 2) if x.dtype == torch.float16 else x for x in gates_]
         else:
           ctx.gates_h2 = [ctx.config.ones_helper] * len(ctx.config.indices_)
+
+        ctx.save_for_backward(expert_output)
 
         last_result = None
         for g, i, l in zip(ctx.gates_h2, ctx.config.indices_, ctx.config.locations_):
@@ -66,7 +68,8 @@ class GatingDecoder(torch.autograd.Function):
     @staticmethod
     def backward(ctx: Any, combined_output: Tensor):
         combined_output = combined_output.contiguous()
-        grad_expert_output = torch.zeros(ctx.expert_output.shape, dtype=combined_output.dtype, device=combined_output.device)
+        expert_output = ctx.saved_tensors[0]
+        grad_expert_output = torch.zeros(expert_output.shape, dtype=combined_output.dtype, device=combined_output.device)
         for g, i, l in zip(ctx.gates_h2, ctx.config.indices_, ctx.config.locations_):
           ctx.config.func_fwd(g, i, l, combined_output, grad_expert_output, extra=[ctx.config.indices_[0].size(0), ctx.config.aligned_dim, ctx.config.capacity])
 
@@ -74,7 +77,7 @@ class GatingDecoder(torch.autograd.Function):
         if id(ctx.gates_h2[0]) != id(ctx.config.ones_helper):
           for i, l in zip(ctx.config.indices_, ctx.config.locations_):
             grad_gates1_s = torch.empty([ctx.config.sample_size,], dtype=combined_output.dtype, device=combined_output.device)
-            ctx.config.func_bwd_gate(grad_gates1_s, i, l, combined_output, ctx.expert_output, extra=[ctx.config.indices_[0].size(0), ctx.config.aligned_dim, ctx.config.capacity])
+            ctx.config.func_bwd_gate(grad_gates1_s, i, l, combined_output, expert_output, extra=[ctx.config.indices_[0].size(0), ctx.config.aligned_dim, ctx.config.capacity])
             grad_gates.append(grad_gates1_s)
         return (None, grad_expert_output, *grad_gates)
 
