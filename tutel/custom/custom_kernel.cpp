@@ -74,7 +74,7 @@ static void update_sdk_home(const torch::Tensor &sdk_path) {
 inline std::string sdk_path(const std::string &rel = "") {
   static std::string cuda_home, cc;
   if (cuda_home.size() == 0) {
-#if !defined(__HIP_PLATFORM_HCC__)
+#if !defined(__HIP_PLATFORM_HCC__) && !defined(__HIP_PLATFORM_AMD__)
     cc = "bin/nvcc";
 #else
     cc = "bin/hipcc";
@@ -106,7 +106,7 @@ static std::string nvcc_compile(const char* code, const std::string &arch) {
   }
   pid_t  pid = fork();
   if (pid == 0) {
-#if !defined(__HIP_PLATFORM_HCC__)
+#if !defined(__HIP_PLATFORM_HCC__) && !defined(__HIP_PLATFORM_AMD__)
     CHECK_EQ(-1, execl(entry.c_str(), entry.c_str(), code_path, "-o", fatbin_path.c_str(), "--fatbin", "-O4", "-gencode", ("arch=compute_" + arch + ",code=sm_" + arch).c_str(), (char *)NULL));
 #else
     CHECK_EQ(-1, execl(entry.c_str(), entry.c_str(), code_path, "-o", fatbin_path.c_str(), "--genco", "-O4", "-w" , ("--amdgpu-target=" + arch).c_str(), (char *)NULL));
@@ -125,7 +125,7 @@ static std::string nvcc_compile(const char* code, const std::string &arch) {
 }
 
 static std::string nvrtc_compile(const char* code, const std::string &arch) {
-#if !defined(__HIP_PLATFORM_HCC__)
+#if !defined(__HIP_PLATFORM_HCC__) && !defined(__HIP_PLATFORM_AMD__)
   std::string arch_option = "--gpu-architecture=compute_" + arch, include_path = "--include-path=" + sdk_path("include");
   std::vector<const char*> param_cstrings = {"--restrict", include_path.c_str(), arch_option.c_str(), "--use_fast_math", "--extra-device-vectorization"};
 #else
@@ -177,7 +177,7 @@ inline static CUfunction jit_activate(int fd, int dev) {
     gm.hFunc.resize(dev + 1);
 
   if (gm.hFunc[dev] == nullptr) {
-#if !defined(__HIP_PLATFORM_HCC__)
+#if !defined(__HIP_PLATFORM_HCC__) && !defined(__HIP_PLATFORM_AMD__)
     int major, minor;
     CHECK_EQ(0, cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev));
     CHECK_EQ(0, cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, dev));
@@ -235,7 +235,7 @@ static int inject_source(const std::string &headless_code) {
   _gms.resize(fd + 1);
 
   auto &gm = _gms[fd];
-#if !defined(__HIP_PLATFORM_HCC__)
+#if !defined(__HIP_PLATFORM_HCC__) && !defined(__HIP_PLATFORM_AMD__)
   gm.code = "#include <cuda_runtime.h>\n#include <cuda_fp16.h>\n" + headless_code;
 #else
   gm.code = "#include <hip/hip_runtime.h>\n" + headless_code;
@@ -422,7 +422,7 @@ extern "C" __global__ void memStrideCopyKernel(
     CHECK_NE(-1, mem_stride_copy_char_fd);
     CHECK_NE(-1, mem_stride_copy_uint4_fd);
     CUfunction hfunc = jit::jit_activate(mem_stride_copy_uint4_fd, g_local_rank);
-#if !defined(__HIP_PLATFORM_HCC__)
+#if !defined(__HIP_PLATFORM_HCC__) && !defined(__HIP_PLATFORM_AMD__)
     CHECK_EQ(0, cuOccupancyMaxPotentialBlockSize(&mem_stride_copy_gridsize, &mem_stride_copy_blocksize, hfunc, 0, 0, 0));
 #else
     CHECK_EQ(0, hipModuleOccupancyMaxPotentialBlockSize(&mem_stride_copy_gridsize, &mem_stride_copy_blocksize, hfunc, 0, 0));
