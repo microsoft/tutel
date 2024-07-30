@@ -72,10 +72,14 @@ class MOELayer(torch.nn.Module):
                 state_dict[buff_name] = torch.zeros_like(param)
             if state_dict[buff_name].numel() == param.numel():
                 state_dict[buff_name] = state_dict[buff_name].view(param.shape)
+
+        self._num_global_experts = state_dict.pop('_num_global_experts')
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     def state_dict(self, destination=None, prefix='', keep_vars=False):
-        return super().state_dict(destination, prefix, keep_vars)
+        state_dict = super().state_dict(destination, prefix, keep_vars)
+        state_dict['_num_global_experts'] = self._num_global_experts
+        return state_dict
 
     @property
     def num_global_experts(self):
@@ -114,7 +118,7 @@ class MOELayer(torch.nn.Module):
         self.skip_moe = (int(os.environ.get('SKIP_MOE', '0')) != 0)
 
         self.num_local_experts = experts.pop('count_per_node', 1)
-        self.register_buffer('_num_global_experts', torch.tensor(MOELayer.global_expert_count(self.num_local_experts, self.group)))
+        self._num_global_experts = MOELayer.global_expert_count(self.num_local_experts, self.group)
 
         self.world_size = C.get_world_size(self.group)
         if self.num_global_experts < self.world_size:
