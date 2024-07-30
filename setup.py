@@ -56,7 +56,13 @@ class Tester(Command):
 
 def install(use_cuda, use_nccl):
     ext_libs = []
-    ext_args = ['-Wno-sign-compare', '-Wno-unused-but-set-variable', '-Wno-terminate', '-Wno-unused-function', '-Wno-strict-aliasing'] if pf.system() == 'Linux' else []
+    if pf.system() == 'Linux':
+        ext_args = ['-Wno-sign-compare', '-Wno-unused-but-set-variable', '-Wno-terminate', '-Wno-unused-function', '-Wno-strict-aliasing']
+    elif pf.system() == 'Darwin':
+        ext_args = ['-mmacosx-version-min=10.13']
+    else:
+        ext_args = []
+
     if not use_cuda:
         use_nccl = False
         extension = CppExtension
