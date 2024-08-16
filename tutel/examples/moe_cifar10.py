@@ -152,6 +152,7 @@ def main():
                         help='how many batches to wait before logging training status')
     parser.add_argument('--no-moe', action='store_true', default=False,
                         help='if disabling moe layer and using ffn layer instead')
+    parser.add_argument('--data-path', type=str, default="/tmp/data", help="Mention the path where you want to install the MNIST dataset.")
     args = parser.parse_args()
 
     use_cuda = torch.cuda.is_available()
@@ -173,16 +174,16 @@ def main():
     ])
 
     if int(torch.os.environ.get('LOCAL_RANK', 0)) == 0:
-        dataset1 = Net.DATASET_TARGET('/tmp/data', train=True, download=True,
+        dataset1 = Net.DATASET_TARGET(args.data_path, train=True, download=True,
                            transform=transform)
-        dataset2 = Net.DATASET_TARGET('/tmp/data', train=False,
+        dataset2 = Net.DATASET_TARGET(args.data_path, train=False,
                            transform=transform)
         net.barrier()
     else:
         net.barrier()
-        dataset1 = Net.DATASET_TARGET('/tmp/data', train=True, download=False,
+        dataset1 = Net.DATASET_TARGET(args.data_path, train=True, download=False,
                            transform=transform)
-        dataset2 = Net.DATASET_TARGET('/tmp/data', train=False,
+        dataset2 = Net.DATASET_TARGET(args.data_path, train=False,
                            transform=transform)
     net.barrier()
 
