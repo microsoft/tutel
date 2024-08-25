@@ -37,7 +37,7 @@ class LlamaFFNNetwork(torch.nn.Module):
 
         y1 = torch.matmul(x, W_fc1_full)
         y2 = torch.matmul(x, W_fc2_full)
-        y = self.activation_fn(y1 * y2)
+        y = self.activation_fn(y1) * y2
         y = torch.matmul(y, W_fc3_full)
         return y
 
