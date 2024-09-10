@@ -9,6 +9,13 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 ### What's New:
 
+- Tutel v0.3.3: Add all-to-all benchmark:
+```py
+  >> Example:
+
+    python3 -m torch.distributed.run --nproc_per_node=8 -m tutel.examples.bandwidth_test --size_mb=256
+```
+
 - Tutel v0.3.2: Add tensorcore option for extra benchmarks / Extend the example for custom experts / Allow NCCL timeout settings:
 ```py
   >> Example for using tensorcore:
