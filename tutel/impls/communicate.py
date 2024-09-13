@@ -157,11 +157,11 @@ def create_groups_from_world(group_count, include_init=None):
 def swap_axis(t, x, y):
     return t if x == y else t.swapaxes(x, y)
 
-def simple_all_reduce(input, group=None, op=torch.distributed.ReduceOp.SUM):
+def simple_all_reduce(input, group=None, op=torch.distributed.ReduceOp.SUM, inplace=False):
     world_size = get_world_size(group)
     if world_size == 1:
         return input
-    output = torch.clone(input, memory_format=torch.contiguous_format)
+    output = input if inplace else torch.clone(input, memory_format=torch.contiguous_format)
     dist.all_reduce(output, op=op, group=group)
     return output
 

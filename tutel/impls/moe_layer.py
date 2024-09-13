@@ -114,6 +114,8 @@ class MOELayer(torch.nn.Module):
         self.skip_moe = (int(os.environ.get('SKIP_MOE', '0')) != 0)
 
         self.num_local_experts = experts.pop('count_per_node', 1)
+        if self.num_local_experts == -1:
+            self.num_local_experts = 1
         self.register_buffer('_num_global_experts', torch.tensor(MOELayer.global_expert_count(self.num_local_experts, self.group)))
 
         self.world_size = C.get_world_size(self.group)

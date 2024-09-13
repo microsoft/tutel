@@ -542,7 +542,7 @@ static std::vector<torch::Tensor> nccl_all_to_all_scatter_async(
 
   std::vector<torch::Tensor> output_list(num_split);
   for (int i = 0; i < num_split; i++) {
-    output_list[i] = torch::empty(output_size, input.device(), torch::MemoryFormat::Contiguous);
+    output_list[i] = torch::empty(output_size, torch::TensorOptions().dtype(input.dtype()).device(input.device()));
   }
   // NCCL stream allocator will add blocking event to computation stream after computation kernels
   for (auto& output : output_list) {
@@ -609,7 +609,7 @@ static torch::Tensor nccl_all_to_all_gather_async(
     c10::cuda::CUDACachingAllocator::recordStream(input.storage().data_ptr(), get_nccl_stream());
   }
 
-  torch::Tensor output = torch::empty(output_size, input_list[0].device(), torch::MemoryFormat::Contiguous);
+  torch::Tensor output = torch::empty(output_size, torch::TensorOptions().dtype(input_list[0].dtype()).device(input_list[0].device()));
   size_t length = output.nbytes();
   size_t num_slices = num_slices_per_split * num_split;
   CHECK_EQ(0, length % num_slices);
