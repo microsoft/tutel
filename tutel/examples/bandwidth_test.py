@@ -17,7 +17,7 @@ args = parser.parse_args()
 parallel_env = system.init_data_model_parallel(backend='nccl' if args.device == 'cuda' else 'gloo')
 local_device = parallel_env.local_device
 
-x = torch.randn([(args.size_mb + 3) // 4 * 1024 * 1024], device=local_device, dtype=torch.float32)
+x = torch.randn([((args.size_mb + 3) // 4 * 1024 * 1024 + parallel_env.global_size - 1) // parallel_env.global_size * parallel_env.global_size], device=local_device, dtype=torch.float32)
 
 if args.device == 'cuda':
   wait = lambda: torch.cuda.synchronize() or time.perf_counter()
@@ -30,3 +30,18 @@ with torch.no_grad():
     net.simple_all_to_all(x.view(parallel_env.global_size, -1))
     t1 = wait()
     parallel_env.dist_print(f'AllToAll bandwidth across {parallel_env.global_size} node(s) = %.4f GB/s' % ((x.numel() * 4) * 1e-9 / (t1 - t0)))
+    t0 = wait()
+    net.simple_all_reduce(x.view(-1), inplace=True)
+    t1 = wait()
+    parallel_env.dist_print(f'AllReducce bandwidth across {parallel_env.global_size} node(s) = %.4f GB/s' % ((x.numel() * 4) * 1e-9 / (t1 - t0)))
+    t0 = wait()
+    net.simple_all_gather(x.view(parallel_env.global_size, -1)[parallel_env.global_rank])
+    t1 = wait()
+    parallel_env.dist_print(f'AllGather bandwidth across {parallel_env.global_size} node(s) = %.4f GB/s' % ((x.numel() * 4) * 1e-9 / (t1 - t0)))
+    t0 = wait()
+    net.simple_reduce_scatter(x.view(parallel_env.global_size, -1))
+    t1 = wait()
+    parallel_env.dist_print(f'ReduceScatter bandwidth across {parallel_env.global_size} node(s) = %.4f GB/s' % ((x.numel() * 4) * 1e-9 / (t1 - t0)))
+    parallel_env.dist_print('')
+    time.sleep(0.5)
+
