@@ -75,7 +75,7 @@ class MOELayer(torch.nn.Module):
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     def state_dict(self, destination=None, prefix='', keep_vars=False):
-        return super().state_dict(destination, prefix, keep_vars)
+        return super().state_dict(destination=destination, prefix=prefix, keep_vars=keep_vars)
 
     @property
     def num_global_experts(self):
