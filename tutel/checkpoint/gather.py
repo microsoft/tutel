@@ -5,6 +5,7 @@ import os
 import argparse
 import torch
 import re
+import warnings
 
 from tutel.system import apply_rank_size_from_pattern
 
@@ -13,6 +14,8 @@ def main():
     parser.add_argument('--input_size', type=int, required=True)
     parser.add_argument('--inputs', type=str, required=True)
     parser.add_argument('--output', type=str, required=True)
+    parser.add_argument('--namespace', type=str, default='')
+    parser.add_argument('--default_num_global_experts', type=int, default=0)
     args = parser.parse_args()
     args.size = args.input_size
 
@@ -20,17 +23,35 @@ def main():
 
     input_file = apply_rank_size_from_pattern(args.inputs, rank=0, size=args.size)
     state_dict = torch.load(input_file, map_location=torch.device('cpu'))
+    for package in args.namespace.split('/'):
+        if not package:
+            continue
+        state_dict = state_dict[package]
     for k in state_dict:
         if k.endswith('._num_global_experts'):
-             entry = k[:k.rindex('.')] + '.experts.'
-             mutate_size[entry] = int(state_dict[k])
+             entry = k[:k.rindex('.')]
+             mutate_size[entry + '.experts.'] = int(state_dict[k])
 
+    missing_keys = []
     if not mutate_size:
-        raise Exception('No any Tutel MoE layer is found, as the provided checkpoint may be in legacy format. You need to reload this legacy checkpoint by corresponding application, re-checkpoint model\'s state_dict and get the latest format.')
+        if args.default_num_global_experts <= 0:
+            raise Exception('Failed to detect Tutel MoE layer in the checkpoint,\n\tas the provided checkpoint may be in legacy format with field `_num_global_experts` missing.\nPlease try again by manually providing the designed number of total experts using: --default_num_global_experts=?')
+        else:
+            for k in state_dict:
+                if '.experts.' in k:
+                    entry = k[:k.rindex('.experts.')]
+                    mutate_size[entry + '.experts.'] = args.default_num_global_experts
+                    missing_keys += [entry]
 
     for rank in range(args.size):
         input_file = apply_rank_size_from_pattern(args.inputs, rank=rank, size=args.size)
-        state_dict = torch.load(input_file, map_location=torch.device('cpu'))
+        state_dict_ = state_dict = torch.load(input_file, map_location=torch.device('cpu'))
+        for package in args.namespace.split('/'):
+            if not package:
+                continue
+            state_dict = state_dict[package]
+        for k in missing_keys:
+            state_dict[k + '._num_global_experts'] = args.default_num_global_experts
         for k in state_dict:
             for e in mutate_size:
                 if k.startswith(e):
@@ -53,7 +74,8 @@ def main():
     for k in state_dict:
         if k in expert_dict:
             state_dict[k] = expert_dict[k]
-    torch.save(state_dict, args.output)
+    torch.save(state_dict_, args.output)
+    print(f'Model params have been collected to: {args.output}')
 
 if __name__ == "__main__":
     main()
