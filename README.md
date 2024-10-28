@@ -140,27 +140,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 ```
 
 ### How to convert checkpoint files that adapt to different distributed world sizes:
-```
-# Firstly, using 2 GPUs to train a model with 16 global experts (each GPU holds 8 local experts), saving checkpoint files in the end:
-mpiexec -bind-to none -host localhost -x LOCAL_SIZE=2 python3 -m tutel.launcher.run -m tutel.examples.helloworld --num_local_experts=8 --checkpoint=./states/{rank}-of-{size}.ckpt --device=cuda
-
-# Secondly, convert the checkpoint files (based on 2 GPUs) into a single checkpoint file containing all parameters:
-python3 -m tutel.checkpoint.gather --inputs=./states/{rank}-of-{size}.ckpt --input_size=2 --output ./model-synthetis.ckpt
-
-# Optionally, you can test the synthetis checkpoint using single CPU device, note that there will be 16 experts locally:
-python3 -m tutel.examples.helloworld --num_local_experts=16 --checkpoint=./model-synthetis.ckpt --device=cpu --eval
-
-# Next, convert the synthetis checkpoint file that adapts to distributed training using 8 GPUs:
-python3 -m tutel.checkpoint.scatter --input=./model-synthetis.ckpt --output_size=8 --outputs=./adapted-for-8-gpus/{rank}-of-{size}.ckpt
-
-# Then, using generated checkpoint files to train/eval using 8 GPUs, note that there will be 2 local experts this time:
-mpiexec -bind-to none -host localhost -x LOCAL_SIZE=8 python3 -m tutel.launcher.run -m tutel.examples.helloworld --num_local_experts=2 --checkpoint=./adapted-for-8-gpus/{rank}-of-{size}.ckpt --device=cuda
-
-# Similarly, the convertion tool also supports X global experts adapting to Y GPUs, where Y % X == 0, making num_local_experts to be -Y / X.
-python3 -m tutel.checkpoint.scatter --input=./model-synthetis.ckpt --output_size=32 --outputs=./adapted-for-32-gpus/{rank}-of-{size}.ckpt
-mpiexec -bind-to none -host localhost -x LOCAL_SIZE=32 python3 -m tutel.launcher.run -m tutel.examples.helloworld --num_local_experts=-2 --checkpoint=./adapted-for-32-gpus/{rank}-of-{size}.ckpt --device=cuda
-
-```
+Documentation has been moved [here](doc/CHECKPOINT.md).
 
 ### How to import Tutel-optimized MoE in Pytorch:
 ```

@@ -13,11 +13,16 @@ def main():
     parser.add_argument('--output_size', type=int, required=True)
     parser.add_argument('--input', type=str, required=True)
     parser.add_argument('--outputs', type=str, required=True)
+    parser.add_argument('--namespace', type=str, default='')
     args = parser.parse_args()
     args.size = args.output_size
 
-    state_dict = torch.load(args.input, map_location=torch.device('cpu'))
+    state_dict_ = state_dict = torch.load(args.input, map_location=torch.device('cpu'))
     mutate_size, expert_dict = {}, {}
+    for package in args.namespace.split('/'):
+        if not package:
+            continue
+        state_dict = state_dict[package]
 
     for k in state_dict:
         if k.endswith('._num_global_experts'):
@@ -45,6 +50,14 @@ def main():
                     raise Exception(f'Neither of "global_experts({int(shape[0])}) / args.size({args.size})" nor "args.size({args.size}) / global_experts({int(shape[0])})" is evenly divisible.')
                 expert_dict[k] = state
 
+    state_bundle = {'bundle': state_dict_}
+    last_dict, curr_dict, last_package = state_bundle, state_dict_, 'bundle'
+    for package in args.namespace.split('/'):
+        if not package:
+            continue
+        last_dict, last_package, curr_dict = curr_dict, package, curr_dict[package]
+    last_dict[last_package] = None
+
     for rank in range(args.size):
         generate_dict = dict()
         for k in state_dict:
@@ -54,7 +67,9 @@ def main():
                 generate_dict[k] = expert_dict[k][rank, :].contiguous().clone()
 
         output_file = apply_rank_size_from_pattern(args.outputs, rank=rank, size=args.size)
-        torch.save(generate_dict, output_file)
+        last_dict[last_package] = generate_dict
+        torch.save(state_bundle['bundle'], output_file)
+        print(f'Model params have been scattered to: {output_file}')
 
 if __name__ == "__main__":
     main()

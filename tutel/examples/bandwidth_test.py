@@ -33,7 +33,7 @@ with torch.no_grad():
     t0 = wait()
     net.simple_all_reduce(x.view(-1), inplace=True)
     t1 = wait()
-    parallel_env.dist_print(f'AllReducce bandwidth across {parallel_env.global_size} node(s) = %.4f GB/s' % ((x.numel() * 4) * 1e-9 / (t1 - t0)))
+    parallel_env.dist_print(f'AllReduce bandwidth across {parallel_env.global_size} node(s) = %.4f GB/s' % ((x.numel() * 4) * 1e-9 / (t1 - t0)))
     t0 = wait()
     net.simple_all_gather(x.view(parallel_env.global_size, -1)[parallel_env.global_rank])
     t1 = wait()
