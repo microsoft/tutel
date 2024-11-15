@@ -11,6 +11,7 @@ from tutel import system, net
 parser = argparse.ArgumentParser()
 parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
 parser.add_argument('--size_mb', type=int, default=256)
+parser.add_argument('--loop', type=int, default=50)
 
 args = parser.parse_args()
 
@@ -25,7 +26,7 @@ else:
   wait = lambda: time.perf_counter()
 
 with torch.no_grad():
-  while True:
+  for _ in range(args.loop):
     t0 = wait()
     net.simple_all_to_all(x.view(parallel_env.global_size, -1))
     t1 = wait()
