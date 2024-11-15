@@ -285,6 +285,9 @@ class MOELayer(torch.nn.Module):
                     self.num_global_experts, gctx.gate_noise)
 
             mega_up = max(megablocks_size, 1)
+            alignment = (self.sharded_count * a2a_ffn_overlap_degree + mega_up - 1) // mega_up * mega_up
+            if alignment > 256:
+                alignment = (alignment + 127) // 128 * 128
 
             return logits.dtype, extract_critical(scores,
                 top_k = top_k,
@@ -293,13 +296,13 @@ class MOELayer(torch.nn.Module):
                 batch_prioritized_routing = self.batch_prioritized_routing,
                 normalize_gate = self.normalize_gate,
                 group = self.group,
-                alignment = (self.sharded_count * a2a_ffn_overlap_degree + mega_up - 1) // mega_up * mega_up,
+                alignment = alignment,
                 inequivalent_tokens = inequivalent_tokens,
             )
 
 
         if x.is_cuda:
-            with torch.cuda.amp.autocast(enabled=False):
+            with torch.amp.autocast('cuda', enabled=False):
                 logits_dtype, (crit, l_aux) = routing()
         else:
             logits_dtype, (crit, l_aux) = routing()
