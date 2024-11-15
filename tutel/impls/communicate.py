@@ -39,6 +39,12 @@ TUTEL_GROUPING_CACHE = {}
 TUTEL_SHARED_NCCL = False
 TUTEL_SKIP_A2A = int(os.environ.get('SKIP_A2A', 0)) > 0
 
+def create_standalone_group():
+    try:
+        return dist.new_group(ranks=[get_world_rank()])
+    except:
+        return None
+
 def create_groups_from_world(group_count, include_init=None):
     backend = TUTEL_GROUPING_CACHE.get('', include_init)
     if include_init:
