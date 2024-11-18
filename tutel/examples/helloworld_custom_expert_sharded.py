@@ -67,8 +67,8 @@ class CustomExpertDemo(torch.nn.Module):
         sharded_shape = (full_shape.numel() + self.sharded_count - 1) // self.sharded_count
         return torch.nn.Parameter(torch.empty(sharded_shape, **kwargs)), full_shape
 
-    def _get_gathered_param(self, param, full_shape):
-        sharded_group = net.create_groups_from_world(group_count=-self.sharded_count).model_group
+    def _get_gathered_param(self, param, full_shape, parent_group):
+        sharded_group = net.create_groups_from_world(group_count=-self.sharded_count, parent_group=parent_group).model_group
         return net.zero_gather(param, group=sharded_group).view(-1).narrow(0, 0, full_shape.numel()).view(full_shape)
 
     def __init__(self, model_dim, local_experts, sharded_count, my_config):
@@ -83,7 +83,7 @@ class CustomExpertDemo(torch.nn.Module):
           self.W.normal_(0, 0.001)
 
     def forward(self, x, ctx):
-        W_full = self._get_gathered_param(self.W, self.W_full_shape)
+        W_full = self._get_gathered_param(self.W, self.W_full_shape, ctx.group)
         y = torch.matmul(x, W_full)
         if self.my_activation is not None:
           y = self.my_activation(y)

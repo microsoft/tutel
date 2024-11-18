@@ -38,6 +38,7 @@ def barrier(group=None):
 TUTEL_GROUPING_CACHE = {}
 TUTEL_SHARED_NCCL = False
 TUTEL_SKIP_A2A = int(os.environ.get('SKIP_A2A', 0)) > 0
+TUTEL_SUBGROUP_CACHE = {}
 
 def create_standalone_group():
     try:
@@ -45,7 +46,16 @@ def create_standalone_group():
     except:
         return None
 
-def create_groups_from_world(group_count, include_init=None):
+def create_groups_from_world(group_count, include_init=None, parent_group=None):
+    parent_size, world_size = get_world_size(parent_group), get_world_size()
+
+    class DistributedProperties:
+        pass
+
+    if parent_size > 1 and parent_size < world_size:
+        assert include_init is None, 'Torch distributed environment had been initialized.'
+        raise Exception('Splitting nesting groups from a subgroup is yet not allowed, please report an issue for this requirement.')
+
     backend = TUTEL_GROUPING_CACHE.get('', include_init)
     if include_init:
         assert backend == include_init, "Only 1 backend type is allowed, get: %s v.s. %s" % (backend, include_init)
@@ -107,10 +117,7 @@ def create_groups_from_world(group_count, include_init=None):
     else:
         model_group, data_group, global_group = None, None, None
 
-    class ParallelPropStorage:
-        pass
-
-    result = ParallelPropStorage()
+    result = DistributedProperties()
 
     result.global_size = glob_world_size
     result.global_rank = glob_world_rank
