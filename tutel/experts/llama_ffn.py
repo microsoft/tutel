@@ -11,8 +11,8 @@ class LlamaFFNNetwork(torch.nn.Module):
         sharded_shape = (full_shape.numel() + self.sharded_count - 1) // self.sharded_count
         return torch.nn.Parameter(torch.empty(sharded_shape, **kwargs)), full_shape
 
-    def _get_gathered_param(self, param, full_shape):
-        sharded_group = net.create_groups_from_world(group_count=-self.sharded_count).model_group
+    def _get_gathered_param(self, param, full_shape, parent_group):
+        sharded_group = net.create_groups_from_world(group_count=-self.sharded_count, parent_group=parent_group).model_group
         return net.zero_gather(param, group=sharded_group).view(-1).narrow(0, 0, full_shape.numel()).view(full_shape)
 
     def __init__(self, model_dim, hidden_size_per_expert, local_experts, sharded_count, activation_fn=torch.nn.functional.silu):
@@ -31,9 +31,9 @@ class LlamaFFNNetwork(torch.nn.Module):
           self.W_fc3.normal_(0, 0.01)
 
     def forward(self, x, ctx):
-        W_fc1_full = self._get_gathered_param(self.W_fc1, self.W_fc1_full_shape)
-        W_fc2_full = self._get_gathered_param(self.W_fc2, self.W_fc2_full_shape)
-        W_fc3_full = self._get_gathered_param(self.W_fc3, self.W_fc3_full_shape)
+        W_fc1_full = self._get_gathered_param(self.W_fc1, self.W_fc1_full_shape, ctx.group)
+        W_fc2_full = self._get_gathered_param(self.W_fc2, self.W_fc2_full_shape, ctx.group)
+        W_fc3_full = self._get_gathered_param(self.W_fc3, self.W_fc3_full_shape, ctx.group)
 
         y1 = torch.matmul(x, W_fc1_full)
         y2 = torch.matmul(x, W_fc2_full)

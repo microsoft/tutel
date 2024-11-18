@@ -89,16 +89,20 @@ class FusedExpertsNetwork(torch.nn.Module):
                 batched_fc2_bias = net.zero_gather(batched_fc2_bias, group=ctx.group).view(ctx.num_global_experts, 1, -1)
         else:
             if ctx.sharded_count > 1:
+                mesh_size = net.get_world_size(ctx.group)
+                if mesh_size > 1 and mesh_size < net.get_world_size():
+                    ctx.adaptive_degree = ctx.sharded_count
                 group_size = ctx.sharded_count // ctx.adaptive_degree
+
                 if group_size > 1:
-                    ffn_zero_group = net.create_groups_from_world(group_count=-group_size).model_group
+                    ffn_zero_group = net.create_groups_from_world(group_count=-group_size, parent_group=ctx.group).model_group
                     batched_fc1_w = net.zero_gather(batched_fc1_w, group=ffn_zero_group).view(1, -1, ctx.model_dim)
                     batched_fc2_w = net.zero_gather(batched_fc2_w, group=ffn_zero_group).view(1, -1, self.output_dim)
                     if self.batched_fc1_bias is not None:
                         batched_fc1_bias = net.zero_gather(batched_fc1_bias, group=ffn_zero_group).view(1, 1, -1)
 
                 if self.batched_fc2_bias is not None:
-                    batched_fc2_bias = net.zero_gather(batched_fc2_bias, group=net.create_groups_from_world(group_count=ctx.num_global_experts).model_group)
+                    batched_fc2_bias = net.zero_gather(batched_fc2_bias, group=net.create_groups_from_world(group_count=ctx.num_global_experts, parent_group=ctx.group).model_group)
                     batched_fc2_bias = batched_fc2_bias.view(1, 1, -1)
 
                     if ctx.adaptive_degree > 1:

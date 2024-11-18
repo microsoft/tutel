@@ -302,8 +302,12 @@ class MOELayer(torch.nn.Module):
 
 
         if x.is_cuda:
-            with torch.amp.autocast('cuda', enabled=False):
-                logits_dtype, (crit, l_aux) = routing()
+            try:
+                with torch.amp.autocast('cuda', enabled=False):
+                    logits_dtype, (crit, l_aux) = routing()
+            except:
+                with torch.cuda.amp.autocast(enabled=False):
+                    logits_dtype, (crit, l_aux) = routing()
         else:
             logits_dtype, (crit, l_aux) = routing()
 
