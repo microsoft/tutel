@@ -113,7 +113,7 @@ class MOELayer(torch.nn.Module):
         self.result_func = result_func
         self.skip_moe = (int(os.environ.get('SKIP_MOE', '0')) != 0)
 
-        self.num_local_experts = experts.pop('count_per_node', 1)
+        self.num_local_experts = experts.pop('count_per_node', 1) if 'count_per_node' in experts else experts.pop('num_experts_per_device', 1)
         if self.num_local_experts == -1:
             self.num_local_experts = 1
         self.register_buffer('_num_global_experts', torch.tensor(MOELayer.global_expert_count(self.num_local_experts, self.group)))
@@ -161,9 +161,8 @@ class MOELayer(torch.nn.Module):
         if experts_type == 'custom':
             expert_module = experts.pop('module')
             experts['model_dim'] = self.model_dim
-            experts['local_experts'] = self.num_local_experts
+            experts['num_experts_per_device'] = self.num_local_experts
             experts['sharded_count'] = self.sharded_count
-            self.experts = cast(ModuleList, expert_module(**experts))
         else:
             assert re.match(r'[a-zA-Z0-9\_]+', experts_type), "Expert type must only include digits, letters and underline characters."
             try:
@@ -176,9 +175,18 @@ class MOELayer(torch.nn.Module):
                 assert 'implicit_dropout_p' not in experts, "`implicit_dropout_p` option for Tutel Moe-layer has been deprecated, please use torch.nn.Dropout(p=implicit_dropout_p) on custom activation_fn (for fc1_dropout) and after Tutel Moe-layer (for fc2_dropout) instead."
 
             experts['model_dim'] = self.model_dim
-            experts['local_experts'] = self.num_local_experts
+            experts['num_experts_per_device'] = self.num_local_experts
             experts['sharded_count'] = self.sharded_count
-            self.experts = fused_experts.ExpertModule(**experts)
+            expert_module = fused_experts.ExpertModule
+
+        try:
+            expert_modules = expert_module(**experts)
+        except TypeError:
+            logging.warning('\nExpertModule.__init__(.., local_experts, ..) has been deprecated, please rename `local_experts` to `num_experts_per_device` in init methods.\n')
+            experts['local_experts'] = experts.pop('num_experts_per_device')
+            expert_modules = expert_module(**experts)
+
+        self.experts = cast(ModuleList, expert_modules)
 
         if scan_expert_func is not None:
             for n, p in self.experts.named_parameters():
@@ -197,18 +205,21 @@ class MOELayer(torch.nn.Module):
 
         self.gates = []
         for gi, single_gate_type in enumerate(gate_type):
-            gate_type = single_gate_type['type']
-            single_gate_type.pop('type')
+            gate_type = single_gate_type.pop('type')
             assert re.match(r'[a-zA-Z0-9\_]+', gate_type), "Gate type must only include digits, letters and underline characters."
 
             if seeds is not None and seeds[0] is not None:
                 torch.manual_seed(seeds[0] + gi)
-            try:
-                single_gate = importlib.import_module(f'...gates.{gate_type}', __name__)
-            except ModuleNotFoundError:
-                raise Exception("Unrecognized gate_type: %s" % gate_type)
 
-            gate_module = single_gate.Gate(model_dim=self.model_dim, num_global_experts=self.num_global_experts, **single_gate_type)
+            if gate_type == 'custom':
+                 single_gate = single_gate_type.pop('module')
+            else:
+                try:
+                    single_gate = importlib.import_module(f'...gates.{gate_type}', __name__).Gate
+                except ModuleNotFoundError:
+                    raise Exception("Unrecognized gate_type: %s" % gate_type)
+
+            gate_module = single_gate(model_dim=self.model_dim, num_global_experts=self.num_global_experts, **single_gate_type)
             if not hasattr(gate_module, 'gate_noise'):
                 gate_module.gate_noise = single_gate_type.get('gate_noise', 0.0)
             if not hasattr(gate_module, 'capacity_factor'):

@@ -26,8 +26,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
     python3 -m tutel.examples.helloworld --dtype=float16
     python3 -m tutel.examples.helloworld --dtype=float16 --use_tensorcore
 
-  >> Example for custom experts:
-    python3 -m tutel.examples.helloworld_custom_expert --batch_size=16
+  >> Example for custom gates/experts:
+    python3 -m tutel.examples.helloworld_custom_gate_expert --batch_size=16
 
   >> Example for NCCL timeout settings:
     TUTEL_GLOBAL_TIMEOUT_SEC=60 python3 -m torch.distributed.run --nproc_per_node=8 -m tutel.examples.helloworld --use_tensorcore
@@ -109,7 +109,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
         $ python3 -m tutel.examples.helloworld_ddp --batch_size=16           # Test Tutel-optimized MoE + Pytorch DDP distribution (requires: Pytorch >= 1.8.0)
         $ python3 -m tutel.examples.helloworld_ddp_tutel --batch_size=16     # Test Tutel-optimized MoE + Tutel DDP distribution (ZeRO on optimizors)
         $ python3 -m tutel.examples.helloworld_amp --batch_size=16           # Test Tutel-optimized MoE with AMP data type + manual distribution
-        $ python3 -m tutel.examples.helloworld_custom_expert --batch_size=16 # Test Tutel-optimized MoE + custom defined expert layer
+        $ python3 -m tutel.examples.helloworld_custom_gate_expert --batch_size=16 # Test Tutel-optimized MoE + custom defined gate/expert layer
         $ python3 -m tutel.examples.helloworld_from_scratch                  # Test Custom MoE implementation from scratch
         $ python3 -m tutel.examples.moe_mnist                                # Test MoE layer in end-to-end MNIST dataset
         $ python3 -m tutel.examples.moe_cifar10                              # Test MoE layer in end-to-end CIFAR10 dataset
@@ -154,7 +154,7 @@ moe_layer = tutel_moe.moe_layer(
     gate_type={'type': 'top', 'k': 2},
     model_dim=x.shape[-1],
     experts={
-        'count_per_node': 2,
+        'num_experts_per_device': 2,
         'type': 'ffn', 'hidden_size_per_expert': 2048, 'activation_fn': lambda x: torch.nn.functional.relu(x)
     },
     scan_expert_func = lambda name, param: setattr(param, 'skip_allreduce', True),
@@ -197,9 +197,9 @@ print(y)
 
 * Usage of dict-type Experts Config:
 
-        count_per_node   : the number of local experts per device (by default, the value is 1 if not specified)
-        type             : available built-in experts implementation, e.g: ffn
+        num_experts_per_device : the number of local experts per device (by default, the value is 1 if not specified)
         hidden_size_per_expert : the hidden size between two linear layers for each expert (used for type == 'ffn' only)
+        type             : available built-in experts implementation, e.g: ffn
         activation_fn    : the custom-defined activation function between two linear layers (used for type == 'ffn' only)
         has_fc1_bias     : If set to False, the expert bias parameters `batched_fc1_bias` is disabled. Default: True
         has_fc2_bias     : If set to False, the expert bias parameters `batched_fc2_bias` is disabled. Default: True

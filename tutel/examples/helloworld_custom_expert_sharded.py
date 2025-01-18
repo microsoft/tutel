@@ -96,7 +96,7 @@ class ExampleModel(torch.nn.Module):
 
         self._moe_layer = tutel_moe.moe_layer(
             gate_type = {'type': 'top', 'k': top_value, 'fp32_gate': args.fp32_gate, 'capacity_factor': args.capacity_factor},
-            experts = {'type': 'custom', 'module': CustomExpertDemo, 'count_per_node': num_local_experts, 'my_config': None},
+            experts = {'type': 'custom', 'module': CustomExpertDemo, 'num_experts_per_device': num_local_experts, 'my_config': None},
             model_dim = model_dim,
             scan_expert_func = lambda name, param: setattr(param, 'skip_allreduce', True),
             seeds = (1, dist_rank + 1, 1),
