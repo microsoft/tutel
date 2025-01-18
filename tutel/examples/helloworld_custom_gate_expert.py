@@ -9,6 +9,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch import nn
 import argparse
+import logging
 
 from tutel import system
 from tutel import moe as tutel_moe
@@ -22,17 +23,12 @@ parser.add_argument('--num_tokens', type=int, default=512)
 parser.add_argument('--model_dim', type=int, default=2048)
 parser.add_argument('--num_local_experts', type=int, default=2)
 parser.add_argument('--dtype', type=str, default='float32')
-parser.add_argument('--fp32_gate', default=False, action='store_true')
 parser.add_argument('--top', type=int, default=2)
 parser.add_argument('--l_aux_wt', type=float, default=0.0)
 parser.add_argument('--a2a_ffn_overlap_degree', type=int, default=1)
-parser.add_argument('--allreduce_degree', type=int, default=1)
 parser.add_argument('--num_steps', type=int, default=100)
-parser.add_argument('--checkpoint_path', type=str, default='')
 parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
-parser.add_argument('--use_2dh', default=False, action='store_true')
 parser.add_argument('--eval', default=False, action='store_true')
-parser.add_argument('--capacity_factor', type=float, default=1.0)  # 0.0 for dMoE (dropless-MoE), negative for no-padded capacity.
 
 args = parser.parse_args()
 
@@ -48,28 +44,53 @@ top_value = args.top
 a2a_ffn_overlap_degree = args.a2a_ffn_overlap_degree
 device = parallel_env.local_device
 
-if args.dtype == 'float32':
-    torch.set_default_dtype(torch.float32)
-elif args.dtype == 'float64':
-    torch.set_default_dtype(torch.float64)
-elif args.dtype == 'float16':
-    torch.set_default_dtype(torch.float16)
-elif args.dtype == 'bfloat16':
-    torch.set_default_dtype(torch.bfloat16)
+if args.dtype in ('float32', 'float64', 'float16', 'bfloat16'):
+    torch.set_default_dtype(eval(f'torch.{args.dtype}'))
 else:
     raise Exception('Unrecognized data type specified: %s' % args.dtype)
 
 
-class CustomExpertDemo(torch.nn.Module):
-    def __init__(self, model_dim, local_experts, sharded_count, my_config):
+class CustomGate(torch.nn.Module):
+    def __init__(self, **custom_options):
         super().__init__()
-        self.W = torch.nn.Parameter(torch.empty(local_experts, model_dim, model_dim))
-        self.my_activation = torch.nn.functional.relu if my_config == 'relu' else None
+        for key in custom_options:
+            logging.warning(f'Receive an option for CustomGate: `{key}` = `{custom_options[key]}`')
+            if key == 'top_k':
+                self.top_k = custom_options[key]
+            elif key in ('model_dim', 'num_global_experts'):
+                setattr(self, key, custom_options[key])
+            else:
+                raise Exception(f'Receive an option key `{key}` for CustomGate, but it is not handled')
+
+        self.my_wg = torch.nn.Linear(self.model_dim, self.num_global_experts, bias=False)
+
+    def forward(self, x):
+        return self.my_wg(x)
+
+class CustomExpert(torch.nn.Module):
+    def __init__(self, **custom_options):
+        super().__init__()
+        for key in custom_options:
+            logging.warning(f'Receive an option for CustomExpert: `{key}` = `{custom_options[key]}`')
+            if key == 'top_k':
+                self.top_k = custom_options[key]
+            elif key in ('model_dim', 'num_experts_per_device', 'sharded_count'):
+                setattr(self, key, custom_options[key])
+            elif key == 'my_activ_type':
+                self.activ_type = custom_options[key]
+            else:
+                raise Exception(f'Receive an option key `{key}` for CustomGate, but it is not handled')
+
+        self.W = torch.nn.Parameter(torch.empty(self.num_experts_per_device, model_dim, model_dim))
+        self.my_activation = torch.nn.functional.relu if self.activ_type == 'relu' else None
         self.reset_parameters()
 
     def reset_parameters(self):
         with torch.no_grad():
           self.W.normal_(0, 0.001)
+
+    def extra_repr(self):
+        return '..'
 
     def forward(self, x, ctx):
         if ctx.sharded_count > 1:
@@ -80,39 +101,27 @@ class CustomExpertDemo(torch.nn.Module):
         return y
 
 
-class ExampleModel(torch.nn.Module):
+class FullyCustomExampleModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
 
         self._moe_layer = tutel_moe.moe_layer(
-            gate_type = {'type': 'top', 'k': top_value, 'fp32_gate': args.fp32_gate, 'capacity_factor': args.capacity_factor},
-            experts = {'type': 'custom', 'module': CustomExpertDemo, 'count_per_node': num_local_experts, 'my_config': None},
+            gate_type = {'type': 'custom', 'module': CustomGate, 'top_k': top_value},
+            experts = {'type': 'custom', 'module': CustomExpert, 'num_experts_per_device': num_local_experts, 'my_activ_type': 'relu'},
             model_dim = model_dim,
             scan_expert_func = lambda name, param: setattr(param, 'skip_allreduce', True),
             seeds = (1, dist_rank + 1, 1),
             a2a_ffn_overlap_degree = a2a_ffn_overlap_degree,
-            use_2dh=args.use_2dh,
         )
-
-        # Summary of different parameter types: gate, local_experts
-        local_count = sum([torch.numel(param) for name, param in self._moe_layer.get_parameter_iterator(param_type='local_experts')])
-        shared_count = sum([torch.numel(param) for name, param in self._moe_layer.get_parameter_iterator(param_type='gate')])
-        dist_print('[Statistics] param count for MoE local_experts = %s, param count for MoE gate = %s.\n' % (local_count, shared_count))
 
     def forward(self, input):
         result = self._moe_layer(input)
         result = F.log_softmax(torch.sum(result, dim=2), dim=1)
         return result
 
-model = ExampleModel().to(device)
-dist_print(model)
 
-if args.checkpoint_path:
-    checkpoint_path = system.apply_rank_size_from_pattern(args.checkpoint_path, rank=parallel_env.global_rank, size=parallel_env.global_size)
-    if os.path.exists(checkpoint_path):
-        model.load_state_dict(torch.load(checkpoint_path))
-    else:
-        print('Checkpoint not loaded: file `%s` is not found. Will train the model from start.' % checkpoint_path)
+model = FullyCustomExampleModel().to(device)
+dist_print(model)
 
 optimizer = torch.optim.SGD(model.parameters(), lr=1e-5)
 
@@ -124,11 +133,7 @@ tuples = (dist_world_size, args.dtype, model_dim, batch_size * num_tokens, num_l
 dist_print('[Benchmark] world_size = %s, dtype = %s, model_dim = %s, samples = %s, num_local_experts = %s, topK = %s, a2a_ffn_overlap_degree = %s, device = `%s`' % tuples)
 
 average_time, num_steps = 0, args.num_steps
-
-if args.allreduce_degree == -1:
-    params_for_all_reduce = []
-else:
-    params_for_all_reduce = [p for p in model.parameters() if not hasattr(p, 'skip_allreduce') and getattr(p, 'requires_grad', False)]
+params_for_all_reduce = [p for p in model.parameters() if not hasattr(p, 'skip_allreduce') and getattr(p, 'requires_grad', False)]
 
 for i in range(num_steps):
     t_start = system.record_time()
@@ -161,6 +166,3 @@ for i in range(num_steps):
 
 average_time /= 10
 dist_print('\n[Summary] Average synchronized step_time = %s sec.' % average_time)
-
-if args.checkpoint_path:
-    torch.save(model.state_dict(), checkpoint_path)

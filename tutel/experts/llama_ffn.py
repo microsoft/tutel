@@ -15,12 +15,12 @@ class LlamaFFNNetwork(torch.nn.Module):
         sharded_group = net.create_groups_from_world(group_count=-self.sharded_count, parent_group=parent_group).model_group
         return net.zero_gather(param, group=sharded_group).view(-1).narrow(0, 0, full_shape.numel()).view(full_shape)
 
-    def __init__(self, model_dim, hidden_size_per_expert, local_experts, sharded_count, activation_fn=torch.nn.functional.silu):
+    def __init__(self, model_dim, hidden_size_per_expert, num_experts_per_device, sharded_count, activation_fn=torch.nn.functional.silu):
         super().__init__()
         self.sharded_count = sharded_count
-        self.W_fc1, self.W_fc1_full_shape = self._create_sharded_param(local_experts, model_dim, hidden_size_per_expert)
-        self.W_fc2, self.W_fc2_full_shape = self._create_sharded_param(local_experts, model_dim, hidden_size_per_expert)
-        self.W_fc3, self.W_fc3_full_shape = self._create_sharded_param(local_experts, hidden_size_per_expert, model_dim)
+        self.W_fc1, self.W_fc1_full_shape = self._create_sharded_param(num_experts_per_device, model_dim, hidden_size_per_expert)
+        self.W_fc2, self.W_fc2_full_shape = self._create_sharded_param(num_experts_per_device, model_dim, hidden_size_per_expert)
+        self.W_fc3, self.W_fc3_full_shape = self._create_sharded_param(num_experts_per_device, hidden_size_per_expert, model_dim)
         self.activation_fn = activation_fn
         self.reset_parameters()
 
@@ -40,6 +40,9 @@ class LlamaFFNNetwork(torch.nn.Module):
         y = self.activation_fn(y1) * y2
         y = torch.matmul(y, W_fc3_full)
         return y
+
+    def extra_repr(self):
+        return '..'
 
 
 ExpertModule = LlamaFFNNetwork 

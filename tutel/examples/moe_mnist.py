@@ -31,7 +31,7 @@ class Net(nn.Module):
             self.moe_ffn = moe.moe_layer(
                 gate_type = {'type': 'top', 'k': 1, 'capacity_factor': 0, 'gate_noise': 1.0},
                 experts = {'type': 'ffn',
-                    'count_per_node': 1,
+                    'num_experts_per_device': 1,
                     'hidden_size_per_expert': 128,
                     'output_dim': 10,
                     'activation_fn': lambda x: self.dropout2(F.relu(x))
